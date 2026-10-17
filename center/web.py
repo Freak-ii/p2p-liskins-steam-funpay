@@ -56,6 +56,9 @@ def make_app(center: Center) -> web.Application:
     async def index(request: web.Request):
         return web.FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
 
+    async def rtba_page(request: web.Request):
+        return web.FileResponse(STATIC / "rtba.html", headers={"Cache-Control": "no-store"})
+
     async def ping(request: web.Request):
         return web.json_response({"app": "center", "ok": True})
 
@@ -152,6 +155,32 @@ def make_app(center: Center) -> web.Application:
         return web.Response(body=body, content_type=ctype.split(";")[0], charset="utf-8" if fmt == "csv" else None,
                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
+    async def rtba_status(request: web.Request):
+        return web.json_response(await center.rtba.status(days_q(request, 7) or 7))
+
+    async def rtba_budget(request: web.Request):
+        if request.method == "POST":
+            errors = center.rtba.save_plan(await request.json())
+            if errors:
+                return web.json_response({"ok": False, "message": "; ".join(errors)}, status=400)
+        return web.json_response(await center.rtba.plan())
+
+    async def rtba_apply(request: web.Request):
+        data = await request.json() if request.can_read_body else {}
+        res = await center.rtba.apply(data.get("keys"))
+        for name in center.workers:
+            asyncio.ensure_future(center.refresh(name))
+        return web.json_response(res, status=200 if res["ok"] else 502)
+
+    async def rtba_backtest(request: web.Request):
+        data = await request.json()
+        variants = [v for v in (data.get("variants") or []) if isinstance(v, dict)][:6]
+        if data.get("bot") == "lisbot":
+            res = await center.rtba.backtest_lisbot(variants, float(data.get("days") or 7))
+        else:
+            res = await asyncio.to_thread(center.rtba.backtest_mannbot, variants, float(data.get("days") or 30))
+        return web.json_response(res)
+
     async def quit_center(request: web.Request):
         asyncio.get_running_loop().call_later(0.5, center.quit_event.set)
         return web.json_response({"ok": True, "message": "Центр завершает работу"})
@@ -167,6 +196,8 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/analytics/pnl", an_pnl), web.get("/api/analytics/daily", an_daily),
         web.get("/api/analytics/bot/{name:lisbot|mannbot}", an_bot),
         web.get("/api/analytics/export.{fmt:csv|xlsx}", an_export),
+        web.get("/rtba", rtba_page), web.get("/api/rtba", rtba_status), web.get("/api/rtba/budget", rtba_budget), web.post("/api/rtba/budget", rtba_budget),
+        web.post("/api/rtba/apply", rtba_apply), web.post("/api/rtba/backtest", rtba_backtest),
     ])
     app.router.add_static("/static/", STATIC)
     return app

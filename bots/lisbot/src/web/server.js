@@ -16,6 +16,31 @@ const safeEq = (a, b) => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
+const RTBA_SETTINGS = ['strategy.rtbaEnabled', 'strategy.rtbaCooldownSec', 'strategy.rtbaMaxValuationAgeHours', 'strategy.minRoi',
+  'strategy.bottomTolerancePct', 'strategy.maxFloorRisePct', 'strategy.maxSpendPerHourUsd', 'strategy.maxSpendPerDayUsd',
+  'strategy.maxOpenExposureUsd', 'strategy.balanceReservePct'];
+
+const pctl = (xs, q) => (xs.length ? xs[Math.min(xs.length - 1, Math.floor(q * xs.length))] : null);
+
+/** Сводка RTBA для центра: состояние WebSocket, счётчики, последние решения и задержки покупок. */
+export function rtbaReport(db, cfg, bot, days = 7) {
+  const since = Date.now() - days * 86400_000;
+  const buys = db.db.prepare(`SELECT e.ts, e.type, e.data, i.name, i.buy_price_usd price, i.expected_profit_usd profit, i.dry_run
+    FROM events e JOIN items i ON i.id=e.item_id WHERE e.type IN ('buy.ok','buy.dry_run') AND i.mode='rtba' AND e.ts>=? ORDER BY e.id DESC LIMIT 500`).all(since)
+    .map((r) => { let d = {}; try { d = JSON.parse(r.data || '{}'); } catch { /* старый формат */ } return { ts: r.ts, name: r.name, price: r.price, profit: r.profit, dry: !!r.dry_run, latencyMs: d.latencyMs ?? null }; });
+  const lat = buys.map((b) => b.latencyMs).filter((x) => Number.isFinite(x)).sort((x, y) => x - y);
+  const byMode = db.db.prepare('SELECT mode, dry_run, COUNT(*) n, COALESCE(SUM(buy_price_usd),0) spent FROM items WHERE created_at>=? GROUP BY mode, dry_run').all(since);
+  const ws = bot.ws ? { connected: bot.ws.connected, ...bot.ws.stats } : null;
+  return {
+    enabled: !!cfg.strategy.rtbaEnabled, dryRun: !!cfg.dryRun, days, ws,
+    buyer: bot.buyer?.stats || null,
+    latency: { n: lat.length, p50: pctl(lat, 0.5), p90: pctl(lat, 0.9), max: lat.at(-1) ?? null },
+    byMode, buys: buys.slice(0, 100),
+    recent: (bot.buyer?.rtbaLog || []).slice(-150).reverse(),
+    settings: Object.fromEntries(RTBA_SETTINGS.map((k) => [k, getPath(cfg, k)])),
+  };
+}
+
 /** Веб-панель: дашборд, мини-CRM по предметам, вотчлист, тревоги, управление. */
 export function startDashboard({ cfg, db, guard, bot, log }) {
   const token = cfg.secrets.dashboardToken;
@@ -104,6 +129,7 @@ export function startDashboard({ cfg, db, guard, bot, log }) {
       if (b.restart && bot.hooks?.onRestartRequest) setTimeout(() => bot.hooks.onRestartRequest('настройки изменены'), 300);
       return { ok: true, restarting: !!(b.restart && bot.hooks?.onRestartRequest) };
     },
+    'GET /api/rtba': (u) => rtbaReport(db, cfg, bot, Number(u.searchParams.get('days')) || 7),
     'GET /api/meta': () => ({ appMode: !!bot.hooks?.appMode, version: bot.hooks?.version || null, dataDir: cfg.dataDir }),
     'GET /api/export/items.csv': () => {
       const rows = db.db.prepare('SELECT * FROM items WHERE dry_run=0 ORDER BY id').all();
