@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Центр перепродажи</title>
+<link rel="stylesheet" href="/static/center.css">
+</head>
+<body>
+<header>
+  <h1>Центр перепродажи</h1>
+  <span id="hdr" class="muted small"></span>
+  <span class="spacer"></span>
+  <span id="alertsBadge"></span>
+  <button class="btn danger" id="quitBtn" title="Остановить ботов и закрыть центр">⏻ Выход</button>
+</header>
+<main>
+  <div id="flash"></div>
+  <div class="grid" id="bots"></div>
+
+  <h2>Тревоги ботов</h2>
+  <div class="card"><table><thead><tr><th>Время</th><th>Бот</th><th>Уровень</th><th>Сообщение</th></tr></thead><tbody id="alerts"></tbody></table></div>
+
+  <h2>Журнал работы ботов</h2>
+  <div class="card">
+    <div class="tabs" id="logTabs"></div>
+    <pre class="log" id="log"></pre>
+  </div>
+
+  <h2>События центра</h2>
+  <div class="card"><table><thead><tr><th>Время</th><th>Источник</th><th>Событие</th></tr></thead><tbody id="events"></tbody></table></div>
+</main>
+
+<dialog id="lisDlg">
+  <form method="dialog" id="lisForm">
+    <h3>Подключения LisBot</h3>
+    <p class="muted small">Хранятся только на этом компьютере, в папке данных центра (lisbot/secrets.env).</p>
+    <label>Ключ API LIS-SKINS</label><input name="LIS_API_KEY" autocomplete="off">
+    <label>Логин Steam</label><input name="STEAM_ACCOUNT_NAME" autocomplete="off">
+    <label>Пароль Steam <span class="muted small" id="pwHint"></span></label><input name="STEAM_PASSWORD" type="password" autocomplete="new-password">
+    <label>shared_secret (из maFile)</label><input name="STEAM_SHARED_SECRET" autocomplete="off">
+    <label>identity_secret (из maFile)</label><input name="STEAM_IDENTITY_SECRET" autocomplete="off">
+    <label>Трейд-ссылка Steam</label><input name="STEAM_TRADE_URL" autocomplete="off">
+    <label>Telegram: токен бота (необязательно)</label><input name="TELEGRAM_BOT_TOKEN" autocomplete="off">
+    <label>Telegram: chat id</label><input name="TELEGRAM_CHAT_ID" autocomplete="off">
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" value="save">Сохранить и перезапустить</button>
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtTs = (t) => t ? new Date(t * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+const fmtDur = (s) => !s ? '' : s < 3600 ? `${Math.round(s / 60)} мин` : s < 86400 ? `${(s / 3600).toFixed(1)} ч` : `${(s / 86400).toFixed(1)} д`;
+const fmtNum = (v) => v == null ? '—' : typeof v === 'number' ? v.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) : esc(v);
+let state = null, logBot = 'lisbot', logAfter = 0;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.status === 401) { location.href = '/login'; throw new Error('auth'); }
+  return r.json();
+}
+function flash(msg, bad) { $('#flash').innerHTML = msg ? `<div class="banner" style="${bad ? 'color:var(--bad)' : ''}">${esc(msg)}</div>` : ''; }
+
+async function act(name, action) {
+  if (action === 'halt' && !confirm('Аварийная остановка LisBot: закупки и продажи прекратятся. Продолжить?')) return;
+  flash('Выполняю…');
+  const r = await api(`/api/workers/${name}/${action}`, {});
+  flash(r.message, !r.ok);
+  if (action === 'install') logAfter = 0;
+  setTimeout(refresh, 800);
+}
+
+function botCard(b) {
+  const s = b.summary;
+  const running = b.state === 'running';
+  const proc = running || ['starting', 'backoff'].includes(b.state)
+    ? `<button class="btn" onclick="act('${b.name}','restart')">Перезапустить</button><button class="btn" onclick="act('${b.name}','stop')">Остановить процесс</button>`
+    : `<button class="btn primary" onclick="act('${b.name}','start')">Запустить</button>`;
+  const extra = [];
+  if (b.name === 'lisbot') {
+    extra.push(`<button class="btn" onclick="openLis()">Подключения</button>`);
+    if (b.state === 'missing_deps') extra.push(`<button class="btn primary" onclick="act('lisbot','install')">Установить зависимости</button>`);
+  }
+  if (running) extra.push(`<a class="btn" href="/open/${b.name}" target="_blank" rel="noopener">Открыть панель бота ↗</a>`);
+  const botActs = running && s ? Object.entries(b.actions).map(([k, v]) => `<button class="btn ${k === 'halt' ? 'danger' : ''}" onclick="act('${b.name}','${k}')">${esc(v)}</button>`).join('') : '';
+  const kpi = s?.kpi ? `<div class="kpi">${Object.entries(s.kpi).map(([k, v]) => `<div><b>${fmtNum(v)}</b><span>${esc(k)}</span></div>`).join('')}</div>` : '';
+  const botState = s ? `<div class="small">Торговля: <b>${esc({ running: 'работает', paused: 'на паузе', halted: 'аварийная остановка', stopped: 'остановлена', starting: 'запускается', error: 'ошибка' }[s.bot_state] || s.bot_state || '—')}</b>${s.paused ? ' · пауза' : ''}${(s.flags || []).map((f) => ' · ' + esc(f)).join('')} · ${s.dry_run ? 'тестовый режим (ничего не покупает и не продаёт)' : '<b style="color:var(--bad)">боевой режим</b>'}${s.demo ? ' · демо' : ''}</div>${s.error ? `<div class="detail">${esc(s.error)}</div>` : ''}` : '';
+  return `<div class="card">
+    <div class="row"><h3>${esc(b.title)}</h3><span class="spacer" style="flex:1"></span><span class="badge s-${b.state}">${esc(b.state_text)}</span></div>
+    <div class="muted small">порт ${b.port}${b.pid ? ` · pid ${b.pid}` : ''}${b.uptime ? ` · работает ${fmtDur(b.uptime)}` : ''}${b.restarts ? ` · перезапусков ${b.restarts}` : ''}</div>
+    ${b.detail ? `<div class="detail">${esc(b.detail)}</div>` : ''}
+    ${botState}${kpi}
+    <div class="row" style="margin-top:8px">${proc}${extra.join('')}</div>
+    ${botActs ? `<div class="row" style="margin-top:8px">${botActs}</div>` : ''}
+  </div>`;
+}
+
+async function refresh() {
+  try { state = await api('/api/overview'); } catch { return; }
+  $('#hdr').textContent = `работает ${fmtDur(state.uptime) || 'меньше минуты'}${state.demo ? ' · демо' : ''}`;
+  $('#alertsBadge').innerHTML = state.open_alerts ? `<span class="badge s-crashed">тревог: ${state.open_alerts}</span>` : '';
+  $('#bots').innerHTML = state.bots.map(botCard).join('');
+  $('#alerts').innerHTML = state.alerts.map((a) => `<tr style="${a.acked ? 'opacity:.55' : ''}"><td>${fmtTs(a.ts)}</td><td>${esc(a.source)}</td><td class="lv-${esc(a.level)}">${esc(a.level)}</td><td>${esc(a.message)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Тревог нет</td></tr>';
+  $('#events').innerHTML = state.events.map((e) => `<tr><td>${fmtTs(e.ts)}</td><td>${esc(e.source)}</td><td class="lv-${esc(e.level)}">${esc(e.message)}</td></tr>`).join('');
+  $('#logTabs').innerHTML = state.bots.map((b) => `<button class="btn ${b.name === logBot ? 'on' : ''}" onclick="switchLog('${b.name}')">${esc(b.title)}</button>`).join('');
+}
+
+async function pollLog() {
+  try {
+    const lines = await api(`/api/workers/${logBot}/logs?after=${logAfter}`);
+    if (lines.length) {
+      const el = $('#log');
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+      el.textContent += lines.map((l) => l.text).join('\n') + '\n';
+      if (el.textContent.length > 300000) el.textContent = el.textContent.slice(-200000);
+      logAfter = lines[lines.length - 1].n;
+      if (atBottom) el.scrollTop = el.scrollHeight;
+    }
+  } catch { /* центр перезапускается */ }
+}
+function switchLog(name) { logBot = name; logAfter = 0; $('#log').textContent = ''; refresh(); pollLog(); }
+
+async function openLis() {
+  const s = await api('/api/lisbot/secrets');
+  for (const el of $('#lisForm').elements) if (el.name) el.value = s[el.name] ?? '';
+  $('#pwHint').textContent = s.STEAM_PASSWORD_SET ? '(сохранён — оставьте пустым, чтобы не менять)' : '';
+  $('#lisDlg').showModal();
+}
+$('#lisDlg').addEventListener('close', async () => {
+  if ($('#lisDlg').returnValue !== 'save') return;
+  const data = { restart: true };
+  for (const el of $('#lisForm').elements) if (el.name) data[el.name] = el.value;
+  const r = await api('/api/lisbot/secrets', data);
+  flash(r.message, !r.ok);
+  setTimeout(refresh, 1500);
+});
+$('#quitBtn').onclick = async () => {
+  if (!confirm('Остановить обоих ботов и закрыть центр?')) return;
+  await api('/api/quit', {});
+  document.body.innerHTML = '<main><div class="card">Центр закрыт. Это окно можно закрыть.</div></main>';
+};
+const msg = new URLSearchParams(location.search).get('msg');
+if (msg) { flash(msg, true); history.replaceState(null, '', '/'); }
+refresh(); pollLog();
+setInterval(refresh, 5000); setInterval(pollLog, 2000);
+</script>
+</body>
+</html>

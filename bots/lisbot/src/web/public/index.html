@@ -65,6 +65,13 @@ async function api(path, body) {
   return ct.includes('json') ? r.json() : r.text();
 }
 function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+// Вход по ссылке из центра: /#token=… — токен уходит в cookie через /login и сразу убирается из адреса
+async function hashLogin() {
+  const m = /[#&]token=([^&]+)/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: decodeURIComponent(m[1]) }) });
+}
 $('#loginBtn').onclick = async () => {
   const r = await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: $('#tok').value }) });
   if (r.ok) { $('#login').classList.add('hidden'); boot(); } else alert('Неверный токен');
@@ -245,7 +252,7 @@ async function refresh() {
   } catch (e) { if (e.message !== 'auth') $('#view').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; }
 }
 function boot() { $('#app').classList.remove('hidden'); refresh(); setInterval(() => { if (tab !== 'settings' && !dlg.open) refresh(); }, 15000); }
-api('/api/summary').then(boot).catch(() => {});
+hashLogin().catch(() => {}).then(() => api('/api/summary')).then(boot).catch(() => {});
 </script>
 </body>
 </html>

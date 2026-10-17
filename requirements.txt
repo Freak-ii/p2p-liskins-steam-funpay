@@ -1,0 +1,2 @@
+# Центр и MannBot работают на одном Python (3.11+)
+-r bots/mannbot/requirements.txt

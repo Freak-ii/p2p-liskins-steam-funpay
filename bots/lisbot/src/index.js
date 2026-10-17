@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { loadConfig, validateConfig } from './config.js';
 import { openDb } from './db.js';
 import { createLogger, sleep, jitter, errMsg, HOUR, DAY, hourIn, dayKey, fmtUsd } from './util/common.js';
@@ -233,7 +235,8 @@ async function check(cfg) {
   return errs.length ? 1 : 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL: корректно и для путей с пробелами/кириллицей, и для Windows (C:\...)
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const cfg = loadConfig();
   if (process.argv.includes('--check')) {
     process.exit(await check(cfg));

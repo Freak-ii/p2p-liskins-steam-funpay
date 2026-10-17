@@ -1,0 +1,57 @@
+"""Журнал событий центра (center.sqlite3): запуски, остановки, падения ботов, действия из панели.
+
+Это основа для мониторинга центра: всё, что происходит с воркерами, попадает сюда с уровнем
+info / warn / critical, а панель и будущие уведомления читают отсюда.
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+import time
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    source TEXT NOT NULL,        -- center | lisbot | mannbot
+    level TEXT NOT NULL,         -- info | warn | critical
+    kind TEXT NOT NULL,          -- worker.start, worker.exit, worker.crashed, action, ...
+    message TEXT NOT NULL,
+    data TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+"""
+
+
+class EventStore:
+    def __init__(self, path: Path | str):
+        self.path = str(path)
+        self._lock = threading.Lock()
+        self.db = sqlite3.connect(self.path, check_same_thread=False)
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript(SCHEMA)
+        self.db.commit()
+
+    def add(self, source: str, level: str, kind: str, message: str, data: dict | None = None) -> int:
+        with self._lock:
+            cur = self.db.execute(
+                "INSERT INTO events (ts, source, level, kind, message, data) VALUES (?,?,?,?,?,?)",
+                (time.time(), source, level, kind, message, json.dumps(data, ensure_ascii=False) if data else None))
+            self.db.commit()
+            return int(cur.lastrowid)
+
+    def recent(self, limit: int = 200, source: str | None = None) -> list[dict]:
+        sql, args = "SELECT * FROM events", []
+        if source:
+            sql += " WHERE source=?"
+            args.append(source)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        with self._lock:
+            return [dict(r) for r in self.db.execute(sql, args).fetchall()]
+
+    def close(self) -> None:
+        with self._lock:
+            self.db.close()
