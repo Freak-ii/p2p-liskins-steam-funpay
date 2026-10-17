@@ -98,3 +98,35 @@ def test_parse_mafile_errors():
         raise AssertionError
     except ValueError:
         pass
+
+
+def test_crm_json_api(tmp_path):
+    """JSON-эндпоинты для CRM центра: заметка заказа, заметки/теги/чёрный список покупателя."""
+    sup = Supervisor(tmp_path, demo=True, overrides=DEMO_OVERRIDES)
+
+    async def go():
+        sup.engine.cfg.deal.message_rate_limit_seconds = 0
+        res = await run_scenario(sup.engine, sup.engine.fp, sup.engine.steam, verbose=False)
+        oid = res["orders"][0]
+        cid = sup.db.get_order(oid)["buyer_id"]
+        anon = TestClient(TestServer(make_app(sup)))
+        await anon.start_server()
+        assert (await anon.post(f"/api/orders/{oid}", json={"notes": "x"}, allow_redirects=False)).status == 302
+        await anon.close()
+        client = await _client(sup)
+        try:
+            r = await client.post(f"/api/orders/{oid}", json={"notes": "из центра"})
+            assert (await r.json())["ok"] and sup.db.get_order(oid)["notes"] == "из центра"
+            assert (await client.post("/api/orders/nope", json={"notes": "x"})).status == 404
+            assert (await client.post(f"/api/orders/{oid}", json={})).status == 400
+            r = await client.post(f"/api/customers/{cid}", json={"notes": "VIP", "tags": "опт", "blacklisted": True})
+            assert (await r.json())["ok"]
+            c = sup.db.customer(cid)
+            assert c["notes"] == "VIP" and c["tags"] == "опт" and c["blacklisted"] == 1
+            await client.post(f"/api/customers/{cid}", json={"blacklisted": False})
+            c = sup.db.customer(cid)
+            assert c["blacklisted"] == 0 and c["notes"] == "VIP"
+            assert (await client.post("/api/customers/424242", json={"notes": "x"})).status == 404
+        finally:
+            await client.close()
+    asyncio.run(go())

@@ -35,6 +35,35 @@
     </div>
   </section>
 
+  <section id="crm">
+    <div class="row"><h2>CRM</h2><span class="spacer" style="flex:1"></span><span class="tabs" id="crmView"></span></div>
+    <div class="card" id="crmDeals">
+      <div class="row filters">
+        <input id="crmSearch" type="search" placeholder="Поиск: предмет, ID, покупатель, Steam ID, заметка, тег">
+        <select id="crmBot"><option value="">Оба бота</option><option value="lisbot">LisBot</option><option value="mannbot">MannBot</option></select>
+        <select id="crmDays"><option value="all">За всё время</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select>
+        <label class="check small"><input type="checkbox" id="crmDry"> тестовые сделки</label>
+        <span class="spacer" style="flex:1"></span><a class="btn" id="crmCsv" href="/api/crm/deals.csv">CSV</a>
+      </div>
+      <div class="tabs" id="crmGroups"></div>
+      <div class="muted small" id="crmTotals"></div>
+      <div class="tablewrap"><table id="crmTable" class="crm"></table></div>
+      <div class="row" id="crmPager" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="crmCust" hidden>
+      <div class="row filters">
+        <input id="crmCustSearch" type="search" placeholder="Поиск: ник FunPay, ID, Steam ID, заметка, тег">
+        <select id="crmTag"><option value="">все теги</option></select>
+        <select id="crmCsort"><option value="last_order">Сначала недавние</option><option value="spent">Больше потратил</option>
+          <option value="orders">Больше заказов</option><option value="risk">Выше риск</option></select>
+      </div>
+      <div class="tabs" id="crmRisk"></div>
+      <div class="tablewrap"><table id="crmCustTable" class="crm"></table></div>
+      <div class="muted small" style="margin-top:6px">Риск-скоринг центра считается по всей истории покупателя: возвраты, блокировки антифродом,
+        общие Steam-аккаунты, неподтверждённые заказы, низкие отзывы. Наведите на значок, чтобы увидеть причины.</div>
+    </div>
+  </section>
+
   <h2>Тревоги ботов</h2>
   <div class="card"><table><thead><tr><th>Время</th><th>Бот</th><th>Уровень</th><th>Сообщение</th></tr></thead><tbody id="alerts"></tbody></table></div>
 
@@ -47,6 +76,11 @@
   <h2>События центра</h2>
   <div class="card"><table><thead><tr><th>Время</th><th>Источник</th><th>Событие</th></tr></thead><tbody id="events"></tbody></table></div>
 </main>
+
+<dialog id="crmDlg" class="wide">
+  <form method="dialog" class="row" style="justify-content:flex-end"><button class="btn" value="close" aria-label="Закрыть">✕</button></form>
+  <div id="crmBody"></div>
+</dialog>
 
 <dialog id="lisDlg">
   <form method="dialog" id="lisForm">
@@ -166,5 +200,6 @@ refresh(); pollLog();
 setInterval(refresh, 5000); setInterval(pollLog, 2000);
 </script>
 <script src="/static/analytics.js"></script>
+<script src="/static/crm.js"></script>
 </body>
 </html>

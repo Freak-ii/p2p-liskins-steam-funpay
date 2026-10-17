@@ -188,6 +188,16 @@ class Database:
         self.exec("UPDATE customers SET blacklisted=?, notes=CASE WHEN ?<>'' THEN ? ELSE notes END "
                   "WHERE funpay_id=?", (int(value), note, note, funpay_id))
 
+    def update_customer(self, funpay_id: int, *, notes: str | None = None, tags: str | None = None) -> bool:
+        """Заметки и теги покупателя (правятся из панели MannBot и из CRM центра). False — нет такого покупателя."""
+        fields = {k: v for k, v in (("notes", notes), ("tags", tags)) if v is not None}
+        if not self.customer(funpay_id):
+            return False
+        if fields:
+            self.exec(f"UPDATE customers SET {','.join(f'{k}=?' for k in fields)} WHERE funpay_id=?",
+                      [*fields.values(), funpay_id])
+        return True
+
     def customers_with_steam_id(self, steam_id: str) -> list[sqlite3.Row]:
         return self.q("SELECT * FROM customers WHERE steam_ids LIKE ?", (f'%"{steam_id}"%',))
 
