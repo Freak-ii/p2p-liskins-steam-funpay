@@ -53,6 +53,7 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
   <nav>
     {% for href, name in [('/', 'Дашборд'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/pricing', 'Цены / RTBA'), ('/messages', 'Сообщения'), ('/settings', 'Настройки'), ('/logs', 'Журнал')] %}
     <a href="{{href}}" class="{{ 'active' if path == href else '' }}">{{name}}</a>{% endfor %}
+    <a href="/ai" class="{{ 'active' if path == '/ai' else '' }}">ИИ-ответы{% if ai_pending %} <span class="chip c-amber">{{ai_pending}}</span>{% endif %}</a>
     <a href="/alerts" class="{{ 'active' if path == '/alerts' else '' }}">Алерты{% if alerts_open %} <span class="chip c-red">{{alerts_open}}</span>{% endif %}</a>
   </nav>
   <div class="row" style="margin-left:auto">

@@ -9,7 +9,7 @@ a = Analysis(
     pathex=[str(root)],
     datas=[(str(root / "mannbot" / "web" / "templates"), "mannbot/web/templates"),
            (str(root / "config.example.yaml"), ".")],
-    hiddenimports=["mannbot.demo", "mannbot.funpay.client", "mannbot.steam.client", "lxml.etree", "lxml._elementpath"],
+    hiddenimports=["mannbot.demo", "mannbot.funpay.client", "mannbot.steam.client", "lxml.etree", "lxml._elementpath", "anthropic"],
     excludes=["tkinter", "pytest", "PIL", "numpy"],
 )
 pyz = PYZ(a.pure)

@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS recommendations (
 CREATE TABLE IF NOT EXISTS metrics (ts REAL, name TEXT, value REAL);
 CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(name, ts);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS ai_replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, chat_id TEXT, order_id TEXT, buyer TEXT, buyer_text TEXT,
+    draft TEXT, final_text TEXT, topic TEXT, confidence REAL, needs_seller INTEGER, reason TEXT,
+    status TEXT, issues TEXT DEFAULT '[]', model TEXT, latency_ms INTEGER, tokens_in INTEGER, tokens_out INTEGER,
+    rating INTEGER, decided_at REAL, decided_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_status ON ai_replies(status);
+CREATE INDEX IF NOT EXISTS idx_ai_chat ON ai_replies(chat_id, ts);
 """
 
 ORDER_COLUMNS = {

@@ -8,6 +8,7 @@ import re
 import time
 from typing import Any
 
+from mannbot.ai.agent import AIAgent
 from mannbot.core import messages as M
 from mannbot.core.models import ChatMessage, FunPayOrder, OrderStatus as S, TradeOfferState as T
 from mannbot.core.risk import RiskEngine
@@ -44,6 +45,7 @@ class Engine:
         self.started_at = time.time()
         self.last_ok: dict[str, float] = {}
         self.stock_cache: dict[str, Any] = {"total": None, "ts": 0}
+        self.ai = AIAgent(cfg, db, notifier, sender=self.say_text)
 
     # ================================================================== helpers
     @property
@@ -273,6 +275,8 @@ class Engine:
                                     (chat_id,))
             if M.is_off_platform_request(msg.text) and delivered:
                 await self.say(delivered, "off_platform")
+            elif await self._ask_ai(chat_id, delivered, msg):
+                return
             # п. 2.1.4 — не игнорируем: пересылаем продавцу
             await self.notifier.notify("INFO", "chat_message",
                                        f"💬 {msg.author_name}: {msg.text[:500]}", throttle_key=f"chat:{chat_id}")
@@ -325,14 +329,26 @@ class Engine:
             wrong = looks_like_wrong_link(msg.text)
             if wrong:
                 await self.bad_data(o, wrong)
-            else:
-                await self.say(o, "unknown")
-                if "?" in msg.text:
-                    await self.notifier.notify("INFO", "buyer_question", f"Вопрос в заказе #{oid}: {msg.text[:300]}",
-                                               order_id=oid)
+                return
+            res = await self.ai.handle(chat_id, o, msg.text, msg.author_name) if self.ai.active else None
+            if res and res.sent:
+                return
+            await self.say(o, "unknown")
+            if "?" in msg.text and not (res and res.drafted):
+                await self.notifier.notify("INFO", "buyer_question", f"Вопрос в заказе #{oid}: {msg.text[:300]}",
+                                           order_id=oid)
+            return
+        if await self._ask_ai(chat_id, o, msg):
             return
         await self.notifier.notify("INFO", "buyer_message", f"💬 #{oid} {msg.author_name}: {msg.text[:300]}",
                                    order_id=oid)
+
+    async def _ask_ai(self, chat_id: str, o, msg: ChatMessage) -> bool:
+        """Отдать непонятное сообщение ИИ-агенту. True — ИИ ответил сам или продавец уже получил черновик."""
+        if self.paused or not self.ai.active:
+            return False
+        res = await self.ai.handle(chat_id, o, msg.text, msg.author_name)
+        return res.sent or res.drafted
 
     # ================================================================== ссылка на обмен
     async def bad_data(self, o, code: str, detail: str = "") -> None:
@@ -879,6 +895,9 @@ class Engine:
             return "заказ не найден"
         await self.say_text(o, text)
         self.db.add_event(oid, "admin_message", text=text)
+        # продавец ответил сам — старые черновики ИИ в этом чате больше не актуальны
+        self.db.exec("UPDATE ai_replies SET status='expired', decided_at=? WHERE chat_id=? AND status='pending'",
+                     (time.time(), o["chat_id"]))
         return "отправлено"
 
     def admin_blacklist(self, buyer_id: int, value: bool = True, note: str = "") -> str:
@@ -928,8 +947,15 @@ class Engine:
             return f"Свободно ключей: {await self.available_keys(force=True)}"
         if cmd == "report" and self.analytics:
             return self.analytics.text_report()
+        if cmd == "ai":
+            return self.ai.pending_text()
+        if cmd in ("aiok", "aino", "aiedit"):
+            if not a0.isdigit():
+                return f"укажите номер черновика: /{cmd} 12"
+            action = {"aiok": "approve", "aino": "reject", "aiedit": "edit"}[cmd]
+            return await self.ai.decide(int(a0), action, " ".join(args[1:]), by="telegram")
         return ("Команды: /status /orders /stock /report /pause /resume /approve ID /reject ID /resend ID "
-                "/refund ID /delivered ID /take ID /msg ID текст")
+                "/refund ID /delivered ID /take ID /msg ID текст · ИИ: /ai /aiok N /aiedit N текст /aino N")
 
     def status_text(self) -> str:
         counts = {r["status"]: r["n"] for r in self.db.q("SELECT status, COUNT(*) n FROM orders GROUP BY status")}

@@ -276,8 +276,18 @@ async def run_scenario(engine, fp: FakeFunPay, steam: FakeSteam, verbose: bool =
     print("\nАдмин: " + await engine.handle_command("approve", [g]))
     await step("Greg: после /approve")
 
+    # 8. Вопросы, которые бот не понял, → ИИ-агент (если включён; в демо — заглушка без сети)
+    ai_orders = []
+    if getattr(engine, "ai", None) and engine.ai.active:
+        h = fp.buyer_pays("Hank", 18, 1)
+        fp.buyer_says(18, "а где взять эту ссылку на обмен? не нахожу")
+        await step("Hank спрашивает, где взять ссылку → черновик ИИ продавцу")
+        fp.buyer_says(18, "если не получится, можно вернуть деньги?")
+        await step("Hank спрашивает про возврат → ИИ зовёт продавца")
+        ai_orders.append(h)
+
     await engine.stock_sync()
     await engine.rtba_step()
     if engine.analytics:
         await engine.analytics.tick()
-    return {"orders": [a, b, c, d, e, f, g]}
+    return {"orders": [a, b, c, d, e, f, g], "ai_orders": ai_orders}

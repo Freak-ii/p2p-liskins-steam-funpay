@@ -23,6 +23,7 @@ DEMO_OVERRIDES = {
     "risk": {"manual_review_score": 40},
     "rtba": {"enabled": True, "cost_per_key": 150, "competitor_min_amount": 2, "ceiling_price": 260},
     "notifications": {"telegram": {"enabled": False}},
+    "ai": {"enabled": True, "backend": "stub"},
 }
 
 
