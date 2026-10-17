@@ -17,6 +17,24 @@
   <div id="flash"></div>
   <div class="grid" id="bots"></div>
 
+  <section id="analytics">
+    <div class="row"><h2>Аналитика перепродажи</h2><span class="spacer" style="flex:1"></span>
+      <span class="tabs" id="anDays"></span><span class="tabs" id="anCur"></span>
+      <a class="btn" id="anCsv" href="/api/analytics/export.csv">CSV</a><a class="btn" id="anXlsx" href="/api/analytics/export.xlsx">XLSX</a>
+    </div>
+    <div id="anWarn"></div>
+    <div class="card"><div id="anPnl"></div></div>
+    <div class="card" style="margin-top:14px">
+      <div class="row"><h3 id="anChartTitle">По дням</h3><span class="spacer" style="flex:1"></span><span class="tabs" id="anMetric"></span></div>
+      <div id="anLegend" class="legend"></div>
+      <div id="anChart" class="chart"></div>
+    </div>
+    <div class="grid" style="margin-top:14px">
+      <div class="card" id="anLis"></div>
+      <div class="card" id="anMann"></div>
+    </div>
+  </section>
+
   <h2>Тревоги ботов</h2>
   <div class="card"><table><thead><tr><th>Время</th><th>Бот</th><th>Уровень</th><th>Сообщение</th></tr></thead><tbody id="alerts"></tbody></table></div>
 
@@ -147,5 +165,6 @@ if (msg) { flash(msg, true); history.replaceState(null, '', '/'); }
 refresh(); pollLog();
 setInterval(refresh, 5000); setInterval(pollLog, 2000);
 </script>
+<script src="/static/analytics.js"></script>
 </body>
 </html>

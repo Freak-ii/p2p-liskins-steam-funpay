@@ -9,6 +9,7 @@ import logging
 import time
 from pathlib import Path
 
+from center.analytics import Analytics
 from center.bots import BotWorker, LisBotWorker, MannBotWorker
 from center.config import CenterConfig
 from center.events import EventStore
@@ -36,6 +37,7 @@ class Center:
         self.quit_event = asyncio.Event()
         self._poll_task: asyncio.Task | None = None
         self.started_at = time.time()
+        self.analytics = Analytics(self)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))
