@@ -12,6 +12,7 @@ from pathlib import Path
 from center.analytics import Analytics
 from center.bots import BotWorker, LisBotWorker, MannBotWorker
 from center.config import CenterConfig
+from center.coordinator import Coordinator
 from center.events import EventStore
 from center.monitor import Monitor
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
@@ -40,6 +41,7 @@ class Center:
         self.started_at = time.time()
         self.analytics = Analytics(self)
         self.monitor = Monitor(self)       # до записи «Центр запущен»: проверяет, не выключался ли центр аварийно
+        self.coordinator = Coordinator(self)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))
@@ -47,6 +49,7 @@ class Center:
     async def start(self) -> None:
         self.events.add("center", "info", "center.start", "Центр запущен" + (" (демо)" if self.demo else ""))
         await self.monitor.start()
+        await self.coordinator.start()
         for name, w in self.workers.items():
             if not self.enabled(name):
                 w._set(DISABLED, "выключен в center.yaml")
@@ -63,6 +66,7 @@ class Center:
         if self._poll_task:
             self._poll_task.cancel()
         await asyncio.gather(*(w.stop("завершение центра") for w in self.workers.values()), return_exceptions=True)
+        await self.coordinator.stop()
         await self.monitor.stop()
         self.events.add("center", "info", "center.stop", "Центр остановлен")
         self.events.close()

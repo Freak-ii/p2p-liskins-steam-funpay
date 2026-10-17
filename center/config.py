@@ -60,6 +60,27 @@ DEFAULTS: dict = {
         },
         "daily_report": {"enabled": True, "time": "09:00"},
     },
+    "coordinator": {                 # center/coordinator.py
+        "enabled": True,
+        "check_seconds": 60,         # как часто сторож аномалий смотрит на ботов
+        "proposal_ttl_hours": 24,    # неодобренное предложение после этого срока устаревает
+        "ai": {
+            "enabled": True,
+            "api_key": "",           # ключ Claude API; пусто — брифинги без ИИ (по правилам)
+            "model": "claude-opus-5-5",
+            "effort": "medium",
+        },
+        "briefing": {"enabled": True, "time": "09:05", "telegram": True},
+        "permissions": {},           # инструмент: auto | propose | confirm | manual | off (см. coordinator.TOOLS)
+        "anomaly": {
+            "spend_hour_factor": 3,  # траты LisBot за час больше среднего часа за неделю во столько раз…
+            "spend_hour_min_usd": 30,     # …и не меньше этой суммы — пауза закупок
+            "loss_streak": 4,        # столько продаж LisBot подряд в минус…
+            "loss_streak_min_usd": 5,     # …на общую сумму не меньше — пауза закупок
+            "refunds_24h": 3,        # столько возвратов MannBot за сутки — предложить паузу
+            "cooldown_hours": 6,     # одна и та же аномалия не чаще
+        },
+    },
 }
 
 

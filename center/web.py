@@ -13,6 +13,7 @@ from aiohttp import web
 
 from center.app import Center
 from center.bots import LIS_SECRET_KEYS, LisBotWorker
+from center.coordinator import routes as coordinator_routes
 from center.monitor import routes as monitor_routes
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -170,6 +171,7 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/analytics/export.{fmt:csv|xlsx}", an_export),
     ])
     app.add_routes(monitor_routes(center))
+    app.add_routes(coordinator_routes(center))
     app.router.add_static("/static/", STATIC)
     return app
 
