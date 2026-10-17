@@ -186,6 +186,15 @@ def make_app(sup, log_handler=None) -> web.Application:
         sup.db.exec("UPDATE alerts SET acknowledged=1")
         raise web.HTTPFound("/alerts")
 
+    async def api_alerts_ack(request: web.Request):
+        # JSON-вариант для центра: {"id": 5} — одна тревога, {"all": true} — все
+        data = await request.json()
+        if data.get("all"):
+            sup.db.exec("UPDATE alerts SET acknowledged=1")
+        else:
+            sup.db.exec("UPDATE alerts SET acknowledged=1 WHERE id=?", (int(data.get("id", 0)),))
+        return web.json_response({"ok": True})
+
     # ------------------------------------------------------------------ управление ботом
     async def control(request: web.Request):
         act = (await request.post()).get("action")
@@ -344,7 +353,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/", dashboard), web.get("/orders", orders), web.get("/orders/{oid}", order),
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing), web.get("/alerts", alerts),
-        web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
+        web.post("/alerts/ack", alerts_ack), web.post("/api/alerts/ack", api_alerts_ack),
+        web.post("/control", control), web.get("/api/status", api_status),
         web.get("/api/summary", api_status),
         web.get("/setup", setup), web.post("/setup", setup), web.post("/setup/mafile", setup_mafile),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
