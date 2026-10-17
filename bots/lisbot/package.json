@@ -1,0 +1,33 @@
+{
+  "name": "lisskins-bot",
+  "version": "1.0.0",
+  "description": "LIS-SKINS -> Steam Market: автозакупка, приём трейдов, продажа после Trade Protection",
+  "main": "app/main.mjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node src/index.js --check",
+    "test": "node --test test/*.test.js",
+    "app": "electron .",
+    "build:win": "node build/build-win.mjs",
+    "icons": "node build/make-icons.cjs"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "steam-totp": "^2.1.2",
+    "steam-tradeoffer-manager": "^2.13.0",
+    "steam-user": "^5.3.0",
+    "steamcommunity": "^3.50.3",
+    "ws": "^8.22.0"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true,
+  "productName": "LisBot",
+  "devDependencies": {
+    "electron": "^44.7.2",
+    "resedit": "^3.1.0"
+  }
+}

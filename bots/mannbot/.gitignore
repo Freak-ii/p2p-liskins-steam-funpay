@@ -1,0 +1,10 @@
+config.yaml
+data/
+*.maFile
+__pycache__/
+.pytest_cache/
+.env
+build/
+dist/
+mannbot-data/
+.venv*/

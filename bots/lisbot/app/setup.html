@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+<title>LisBot — подключения</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262a33;--text:#e6e8ec;--muted:#8b93a3;--accent:#4f8cff;--ok:#2fbf71;--warn:#e0a526;--bad:#e5484d}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 20px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+.step{display:inline-flex;width:22px;height:22px;border-radius:50%;background:#4f8cff22;color:var(--accent);align-items:center;justify-content:center;font-size:12px;font-weight:600;margin-right:8px}
+.hint{color:var(--muted);font-size:13px;margin:2px 0 10px}
+label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+input,select{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font:inherit}
+input:focus,select:focus{outline:none;border-color:var(--accent)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>input{flex:1;min-width:200px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+button{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px 12px;cursor:pointer;font:inherit;white-space:nowrap}
+button:hover{border-color:var(--accent)}button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;padding:10px 18px}
+a{color:var(--accent);cursor:pointer}.res{font-size:13px;margin-top:6px;min-height:18px}.ok{color:var(--ok)}.bad{color:var(--bad)}
+.check{display:flex;gap:8px;align-items:flex-start;margin:10px 0;color:var(--text);font-size:14px}.check input{width:auto;margin-top:3px}
+.banner{border:1px solid var(--bad);background:#e5484d1a;border-radius:8px;padding:10px 12px;margin-bottom:14px}
+.banner.info{border-color:var(--accent);background:#4f8cff14}
+.footer{display:flex;gap:10px;justify-content:flex-end;align-items:center;flex-wrap:wrap;position:sticky;bottom:0;background:var(--bg);padding:12px 0}
+@media (max-width:640px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Подключения LisBot</h1>
+  <p class="sub">Ключи хранятся только на этом компьютере в зашифрованном виде<span id="enc"></span>. Обязательные поля отмечены *.</p>
+  <div id="errors"></div>
+
+  <section>
+    <h2><span class="step">1</span>LIS-SKINS</h2>
+    <p class="hint">Ключ API: lis-skins.com → профиль → <a data-href="https://lis-skins.com/">API</a>. Пополнять баланс нужно на сайте; бот увидит пополнение и уведомит.</p>
+    <label for="LIS_API_KEY">API-ключ *</label>
+    <div class="row"><input id="LIS_API_KEY" type="password" autocomplete="off"><button id="tLis">Проверить</button></div>
+    <div class="res" id="rLis"></div>
+  </section>
+
+  <section>
+    <h2><span class="step">2</span>Steam</h2>
+    <p class="hint">Нужен мобильный аутентификатор через <a data-href="https://github.com/Jessecar96/SteamDesktopAuthenticator">Steam Desktop Authenticator</a> (maFile): бот входит без кода с телефона и подтверждает только свои лоты на торговой площадке. Лучше завести отдельный аккаунт под бота.</p>
+    <div class="row"><button id="maFile">Импортировать maFile…</button><span class="res" id="rMa"></span></div>
+    <div class="grid2">
+      <div><label for="STEAM_ACCOUNT_NAME">Логин Steam *</label><input id="STEAM_ACCOUNT_NAME" autocomplete="off"></div>
+      <div><label for="STEAM_PASSWORD">Пароль Steam *</label><input id="STEAM_PASSWORD" type="password" autocomplete="off" placeholder=""></div>
+      <div><label for="STEAM_SHARED_SECRET">shared_secret *</label><input id="STEAM_SHARED_SECRET" type="password" autocomplete="off"></div>
+      <div><label for="STEAM_IDENTITY_SECRET">identity_secret *</label><input id="STEAM_IDENTITY_SECRET" type="password" autocomplete="off"></div>
+    </div>
+    <label for="STEAM_TRADE_URL">Трейд-ссылка * — <a data-href="https://steamcommunity.com/my/tradeoffers/privacy">где взять</a></label>
+    <input id="STEAM_TRADE_URL" placeholder="https://steamcommunity.com/tradeoffer/new/?partner=…&token=…">
+    <div class="grid2">
+      <div><label for="cur">Валюта кошелька Steam</label>
+        <select id="cur"><option value="5|RUB">RUB — рубль</option><option value="1|USD">USD — доллар</option><option value="3|EUR">EUR — евро</option><option value="37|KZT">KZT — тенге</option><option value="18|UAH">UAH — гривна</option><option value="17|TRY">TRY — лира</option><option value="23|CNY">CNY — юань</option></select></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="step">3</span>Telegram (необязательно)</h2>
+    <p class="hint">Уведомления придут и на компьютер, но в Telegram удобнее: критические остановки, пополнения, продажи и команды /pause, /resume, /stats. Создайте бота у <a data-href="https://t.me/BotFather">@BotFather</a>, вставьте токен, напишите своему боту /start и нажмите «Найти мой chat id».</p>
+    <label for="TELEGRAM_BOT_TOKEN">Токен бота</label>
+    <input id="TELEGRAM_BOT_TOKEN" type="password" autocomplete="off" placeholder="123456:ABC…">
+    <label for="TELEGRAM_CHAT_ID">Chat id</label>
+    <div class="row"><input id="TELEGRAM_CHAT_ID" autocomplete="off"><button id="tgFind">Найти мой chat id</button><button id="tgTest">Тест</button></div>
+    <div class="res" id="rTg"></div>
+  </section>
+
+  <section>
+    <h2><span class="step">4</span>Режим работы</h2>
+    <label class="check"><input type="checkbox" id="dryRun" checked><span><b>Режим симуляции (DRY-RUN)</b> — бот всё считает и показывает, что купил бы, но реально не покупает и не продаёт. Начните с него и выключите в «Настройках», когда решения бота вас устроят.</span></label>
+    <label class="check"><input type="checkbox" id="autostart"><span>Запускать вместе с системой (свёрнуто в трей)</span></label>
+  </section>
+
+  <div class="footer">
+    <span class="res" id="rSave"></span>
+    <button id="cancel" hidden>Отмена</button>
+    <button class="primary" id="save">Сохранить и запустить</button>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const KEYS = ['LIS_API_KEY', 'STEAM_ACCOUNT_NAME', 'STEAM_PASSWORD', 'STEAM_SHARED_SECRET', 'STEAM_IDENTITY_SECRET', 'STEAM_TRADE_URL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
+const say = (el, ok, text) => { el.className = 'res ' + (ok ? 'ok' : 'bad'); el.textContent = text; };
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+document.querySelectorAll('[data-href]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); lisbot.open(a.dataset.href); }));
+
+(async () => {
+  const s = await lisbot.get();
+  for (const k of KEYS) $(k).value = s.secrets[k] || '';
+  if (s.hasPassword) $('STEAM_PASSWORD').placeholder = '•••••••• (сохранён — оставьте пустым, чтобы не менять)';
+  $('dryRun').checked = s.dryRun;
+  $('autostart').checked = s.autostart;
+  $('cur').value = `${s.walletCurrency}|${s.walletCurrencyCode}`;
+  $('enc').textContent = s.encrypted ? ' средствами системы (DPAPI)' : ' — ВНИМАНИЕ: шифрование ОС недоступно, ключи сохранятся открытым текстом';
+  if (s.botRunning) $('cancel').hidden = false;
+  if (s.errors?.length) $('errors').innerHTML = `<div class="banner"><b>Нужно исправить:</b><br>${s.errors.map(esc).join('<br>')}</div>`;
+  else if (!s.configured) $('errors').innerHTML = '<div class="banner info">Первый запуск: заполните подключения. Это займёт пару минут.</div>';
+})();
+
+$('tLis').onclick = async () => { say($('rLis'), true, 'Проверяю…'); const r = await lisbot.testLis($('LIS_API_KEY').value.trim()); r.ok ? say($('rLis'), true, `Ключ работает. Баланс: $${r.balance.toFixed(2)}`) : say($('rLis'), false, r.error); };
+$('maFile').onclick = async () => {
+  const r = await lisbot.importMaFile();
+  if (!r.ok) { if (r.error) say($('rMa'), false, r.error); return; }
+  $('STEAM_SHARED_SECRET').value = r.sharedSecret; $('STEAM_IDENTITY_SECRET').value = r.identitySecret;
+  if (r.accountName && !$('STEAM_ACCOUNT_NAME').value) $('STEAM_ACCOUNT_NAME').value = r.accountName;
+  say($('rMa'), true, `Секреты загружены${r.accountName ? ' для ' + r.accountName : ''}`);
+};
+$('tgFind').onclick = async () => { const t = $('TELEGRAM_BOT_TOKEN').value.trim(); if (!t) return say($('rTg'), false, 'Сначала вставьте токен'); const r = await lisbot.tgFindChat(t); if (r.ok) { $('TELEGRAM_CHAT_ID').value = r.chatId; say($('rTg'), true, `Найден чат ${r.name}`); } else say($('rTg'), false, r.error); };
+$('tgTest').onclick = async () => { const r = await lisbot.tgTest($('TELEGRAM_BOT_TOKEN').value.trim(), $('TELEGRAM_CHAT_ID').value.trim()); r.ok ? say($('rTg'), true, 'Сообщение отправлено — проверьте Telegram') : say($('rTg'), false, r.error); };
+$('cancel').onclick = () => lisbot.cancel();
+$('save').onclick = async () => {
+  const secrets = Object.fromEntries(KEYS.map((k) => [k, $(k).value]));
+  const [walletCurrency, walletCurrencyCode] = $('cur').value.split('|');
+  if (!$('dryRun').checked && !confirm('Режим симуляции выключен: бот начнёт РЕАЛЬНО тратить баланс LIS. Продолжить?')) return;
+  $('save').disabled = true; say($('rSave'), true, 'Сохраняю…');
+  const r = await lisbot.save({ secrets, dryRun: $('dryRun').checked, autostart: $('autostart').checked, walletCurrency: Number(walletCurrency), walletCurrencyCode });
+  $('save').disabled = false;
+  if (!r.ok) { $('errors').innerHTML = `<div class="banner"><b>Нужно исправить:</b><br>${r.errors.map(esc).join('<br>')}</div>`; say($('rSave'), false, 'Есть ошибки'); scrollTo(0, 0); return; }
+  say($('rSave'), true, 'Сохранено. Запускаю бота…');
+};
+</script>
+</body>
+</html>

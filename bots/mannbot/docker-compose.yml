@@ -1,0 +1,11 @@
+# Запуск на VPS:  docker compose up -d   →  панель: http://127.0.0.1:8080 (через SSH-туннель)
+# Ссылка для входа с токеном: docker compose logs mannbot | grep login
+services:
+  mannbot:
+    build: .
+    container_name: mannbot
+    restart: unless-stopped
+    volumes:
+      - ./mannbot-data:/data          # настройки, база заказов, журнал
+    ports:
+      - "127.0.0.1:8080:8080"         # панель НЕ публикуется в интернет; заходите через ssh -L 8080:127.0.0.1:8080

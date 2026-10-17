@@ -1,0 +1,145 @@
+{
+  "dryRun": true,
+  "dataDir": "./data",
+  "timezone": "Europe/Moscow",
+
+  "lis": {
+    "baseUrl": "https://api.lis-skins.com/v1",
+    "wsUrl": "wss://ws.lis-skins.com/connection/websocket",
+    "wsChannels": ["public:obtained-skins"],
+    "game": "csgo",
+    "requestsPerSecond": 2,
+    "searchPagesPerScan": 2,
+    "namesPerSearchRequest": 10,
+    "allowLockedDays": 0,
+    "lockedExtraRoiPerDay": 0.004,
+    "balancePollSec": 60,
+    "purchasePollSec": 30
+  },
+
+  "steam": {
+    "walletCurrency": 5,
+    "walletCurrencyCode": "RUB",
+    "tradePollIntervalSec": 45,
+    "confirmationsCheckSec": 120,
+    "inventorySyncMin": 15,
+    "requestMinDelayMs": 3500,
+    "requestJitterMs": 3000,
+    "priceRequestMinDelayMs": 6000,
+    "maxRequestsPerHour": 400,
+    "maxPriceRequestsPerHour": 180,
+    "rateLimitBackoffMin": 10,
+    "rateLimitMaxBackoffMin": 180,
+    "maxConsecutiveRateLimits": 4,
+    "maxLoginsPerDay": 4,
+    "tradeProtectionDays": 7,
+    "tradeProtectionBufferMin": 30,
+    "fees": { "steam": 0.05, "game": 0.10 },
+    "activeHours": { "enabled": false, "from": 9, "to": 2 }
+  },
+
+  "fx": {
+    "usdToWallet": "auto",
+    "fallbackRate": 87,
+    "referenceItem": "Revolution Case",
+    "refreshHours": 6,
+    "maxChangePct": 0.08
+  },
+
+  "watchlist": {
+    "mode": "list",
+    "items": [
+      { "name": "AK-47 | Redline (Field-Tested)" },
+      { "name": "AWP | Asiimov (Field-Tested)", "maxHeld": 2 },
+      { "name": "Revolution Case", "maxHeld": 20, "maxPerDay": 10 }
+    ],
+    "auto": {
+      "minPriceUsd": 1,
+      "maxPriceUsd": 40,
+      "minListingsOnLis": 5,
+      "maxItems": 150,
+      "pages": 10,
+      "refreshHours": 12
+    },
+    "excludePatterns": ["Doppler", "Souvenir Package", "Graffiti", "Sealed", "Name Tag", "Music Kit"]
+  },
+
+  "strategy": {
+    "valuationTtlHours": 6,
+    "historyDays": 14,
+    "valuationQuantile": 0.3,
+    "minDailyVolume": 15,
+    "maxTrendDropPct": 0.08,
+    "maxVolatility": 0.25,
+    "volatilityHaircut": 0.5,
+
+    "minRoi": 0.08,
+    "roiPerHoldDay": 0.003,
+    "expectedSellDays": 2,
+
+    "bottomTolerancePct": 0.02,
+    "floorBaselineHours": 24,
+    "maxFloorRisePct": 0.05,
+    "minFloorSamples": 3,
+    "maxBookSharePerScan": 0.5,
+    "suspiciousCheapPct": 0.45,
+
+    "maxPerItemPerDay": 3,
+    "maxHeldPerItem": 5,
+    "maxShareOfDailyVolume": 0.08,
+    "maxItemCapitalShare": 0.12,
+    "maxItemPriceUsd": 60,
+    "minItemPriceUsd": 0.3,
+    "balanceReservePct": 0.1,
+    "maxSpendPerHourUsd": 60,
+    "maxSpendPerDayUsd": 300,
+    "maxOpenExposureUsd": 1500,
+
+    "scanIntervalSec": 180,
+    "rtbaEnabled": true,
+    "rtbaMaxValuationAgeHours": 8,
+    "rtbaCooldownSec": 3
+  },
+
+  "sell": {
+    "enabled": true,
+    "undercutCents": 1,
+    "minMarginOverCost": 0.02,
+    "useBuyOrderIfWithinPct": 0.03,
+    "maxListingsPerHour": 20,
+    "maxListingsPerDay": 120,
+    "repriceAfterHours": 20,
+    "repriceStepPct": 0.015,
+    "maxRelists": 5,
+    "maxHoldDaysAlert": 21,
+    "minListingGapSec": 25
+  },
+
+  "risk": {
+    "maxConsecutiveErrors": 6,
+    "maxDailyLossUsd": 40,
+    "unknownSpendThresholdUsd": 0.5,
+    "unknownSpendIsCritical": true,
+    "topUpThresholdUsd": 0.5,
+    "lowBalanceUsd": 10,
+    "maxFailedPurchasesInRow": 4,
+    "maxPurchasePendingHours": 14,
+    "maxTradeOfferAgeMin": 60,
+    "maxValuationStalenessHours": 24,
+    "strictConfirmations": true,
+    "fxSanity": { "min": 50, "max": 200 }
+  },
+
+  "telegram": {
+    "enabled": true,
+    "dailyReportHour": 23,
+    "dedupeMinutes": 15,
+    "commands": true
+  },
+
+  "dashboard": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8787
+  }
+}

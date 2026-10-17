@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block title %}Заказы{% endblock %}
+{% block body %}<h1>Заказы</h1>
+<form class="card row" method="get"><input name="q" value="{{q}}" placeholder="ID заказа, ник, SteamID">
+<select name="status"><option value="">все статусы</option>{% for s in statuses %}<option value="{{s}}" {% if s==st %}selected{% endif %}>{{s|st}}</option>{% endfor %}</select>
+<button>Найти</button></form>
+<div class="card tw"><table>
+<tr><th>Заказ</th><th>Покупатель</th><th>Ключей</th><th>Сумма</th><th>Статус</th><th>FunPay</th><th>Риск</th><th>Оплачен</th><th>Выдан</th></tr>
+{% for o in rows %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{{o.keys_qty}}</td>
+<td>{{o.price}} {{o.currency}}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{{o.fp_status}}</td>
+<td>{{o.risk_score or 0}}</td><td>{{o.paid_at|ts}}</td><td>{{o.delivered_at|ts}}</td></tr>
+{% else %}<tr><td colspan="9" class="muted">Ничего не найдено</td></tr>{% endfor %}</table></div>{% endblock %}

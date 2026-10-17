@@ -1,0 +1,9 @@
+build/
+dist/
+data/
+tests/
+*.zip
+__pycache__/
+.pytest_cache/
+config.yaml
+mannbot-data/

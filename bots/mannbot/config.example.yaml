@@ -1,0 +1,130 @@
+# ============================================================================
+#  MannBot — автопродажа Mann Co. Supply Crate Key на FunPay через Steam-трейды
+#  Скопируйте файл в config.yaml и заполните. Секреты можно передавать через
+#  переменные окружения: ${ИМЯ_ПЕРЕМЕННОЙ} подставляется при загрузке.
+# ============================================================================
+
+general:
+  # dry_run: бот всё читает и пишет в БД, но НЕ отправляет сообщения/трейды/
+  # не меняет лоты. Обязательно прогоните так первые часы.
+  dry_run: true
+  # demo: полностью офлайн-режим с эмуляцией FunPay и Steam (для проверки)
+  demo: false
+  language: ru            # ru | en — язык шаблонов сообщений покупателю
+  database: data/mannbot.sqlite3
+  log_file: data/mannbot.log
+  log_level: INFO
+
+funpay:
+  golden_key: ${FUNPAY_GOLDEN_KEY}   # cookie golden_key из браузера
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+  poll_interval: 6        # сек между запросами к runner (не ставьте < 4)
+  # Лоты, которые продают ключи. offer_id — id вашего лота (из ссылки
+  # funpay.com/lots/offer?id=XXXX), node_id — id подкатегории (funpay.com/lots/NNN/)
+  lots:
+    - offer_id: 0
+      node_id: 1808        # Team Fortress 2 → Предметы (funpay.com/lots/1808/)
+      game_id: 435         # id игры TF2 на FunPay (нужен для поднятия лотов)
+      keys_per_unit: 1     # сколько ключей в 1 единице лота
+  # Распознавание заказов «наших» лотов по описанию заказа
+  order_match_regex: "(?i)(mann\\s*co|ключ|key)"
+  auto_raise: true
+  raise_interval_minutes: 240
+  stock_sync: true          # синхронизировать «Наличие» лота с инвентарём
+  max_display_amount: 500   # максимум показываемого наличия
+  deactivate_when_empty: true
+
+steam:
+  # Способ 1 (рекомендуется): логин + maFile (shared_secret/identity_secret)
+  username: ${STEAM_USERNAME}
+  password: ${STEAM_PASSWORD}
+  shared_secret: ${STEAM_SHARED_SECRET}
+  identity_secret: ${STEAM_IDENTITY_SECRET}
+  steam_id: ${STEAM_ID64}
+  # Способ 2: готовая cookie steamLoginSecure из браузера (веб-режим).
+  # Если задано — используется вместо логина паролем.
+  login_secure_cookie: ""
+  api_key: ""                     # необязательно; иначе используется access_token
+  key_market_hash_name: "Mann Co. Supply Crate Key"
+  appid: 440
+  contextid: "2"
+  offer_message: "FunPay заказ #{order_id} · {qty} key(s) · спасибо за покупку!"
+  offer_ttl_hours: 12            # через сколько отменять непринятый трейд
+  min_seconds_between_offers: 8
+  max_keys_per_offer: 100
+  confirm_poll_seconds: 5
+
+deal:
+  max_link_attempts: 3           # сколько раз можно прислать неверные данные
+  reminder_after_minutes: 15     # напомнить про ссылку на обмен
+  admin_alert_after_minutes: 120 # позвать админа, если покупатель молчит
+  max_resends: 2                 # повторных отправок трейда после отказа/истечения
+  # Политика при задержке обмена (trade hold) у покупателя:
+  #   warn_and_send — предупредить и отправить; require_fix — попросить
+  #   включить мобильный Steam Guard; manual — спросить админа
+  trade_hold_policy: require_fix
+  cancel_offer_on_refund: true
+  auto_refund_out_of_stock: false   # авто-возврат, если нет ключей (иначе — админ)
+  message_rate_limit_seconds: 2     # пауза между сообщениями в один чат
+
+risk:
+  enabled: true
+  manual_review_score: 60   # >= — требуется /approve админа
+  block_score: 90           # >= — заказ не выполняется автоматически
+  large_order_keys: 20
+  max_orders_per_buyer_per_day: 5
+  blacklist_funpay_users: []
+  blacklist_steam_ids: []
+
+security:
+  # Исходящий трейд, созданный не ботом, — признак взлома. true = сразу отменять
+  # (выключите, если сами вручную торгуете с этого аккаунта).
+  cancel_foreign_offers: false
+  decline_incoming_requests: true   # отклонять входящие трейды, которые просят наши предметы
+  inventory_drop_alert: true        # CRITICAL, если ключи пропали не через трейды бота
+
+# RTBA — Real-Time Bid Adjustment: автоматическое управление ценой лота
+rtba:
+  enabled: false
+  interval_seconds: 300
+  strategy: top1            # top1 | topN | median
+  target_position: 1        # для topN
+  undercut_abs: 0.5         # насколько дешевле конкурента (в валюте FunPay)
+  undercut_pct: 0.0
+  cost_per_key: 140.0       # себестоимость ключа (для пола цены)
+  min_margin_pct: 5.0       # минимальная маржа над себестоимостью
+  floor_price: 0            # жёсткий минимум (0 = только по марже)
+  ceiling_price: 300        # жёсткий максимум
+  funpay_fee_pct: 0.0       # комиссия, если вычитается из вашей цены
+  min_change: 0.3           # не менять цену меньше чем на это значение
+  max_updates_per_hour: 6
+  ignore_competitors:       # ники, которые не учитывать
+    - ""
+  competitor_min_amount: 2  # игнорировать лоты с наличием меньше
+  competitor_only_online: false
+  outlier_iqr_factor: 1.5   # отсекать демпинг-выбросы (0 = выкл.)
+  lot_filter_regex: "(?i)(mann\\s*co.*key|ключ.*манн|ключ.*mann)"
+  scarcity_stock_threshold: 5    # при остатке ниже — наценка
+  scarcity_premium_pct: 5.0
+  raise_gap_pct: 3.0        # если мы дешевле следующего на > X% — подтягиваемся вверх
+
+notifications:
+  telegram:
+    enabled: false
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    admin_chat_ids: []        # числовые chat_id админов
+    commands: true            # управление ботом командами /status, /approve ...
+  min_level: INFO             # INFO | WARNING | CRITICAL
+  throttle_seconds: 300       # одинаковые алерты не чаще чем раз в N секунд
+  daily_report_hour: 10
+
+dashboard:
+  enabled: true
+  host: 127.0.0.1
+  port: 8080
+  token: ${DASHBOARD_TOKEN}   # обязательный токен для входа в панель
+
+sla:
+  link_wait_minutes: 120
+  offer_accept_hours: 12
+  order_total_hours: 24
