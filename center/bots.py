@@ -74,6 +74,10 @@ class BotWorker(Worker):
     async def control(self, action: str) -> str:
         raise NotImplementedError
 
+    async def ack_alert(self, alert_id: int | None) -> bool:
+        """Подтвердить тревогу в самом боте (alert_id=None — все). Базы ботов центр не меняет."""
+        raise NotImplementedError
+
     actions: dict[str, str] = {}
 
     def info(self) -> dict:
@@ -176,6 +180,17 @@ class MannBotWorker(BotWorker):
             con.close()
         return [{"source": self.name, "id": r["id"], "ts": float(r["ts"] or 0), "level": str(r["level"] or "").lower(),
                  "code": r["code"], "message": r["text"], "acked": bool(r["acknowledged"])} for r in rows]
+
+    async def ack_alert(self, alert_id: int | None) -> bool:
+        body = {"all": True} if alert_id is None else {"id": int(alert_id)}
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
+            async with s.post(f"{self.base_url}/api/alerts/ack", json=body, allow_redirects=False) as r:
+                if r.status == 200:
+                    return True
+            if r.status == 404 and alert_id is None:      # старая версия MannBot: только форма «все прочитаны»
+                async with s.post(f"{self.base_url}/alerts/ack", allow_redirects=False) as r2:
+                    return r2.status in (200, 302)
+        return False
 
 
 # ====================================================================== LisBot
@@ -360,6 +375,12 @@ class LisBotWorker(BotWorker):
             con.close()
         return [{"source": self.name, "id": r["id"], "ts": (r["ts"] or 0) / 1000, "level": str(r["level"] or "").lower(),
                  "code": r["code"], "message": r["message"], "acked": bool(r["acked"])} for r in rows]
+
+    async def ack_alert(self, alert_id: int | None) -> bool:
+        body = {"all": True} if alert_id is None else {"id": int(alert_id)}
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=self._headers()) as s:
+            async with s.post(f"{self.base_url}/api/alerts/ack", json=body) as r:
+                return r.status == 200 and bool((await r.json(content_type=None)).get("ok"))
 
     async def install_deps(self) -> str:
         npm = shutil.which("npm")

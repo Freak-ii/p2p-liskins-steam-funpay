@@ -69,3 +69,20 @@ input { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-rad
 #anPnl { overflow-x: auto; }
 .grid > * { min-width: 0; }
 @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+
+/* мониторинг (static/monitor.js) */
+:root { --series-1: #2a78d6; }
+@media (prefers-color-scheme: dark) { :root { --series-1: #3987e5; } }
+.btn.small { padding: 2px 8px; font-size: 12px; }
+.lv-ok { color: var(--ok); }
+.mon-kpi { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
+.mon-strip { width: 100%; height: 12px; display: block; margin-top: 4px; cursor: crosshair; }
+.mon-line { width: 100%; height: 90px; display: block; cursor: crosshair; }
+.mon-path { fill: none; stroke: var(--series-1); stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.mon-dot { fill: var(--series-1); stroke: var(--card); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.mon-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.mon-cross { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-dasharray: 3 3; }
+.mon-max { float: right; }
+.mon-tip { position: fixed; display: none; pointer-events: none; z-index: 10; background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0, 0, 0, .15); }
+.mon-report { white-space: pre-wrap; font: 13px/1.5 system-ui, sans-serif; background: var(--bg); padding: 10px; border-radius: 8px; max-height: 60vh; overflow: auto; }
+details summary { cursor: pointer; font-weight: 500; }

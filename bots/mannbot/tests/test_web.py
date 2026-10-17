@@ -98,3 +98,21 @@ def test_parse_mafile_errors():
         raise AssertionError
     except ValueError:
         pass
+
+
+def test_api_alerts_ack(tmp_path):
+    sup = Supervisor(tmp_path)
+    a1, a2 = sup.db.add_alert("CRITICAL", "x", "one"), sup.db.add_alert("WARN", "y", "two")
+
+    async def go():
+        client = await _client(sup)
+        try:
+            r = await client.post("/api/alerts/ack", json={"id": a1})
+            assert r.status == 200 and (await r.json())["ok"]
+            acked = {r["id"]: r["acknowledged"] for r in sup.db.q("SELECT id, acknowledged FROM alerts")}
+            assert acked[a1] == 1 and acked[a2] == 0
+            await client.post("/api/alerts/ack", json={"all": True})
+            assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE acknowledged=0") == 0
+        finally:
+            await client.close()
+    asyncio.run(go())
