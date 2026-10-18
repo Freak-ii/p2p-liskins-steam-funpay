@@ -110,3 +110,25 @@ def test_goal_command(tmp_path):
         assert "не задан ключ API LIS-SKINS" in calls[-1][1]["text"]
         c.events.close()
     asyncio.run(go())
+
+
+def test_errors_command_and_daily_report(tmp_path):
+    import time
+
+    async def go():
+        c, calls = _center(tmp_path)
+        c._updates = [_msg(1, "/errors")]
+        await c.tg.poll_once()
+        assert "Steam</b>: ошибок нет" in calls[-1][1]["text"]
+        w = c.workers["mannbot"]
+        for i in range(3):
+            w.seq += 1
+            w.lines.append({"n": w.seq, "ts": time.time() - 60, "stream": "stderr",
+                            "text": f"2026-10-18 10:00:0{i} ERROR   funpay   <timeout> order {i}"})
+        c._updates = [_msg(2, "/errors")]
+        await c.tg.poll_once()
+        text = calls[-1][1]["text"]
+        assert "FunPay</b>: 3 ошибок" in text and "3× " in text and "&lt;timeout&gt;" in text
+        assert "Ошибок в выводе: 3" in c.monitor.daily_report()
+        c.events.close()
+    asyncio.run(go())

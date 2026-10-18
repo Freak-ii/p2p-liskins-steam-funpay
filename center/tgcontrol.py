@@ -27,6 +27,7 @@ HELP = ("<b>Центр перепродажи</b>\n"
         "/report — отчёт за сутки, /week — за неделю, /month — итоги прошлого месяца\n"
         "/stock — склад LisBot и ключи MannBot, /goal — цель месяца\n"
         "/ready — готовность к боевому режиму, /orders — застрявшие заказы MannBot\n"
+        "/errors — частые ошибки в выводе ботов за 24 ч\n"
         "/proposals — предложения координатора с кнопками\n"
         "/pause lisbot|mannbot — пауза торговли, /resume — продолжить\n"
         "/buypause, /buyresume — закупки LisBot\n"
@@ -119,6 +120,16 @@ class TelegramControl:
             return [("<b>Заказы MannBot без выдачи</b>\n" + "\n".join(
                 f"• {html.escape(str(r['order_id']))} — {html.escape(r['buyer'] or '?')}, {r['status_text']}, {r['hours']:.0f} ч"
                 for r in rows[:20]), None)]
+        if cmd == "/errors":
+            out = []
+            for name, e in c.monitor.errors(24).items():
+                title = html.escape(c.workers[name].title)
+                if not e["n"]:
+                    out.append(f"<b>{title}</b>: ошибок нет")
+                    continue
+                out.append(f"<b>{title}</b>: {e['n']} ошибок")
+                out += [f"• {t['n']}× {html.escape(t['text'][:200])}" for t in e["top"]]
+            return [("\n".join(out) or "Боты не запущены", None)]
         if cmd == "/ready":
             return [("\n".join(html.escape(x) for x in c.readiness.lines()), None)]
         if cmd == "/month":

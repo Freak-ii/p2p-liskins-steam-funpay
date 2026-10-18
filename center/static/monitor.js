@@ -138,7 +138,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <label>Токен Telegram-бота <span class="muted small" id="monTokHint"></span></label><input name="telegram_token" autocomplete="off">
   <label>Chat id (можно несколько через запятую)</label><input name="telegram_chat_id" autocomplete="off">
   <label><input type="checkbox" name="telegram_commands" style="width:auto"> Команды и кнопки одобрения в Telegram <span class="muted small" id="monCmdHint"></span></label>
-  <p class="muted small" style="margin:2px 0 0">Работают со своим Telegram-ботом центра (не тем, что у LisBot) и только из указанных chat id: /status, /report, /stock, /proposals, /pause, /resume, /buypause, /buyresume, /backup, /goal, /ready, /orders, /month.</p>
+  <p class="muted small" style="margin:2px 0 0">Работают со своим Telegram-ботом центра (не тем, что у LisBot) и только из указанных chat id: /status, /report, /stock, /proposals, /pause, /resume, /buypause, /buyresume, /backup, /goal, /ready, /orders, /errors, /month.</p>
   <label>Не повторять одинаковое уведомление чаще, чем раз в N минут</label><input name="dedup_minutes" type="number" min="0">
   <label>Тихие часы, например 23:00-08:00 (пусто — без тихих часов)</label><input name="quiet_hours" placeholder="23:00-08:00">
   <label><input type="checkbox" name="quiet_allow_critical" style="width:auto"> Критичное приходит и в тихие часы</label>

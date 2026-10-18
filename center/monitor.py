@@ -645,6 +645,7 @@ class Monitor:
         now = self.clock()
         since = now - 86400
         h = self.history(24)
+        errors = self.errors(24)
         lines = [f"<b>📊 Отчёт центра за сутки</b> · {time.strftime('%d.%m.%Y %H:%M', time.localtime(now))}"]
         for name, w in self.center.workers.items():
             b = h["bots"][name]
@@ -658,6 +659,9 @@ class Monitor:
             lines.append(f"Аптайм {_pct(b['uptime'])} · перезапусков {b['restarts']} · падений {b['crashes']}"
                          + (f" · не отвечал {b['unresponsive']}" if b["unresponsive"] else "")
                          + (f" · ответ {b['latency_avg']:.0f} мс" if b["latency_avg"] is not None else ""))
+            errs = errors.get(name) or {}
+            if errs.get("n"):
+                lines.append(f"Ошибок в выводе: {errs['n']}, чаще всего: «{html.escape(errs['top'][0]['text'][:120])}» (/errors)")
             if alerts:
                 lines.append("Тревог: " + ", ".join(f"{k} {v}" for k, v in sorted(by_level.items()))
                              + (f" (не подтверждено {open_n})" if open_n else ""))
