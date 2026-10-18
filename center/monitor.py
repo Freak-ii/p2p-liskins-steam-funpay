@@ -30,7 +30,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-from center.analytics import item_type
+from center.analytics import HOLD_BUCKETS, item_type
 from center.workers import BACKOFF, CRASHED, DISABLED, RUNNING, STATE_TEXT
 
 log = logging.getLogger("center.monitor")
@@ -802,6 +802,15 @@ class Monitor:
             if len(types) > 1:
                 tr = sorted(((sum(v), len(v), k) for k, v in types.items()), reverse=True)
                 lines.append("По типам: " + " · ".join(f"{k} {'+' if p >= 0 else '−'}${abs(p):.2f} ({n} шт)" for p, n, k in tr))
+            holds = []
+            for lo, hi, label in HOLD_BUCKETS:
+                ds = [d for d in cur if d["bot"] == "lisbot" and d["profit"] is not None and d.get("hold_days") is not None
+                      and d["hold_days"] >= lo and (hi is None or d["hold_days"] < hi)]
+                if ds:
+                    p = sum(d["profit"] for d in ds)
+                    holds.append(f"{label} {'+' if p >= 0 else '−'}${abs(p):.2f} ({len(ds)} шт)")
+            if len(holds) > 1:
+                lines.append("По сроку удержания: " + " · ".join(holds))
         target = float((self.center.cfg.data.get("analytics") or {}).get("month_goal_rub") or 0)
         if month:
             if target:
