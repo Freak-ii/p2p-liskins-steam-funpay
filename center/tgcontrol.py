@@ -26,6 +26,7 @@ HELP = ("<b>Центр перепродажи</b>\n"
         "/status — состояние ботов и тревоги\n"
         "/report — отчёт за сутки, /week — за неделю\n"
         "/stock — склад LisBot и ключи MannBot, /goal — цель месяца\n"
+        "/ready — готовность к боевому режиму\n"
         "/proposals — предложения координатора с кнопками\n"
         "/pause lisbot|mannbot — пауза торговли, /resume — продолжить\n"
         "/buypause, /buyresume — закупки LisBot\n"
@@ -111,6 +112,8 @@ class TelegramControl:
                          "Цель задаётся в панели: «Аналитика» → «Цель месяца».".replace(",", " "), None)]
             return [((f"🎯 {g['profit']:,.0f} из {g['goal']:,.0f} ₽ ({g['progress']}%), прогноз {g['forecast']:,.0f} ₽"
                       + (f", нужно {g['need_per_day']:,.0f} ₽ в день" if g["need_per_day"] else "")).replace(",", " "), None)]
+        if cmd == "/ready":
+            return [("\n".join(html.escape(x) for x in c.readiness.lines()), None)]
         if cmd == "/week":
             return [(await c.monitor.weekly_report(), None)]
         if cmd == "/stock":

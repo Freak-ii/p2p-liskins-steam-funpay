@@ -134,3 +134,5 @@ select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; ba
 .goalbar { position: relative; height: 10px; border-radius: 5px; background: var(--bg); margin-top: 8px; overflow: visible; }
 .goalbar div { height: 100%; border-radius: 5px; background: var(--ok); }
 .goalbar span { position: absolute; top: -3px; width: 2px; height: 16px; background: var(--muted); }
+.readiness { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
+.readiness li { line-height: 1.35; }

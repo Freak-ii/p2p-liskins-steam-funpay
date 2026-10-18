@@ -12,6 +12,7 @@ from pathlib import Path
 from center.analytics import Analytics
 from center.backup import Backup
 from center.inventory import Inventory
+from center.readiness import Readiness
 from center.tgcontrol import TelegramControl
 from center.bots import BotWorker, LisBotWorker, MannBotWorker
 from center.config import CenterConfig
@@ -56,6 +57,7 @@ class Center:
         self.coordinator = Coordinator(self)
         self.backup = Backup(self)
         self.inventory = Inventory(self)
+        self.readiness = Readiness(self)
         self.tg = TelegramControl(self)
 
     def enabled(self, name: str) -> bool:

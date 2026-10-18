@@ -105,5 +105,8 @@ def test_goal_command(tmp_path):
         c._updates = [_msg(2, "/goal")]
         await c.tg.poll_once()
         assert "из 50 000 ₽" in calls[-1][1]["text"]
+        c._updates = [_msg(3, "/ready")]
+        await c.tg.poll_once()
+        assert "не задан ключ API LIS-SKINS" in calls[-1][1]["text"]
         c.events.close()
     asyncio.run(go())
