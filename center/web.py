@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import time
 from pathlib import Path
 
 from aiohttp import web
@@ -147,6 +148,37 @@ def make_app(center: Center) -> web.Application:
         if need_restart:
             msg += ". " + await w.restart("новые настройки")
         return web.json_response({"ok": True, "message": msg, "problems": res.get("problems", [])})
+    def days_q(request: web.Request, default: float | None = 30) -> float | None:
+        v = request.query.get("days", "")
+        if v in ("all", "0"):
+            return None
+        try:
+            return max(1.0, min(float(v), 3650.0)) if v else default
+        except ValueError:
+            return default
+
+    async def an_pnl(request: web.Request):
+        return web.json_response(await center.analytics.pnl(days_q(request)))
+
+    async def an_daily(request: web.Request):
+        cur = "USD" if request.query.get("currency", "").upper() == "USD" else "RUB"
+        return web.json_response(await center.analytics.daily(int(days_q(request) or 90), cur))
+
+    async def an_bot(request: web.Request):
+        a = center.analytics
+        if request.match_info["name"] == "lisbot":
+            return web.json_response(a.lisbot_details(days_q(request, None)))
+        return web.json_response(a.mannbot_details(days_q(request)))
+
+    async def an_export(request: web.Request):
+        a = center.analytics
+        rows = await a.export_rows(days_q(request, None))
+        fmt = request.match_info["fmt"]
+        body, ctype = (a.to_xlsx(rows), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") \
+            if fmt == "xlsx" else (a.to_csv(rows), "text/csv; charset=utf-8")
+        name = f"center-deals-{time.strftime('%Y%m%d')}.{fmt}"
+        return web.Response(body=body, content_type=ctype.split(";")[0], charset="utf-8" if fmt == "csv" else None,
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     async def quit_center(request: web.Request):
         asyncio.get_running_loop().call_later(0.5, center.quit_event.set)
@@ -161,6 +193,9 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/lisbot/secrets", lis_secrets), web.post("/api/lisbot/secrets", lis_secrets),
         web.get("/api/mannbot/settings", mann_settings), web.post("/api/mannbot/settings", mann_settings),
         web.post("/api/quit", quit_center),
+        web.get("/api/analytics/pnl", an_pnl), web.get("/api/analytics/daily", an_daily),
+        web.get("/api/analytics/bot/{name:lisbot|mannbot}", an_bot),
+        web.get("/api/analytics/export.{fmt:csv|xlsx}", an_export),
     ])
     app.router.add_static("/static/", STATIC)
     return app
