@@ -690,10 +690,41 @@ class Engine:
                                            "смените пароль, отзовите API-ключ и завершите все сессии!",
                                            throttle_key=f"foreign:{oid}")
         for off in received:
-            if off.get("items_to_give") and sec.decline_incoming_requests:
-                await self._safe_steam(self.steam.decline_offer(str(off.get("tradeofferid"))))
-                self.db.metric("declined_incoming", 1)
+            if off.get("items_to_give"):
+                if sec.decline_incoming_requests:
+                    await self._safe_steam(self.steam.decline_offer(str(off.get("tradeofferid"))))
+                    self.db.metric("declined_incoming", 1)
+            else:
+                await self._accept_bridge_gift(off)
         self.last_ok["security"] = time.time()
+
+    async def _accept_bridge_gift(self, off: dict) -> None:
+        """Мост ключей: принимаем обмен от аккаунта LisBot (security.accept_gifts_from), только если от нас
+        ничего не просят и внутри одни ключи Mann Co. Остальные входящие обмены не трогаем."""
+        allowed = {str(x).strip() for x in (self.cfg.security.get("accept_gifts_from") or []) if str(x).strip()}
+        oid = str(off.get("tradeofferid"))
+        partner = str(int(off.get("accountid_other") or 0) + 76561197960265728)
+        items = off.get("items_to_receive") or []
+        if not allowed or partner not in allowed or not items or off.get("items_to_give") \
+                or self.db.kv_get(f"gift_done:{oid}"):
+            return
+        st = self.cfg.steam
+        names = await self._safe_steam(self.steam.get_offer_item_names(oid))
+        if names is None:
+            return
+        if (len(names) != len(items) or any(int(i.get("appid") or 0) != int(st.appid) for i in items)
+                or any(n != st.key_market_hash_name for n in names)):
+            self.db.kv_set(f"gift_done:{oid}", "skipped")
+            await self.notifier.notify("WARNING", "bridge_gift_foreign",
+                                       f"Обмен {oid} от аккаунта LisBot содержит не только ключи, не принимаю. "
+                                       "Решите вручную.", throttle_key=f"gift:{oid}")
+            return
+        if not await self._safe_steam(self.steam.accept_offer(oid, partner)):
+            return
+        self.db.kv_set(f"gift_done:{oid}", "accepted")
+        self.db.metric("bridge_keys_in", len(items))
+        await self.notifier.notify("INFO", "bridge_gift", f"🔑 Мост ключей: принято {len(items)} ключ(ей) "
+                                   f"от аккаунта LisBot (обмен {oid})")
 
     async def steam_auth_problem(self, e: Exception) -> None:
         await self.notifier.notify("CRITICAL", "steam_auth", f"Steam-сессия недействительна: {e}. Пробую перелогин.",

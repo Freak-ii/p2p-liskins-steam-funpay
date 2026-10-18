@@ -124,6 +124,7 @@ class FakeSteam:
         self.steam_id = "76561198000000001"
         self.inventory = [str(9000 + i) for i in range(keys)]
         self.offers: dict[str, dict] = {}
+        self.incoming: dict[str, dict] = {}   # входящие трейды: id → {from, names, give}
         self.behaviour: dict[str, str] = {}   # steam_id64 → accept|decline|escrow|ignore
         self.escrow: dict[str, int] = {}
         self.banned: set[str] = set()
@@ -183,7 +184,10 @@ class FakeSteam:
                 "trade_offer_state": int(off["state"])}
 
     async def get_active_offers(self):
-        return [{"tradeofferid": k} for k, v in self.offers.items() if v["state"] == T.ACTIVE], []
+        received = [{"tradeofferid": k, "accountid_other": int(v["from"]) - 76561197960265728,
+                     "items_to_give": [{"appid": 440}] * v.get("give", 0),
+                     "items_to_receive": [{"appid": 440} for _ in v["names"]]} for k, v in self.incoming.items()]
+        return [{"tradeofferid": k} for k, v in self.offers.items() if v["state"] == T.ACTIVE], received
 
     async def cancel_offer(self, offer_id):
         if offer_id in self.offers:
@@ -191,6 +195,17 @@ class FakeSteam:
         return True
 
     async def decline_offer(self, offer_id):
+        self.incoming.pop(offer_id, None)
+        return True
+
+    async def get_offer_item_names(self, offer_id):
+        return list(self.incoming.get(offer_id, {}).get("names", []))
+
+    async def accept_offer(self, offer_id, partner_steam_id):
+        off = self.incoming.pop(offer_id, None)
+        if not off:
+            return False
+        self.inventory += [str(19000 + len(self.inventory) + i) for i in range(len(off["names"]))]
         return True
 
     async def close(self):

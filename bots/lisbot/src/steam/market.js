@@ -24,10 +24,10 @@ export class SteamMarket {
       .filter((x) => Number.isFinite(x.ts) && Number.isFinite(x.price));
   }
 
-  async itemNameId(name) {
+  async itemNameId(name, appid = 730) {
     const cached = this.db.nameid(name);
     if (cached) return cached;
-    const html = await this.session.request({ url: `${BASE}/listings/730/${enc(name)}`, json: false, kind: 'price' });
+    const html = await this.session.request({ url: `${BASE}/listings/${appid}/${enc(name)}`, json: false, kind: 'price' });
     const m = /Market_LoadOrderSpread\(\s*(\d+)\s*\)/.exec(String(html));
     if (!m) throw new Error(`item_nameid не найден для "${name}"`);
     this.db.saveNameid(name, m[1]);
@@ -35,8 +35,8 @@ export class SteamMarket {
   }
 
   /** Стакан: лучший ордер на покупку и минимальный лот (в валюте кошелька, не в центах). */
-  async orderBook(name) {
-    const nameid = await this.itemNameId(name);
+  async orderBook(name, appid = 730) {
+    const nameid = await this.itemNameId(name, appid);
     const c = this.cfg.steam.walletCurrency;
     const body = await this.session.request({ url: `${BASE}/itemordershistogram?country=RU&language=english&currency=${c}&item_nameid=${nameid}&two_factor=0`, kind: 'price' });
     if (!body || body.success !== 1) throw new Error(`itemordershistogram: ошибка для "${name}"`);
@@ -80,6 +80,24 @@ export class SteamMarket {
       if (start + 100 >= Number(body.total_count || 0)) break;
     }
     return out;
+  }
+
+  /** Ордер на покупку (мост ключей). priceCents — цена за штуку в центах валюты кошелька. */
+  async createBuyOrder({ appid, name, priceCents, quantity, confirmation = '0' }) {
+    const body = await this.session.request({
+      method: 'POST', url: `${BASE}/createbuyorder/`, priority: 4,
+      headers: { Referer: `${BASE}/listings/${appid}/${enc(name)}` },
+      form: { sessionid: this.session.sessionId(), currency: this.cfg.steam.walletCurrency, appid, market_hash_name: name, price_total: priceCents * quantity, quantity, billing_state: '', save_my_address: 0, confirmation },
+    }).catch((e) => ({ success: 0, message: e.body?.message || e.message }));
+    return body || { success: 0, message: 'пустой ответ' };
+  }
+
+  async buyOrderStatus(buyOrderId) {
+    return this.session.request({ url: `${BASE}/getbuyorderstatus/?sessionid=${enc(this.session.sessionId())}&buy_orderid=${enc(buyOrderId)}`, priority: 3 });
+  }
+
+  async cancelBuyOrder(buyOrderId) {
+    return this.session.request({ method: 'POST', url: `${BASE}/cancelbuyorder/`, form: { sessionid: this.session.sessionId(), buy_orderid: String(buyOrderId) }, priority: 4 });
   }
 
   async removeListing(listingId) {

@@ -49,7 +49,8 @@ DEFAULTS: dict[str, Any] = {
         "lot_filter_regex": r"(?i)(mann\s*co.*key|ключ)", "scarcity_stock_threshold": 5,
         "scarcity_premium_pct": 5.0, "raise_gap_pct": 3.0,
     },
-    "security": {"cancel_foreign_offers": False, "decline_incoming_requests": True, "inventory_drop_alert": True},
+    "security": {"cancel_foreign_offers": False, "decline_incoming_requests": True, "inventory_drop_alert": True,
+                 "accept_gifts_from": []},
     "notifications": {
         "telegram": {"enabled": False, "bot_token": "", "admin_chat_ids": [], "commands": True},
         "min_level": "INFO", "throttle_seconds": 300, "daily_report_hour": 10,

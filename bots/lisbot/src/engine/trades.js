@@ -12,8 +12,9 @@ const AWAITING = ['bought', 'trade_sent', 'locked_on_lis'];
  *   - включено правило risk.acceptFreeOffers (по умолчанию да): LIS показывает только номер заказа,
  *     а не продавца, поэтому принимаем «бесплатный» оффер от любого отправителя; совпавшие с покупками
  *     предметы учитываем в CRM, остальные просто попадают в инвентарь.
- * Офферы с запросом наших предметов отклоняются всегда. Любой исходящий оффер (мы их не создаём) =
- * признак компрометации (API-key scam) -> критическая остановка и отмена оффера.
+ * Офферы с запросом наших предметов отклоняются всегда. Любой исходящий оффер, кроме офферов моста
+ * ключей (их создаёт сам бот, см. keyBridge.js), = признак компрометации (API-key scam) -> критическая
+ * остановка и отмена оффера.
  */
 export class TradeHandler {
   constructor({ cfg, db, session, guard, notify, log }) {
@@ -140,6 +141,8 @@ export class TradeHandler {
   }
 
   async onUnknownOutgoing(offer, source) {
+    // свой оффер моста ключей (id записан при отправке, получатель и ключи совпадают) — не тревога
+    if (this.bridge?.isOwnOffer(offer)) { this.bridge.onOwnOfferChanged(offer); return; }
     if (offer.state !== EState.Active && offer.state !== EState.CreatedNeedsConfirmation) return;
     this.guard.critical('UNKNOWN_OUTGOING_TRADE', `Обнаружен исходящий обмен ${offer.id}, который бот не создавал (${source}): отдаём ${offer.itemsToGive.length} предм. пользователю ${offer.partner.getSteamID64()}. Возможна компрометация аккаунта/API-ключа! Пробую отменить. СРОЧНО смените пароль и отзовите Web API ключ.`);
     try { await new Promise((res, rej) => offer.cancel((err) => (err ? rej(err) : res()))); this.notify.send('warn', `Подозрительный исходящий оффер ${offer.id} отменён`); } catch (e) { this.log.error(`Не удалось отменить оффер ${offer.id}: ${errMsg(e)}`); }

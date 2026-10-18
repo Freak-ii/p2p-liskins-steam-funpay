@@ -131,6 +131,26 @@
     "fxSanity": { "min": 50, "max": 200 }
   },
 
+  "keyBridge": {
+    "enabled": false,
+    "tradeUrl": "",
+    "itemName": "Mann Co. Supply Crate Key",
+    "appid": 440,
+    "contextid": 2,
+    "minKeysToSend": 1,
+    "maxKeysPerOffer": 100,
+    "offerTtlHours": 24,
+    "checkIntervalMin": 30,
+    "buy": {
+      "enabled": false,
+      "maxKeyPrice": 0,
+      "keysPerDay": 20,
+      "maxOrderKeys": 50,
+      "walletReserve": 0,
+      "repriceHours": 24
+    }
+  },
+
   "telegram": {
     "enabled": true,
     "dailyReportHour": 23,

@@ -16,6 +16,7 @@ import { TradeHandler } from './engine/trades.js';
 import { ConfirmationWatcher } from './engine/confirmations.js';
 import { Seller } from './engine/seller.js';
 import { BalanceWatcher } from './engine/balanceWatcher.js';
+import { KeyBridge } from './engine/keyBridge.js';
 import { summary, textReport, perItem } from './analytics.js';
 import { startDashboard } from './web/server.js';
 import { startDemo } from './emu/demo.js';
@@ -82,7 +83,7 @@ export class Bot {
   runtimeStats() {
     return {
       steam: this.session?.stats, lis: this.lis.sched.stats, ws: this.ws ? { connected: this.ws.connected, ...this.ws.stats } : null,
-      buyer: this.buyer?.stats, fx: this.fx ? { rate: this.fx.rate, updatedAt: this.fx.updatedAt } : null,
+      buyer: this.buyer?.stats, keyBridge: this.bridge?.stats, fx: this.fx ? { rate: this.fx.rate, updatedAt: this.fx.updatedAt } : null,
       loops: Object.fromEntries([...this.loops].map(([k, v]) => [k, v])),
     };
   }
@@ -113,6 +114,8 @@ export class Bot {
     this.trades = new TradeHandler({ cfg, db, session: this.session, guard, notify: this.notify, log: log.child('trade') });
     this.conf = new ConfirmationWatcher({ session: this.session, db, guard, log: log.child('conf'), strict: cfg.risk.strictConfirmations });
     this.seller = new Seller({ cfg, db, session: this.session, market: this.market, conf: this.conf, valuator: this.valuator, fx: this.fx, guard, notify: this.notify, log: log.child('sell') });
+    this.bridge = new KeyBridge({ cfg, db, session: this.session, market: this.market, conf: this.conf, guard, notify: this.notify, log: log.child('keys') });
+    this.trades.bridge = this.bridge;
 
     await this.balanceWatcher.poll();
 
@@ -139,6 +142,7 @@ export class Bot {
     this.loop('audit-outgoing', 10 * 60_000, () => (steamReady() ? this.trades.auditOutgoing() : null), { initialDelayMs: 120_000 });
     this.loop('fx', cfg.fx.refreshHours * HOUR, () => (steamReady() ? this.fx.refresh() : null), { initialDelayMs: cfg.fx.refreshHours * HOUR });
     if (cfg.watchlist.mode === 'auto') this.loop('discover', cfg.watchlist.auto.refreshHours * HOUR, () => this.discoverWatchlist(), { initialDelayMs: 2_000 });
+    this.loop('key-bridge', (cfg.keyBridge?.checkIntervalMin || 30) * 60_000, () => (steamReady() && !this.emu ? this.bridge.cycle() : null), { initialDelayMs: 150_000 });
     this.loop('housekeeping', 15 * 60_000, () => this.housekeeping(), { initialDelayMs: 60_000 });
 
     if (st.rtbaEnabled) {
