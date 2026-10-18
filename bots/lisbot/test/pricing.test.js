@@ -76,7 +76,8 @@ test('оценка: ликвидный стабильный предмет пр�
 test('оценка: неликвид, падающий тренд и волатильность отсекаются', () => {
   assert.equal(computeValuation({ name: 'X', history: history({ perDay: 4 }), book: null, fx: 90, cfg, holdDays: 9 }).ok, false);
   assert.match(computeValuation({ name: 'X', history: history({ drift: -0.3 }), book: null, fx: 90, cfg, holdDays: 9 }).reason, /тренд/);
-  const wild = history({}).map((h, i) => ({ ...h, price: h.price * (Math.floor(i / 8) % 2 ? 1.6 : 0.6) }));
+  // через день цена ×1.6 / ×0.6 по календарным суткам, как их делит оценка (иначе тест зависел от времени запуска)
+  const wild = history({}).map((h) => ({ ...h, price: h.price * (Math.floor(h.ts / DAY) % 2 ? 1.6 : 0.6) }));
   assert.match(computeValuation({ name: 'X', history: wild, book: null, fx: 90, cfg, holdDays: 9 }).reason, /волатильность/);
 });
 

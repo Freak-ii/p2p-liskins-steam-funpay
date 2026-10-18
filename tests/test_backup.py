@@ -25,13 +25,13 @@ def _db(path, rows):
 def _home(tmp_path):
     home = tmp_path / "home"
     (home / "logs").mkdir(parents=True)
-    (home / "logs" / "center.log").write_text("журнал")
-    (home / "center.yaml").write_text("center: {port: 8800}\n")
-    (home / "secret.key").write_text("KEY")
+    (home / "logs" / "center.log").write_text("журнал", encoding="utf-8")
+    (home / "center.yaml").write_text("center: {port: 8800}\n", encoding="utf-8")
+    (home / "secret.key").write_text("KEY", encoding="utf-8")
     (home / "secrets.dat").write_bytes(b"encrypted")
     (home / "lisbot").mkdir()
-    (home / "lisbot" / "config.json").write_text("{}")
-    (home / "lisbot" / "last-port.txt").write_text("8802")
+    (home / "lisbot" / "config.json").write_text("{}", encoding="utf-8")
+    (home / "lisbot" / "last-port.txt").write_text("8802", encoding="utf-8")
     return home
 
 
@@ -66,12 +66,12 @@ def test_restore_replaces_db_and_keeps_previous(tmp_path):
     _db(home / "lisbot" / "data" / "bot.sqlite", ["a", "b"]).close()
     info = make_backup(home, home / "backups", now=time.time() - 60)
     con = _db(home / "lisbot" / "data" / "bot.sqlite", ["испорчено"] * 5)      # после копии данные изменились
-    (home / "center.yaml").write_text("center: {port: 9999}\n")
+    (home / "center.yaml").write_text("center: {port: 9999}\n", encoding="utf-8")
     con.close()
     res = restore_backup(home / "backups" / info["name"], home)
     assert _count(home / "lisbot" / "data" / "bot.sqlite") == 2
-    assert "8800" in (home / "center.yaml").read_text()
-    assert (home / "secret.key").read_text() == "KEY"                          # ключ не трогаем
+    assert "8800" in (home / "center.yaml").read_text(encoding="utf-8")
+    assert (home / "secret.key").read_text(encoding="utf-8") == "KEY"                          # ключ не трогаем
     assert not (home / "lisbot" / "data" / "bot.sqlite-wal").exists()
     before = home / "backups" / res["before"]
     with zipfile.ZipFile(before) as z:
@@ -153,7 +153,7 @@ def test_backup_failure_is_reported(tmp_path):
     async def go():
         c = Center(tmp_path)
         blocker = tmp_path / "file"
-        blocker.write_text("x")
+        blocker.write_text("x", encoding="utf-8")
         c.cfg.save({"backup": {"dir": str(blocker / "sub")}})                   # папку создать нельзя
         r = await c.backup.run()
         assert not r["ok"]
