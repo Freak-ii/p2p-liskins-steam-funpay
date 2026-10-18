@@ -120,7 +120,13 @@ def make_app(center: Center) -> web.Application:
         return web.json_response(center.alerts(int(request.query.get("limit", 100))))
 
     async def events(request: web.Request):
-        return web.json_response(center.events.recent(int(request.query.get("limit", 200)), request.query.get("source")))
+        q = request.query
+        try:
+            limit = max(1, min(int(q.get("limit", 200)), 1000))
+        except ValueError:
+            limit = 200
+        return web.json_response(center.events.recent(limit, q.get("source") or None, important=q.get("level") == "important",
+                                                      q=q.get("q", "").strip()[:100]))
 
     async def lis_secrets(request: web.Request):
         w: LisBotWorker = center.workers["lisbot"]  # type: ignore[assignment]

@@ -95,6 +95,11 @@
   </div>
 
   <h2>События центра</h2>
+  <div class="row filters" style="margin-bottom:8px">
+    <input id="evSearch" type="search" placeholder="Поиск по событиям">
+    <select id="evSource"><option value="">все источники</option><option value="center">центр</option><option value="lisbot">LisBot</option><option value="mannbot">MannBot</option></select>
+    <select id="evLevel"><option value="">все</option><option value="important">только предупреждения и ошибки</option></select>
+  </div>
   <div class="card tablewrap"><table><thead><tr><th>Время</th><th>Источник</th><th>Событие</th></tr></thead><tbody id="events"></tbody></table></div>
 </main>
 
@@ -172,13 +177,28 @@ function botCard(b) {
   </div>`;
 }
 
+// журнал событий: без фильтров — последние 30 из /api/overview, с фильтрами — поиск по всему журналу
+const evFiltered = () => $('#evSearch').value.trim() || $('#evSource').value || $('#evLevel').value;
+function renderEvents(list) {
+  $('#events').innerHTML = list.map((e) => `<tr><td>${fmtTs(e.ts)}</td><td>${esc(e.source)}</td><td class="lv-${esc(e.level)}">${esc(e.message)}</td></tr>`).join('')
+    || `<tr><td colspan="3" class="muted">${evFiltered() ? 'Ничего не найдено' : 'Событий пока нет'}</td></tr>`;
+}
+let evTimer = null;
+async function loadEvents() {
+  if (!evFiltered()) return renderEvents(state?.events || []);
+  const p = new URLSearchParams({ q: $('#evSearch').value.trim(), source: $('#evSource').value, level: $('#evLevel').value, limit: 200 });
+  try { renderEvents(await api(`/api/events?${p}`)); } catch { /* сеть */ }
+}
+for (const id of ['#evSource', '#evLevel']) $(id).addEventListener('change', loadEvents);
+$('#evSearch').addEventListener('input', () => { clearTimeout(evTimer); evTimer = setTimeout(loadEvents, 300); });
+
 async function refresh() {
   try { state = await api('/api/overview'); } catch { return; }
   $('#hdr').textContent = `работает ${fmtDur(state.uptime) || 'меньше минуты'}${state.demo ? ' · демо' : ''}`;
   $('#alertsBadge').innerHTML = state.open_alerts ? `<span class="badge s-crashed">тревог: ${state.open_alerts}</span>` : '';
   $('#bots').innerHTML = state.bots.map(botCard).join('');
   $('#alerts').innerHTML = state.alerts.map((a) => `<tr style="${a.acked ? 'opacity:.55' : ''}"><td>${fmtTs(a.ts)}</td><td>${esc(a.source)}</td><td class="lv-${esc(a.level)}">${esc(a.level)}</td><td>${esc(a.message)}</td><td>${a.acked ? '' : `<button class="btn small" title="Подтвердить тревогу в боте" onclick="ackAlert('${esc(a.source)}',${Number(a.id)})">✓</button>`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Тревог нет</td></tr>';
-  $('#events').innerHTML = state.events.map((e) => `<tr><td>${fmtTs(e.ts)}</td><td>${esc(e.source)}</td><td class="lv-${esc(e.level)}">${esc(e.message)}</td></tr>`).join('');
+  if (!evFiltered()) renderEvents(state.events);
   $('#logTabs').innerHTML = state.bots.map((b) => `<button class="btn ${b.name === logBot ? 'on' : ''}" onclick="switchLog('${b.name}')">${esc(b.title)}</button>`).join('');
 }
 

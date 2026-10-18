@@ -80,6 +80,7 @@ label.check input { width: auto; }
 /* CRM */
 .filters { margin-bottom: 8px; }
 .filters input[type=search] { flex: 1 1 260px; width: auto; }
+.filters select { width: auto; flex: 0 0 auto; }
 select, textarea { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; }
 textarea { width: 100%; resize: vertical; }
 label.check { display: inline-flex; gap: 6px; align-items: center; margin: 8px 0 0; }

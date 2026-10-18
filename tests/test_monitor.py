@@ -286,3 +286,20 @@ def test_events_pruned(tmp_path):
     assert "old" not in kinds and "new" in kinds
     assert [d["id"] for d in c.coordinator.decisions(10)] == [pid]               # неразобранное предложение остаётся
     c.events.close()
+
+
+def test_events_filter_api(tmp_path):
+    async def go():
+        c = Center(tmp_path)
+        c.events.add("lisbot", "info", "x.ok", "Всё хорошо")
+        c.events.add("mannbot", "warn", "x.warn", "Заказ ждёт проверки")
+        c.events.add("center", "critical", "x.crit", "Бот упал")
+        assert [e["kind"] for e in c.events.recent(10, important=True)][:2] == ["x.crit", "x.warn"]
+        assert [e["kind"] for e in c.events.recent(10, q="заказ")] == ["x.warn"]
+        token = c.cfg.ensure_token()
+        async with TestClient(TestServer(make_app(c))) as cl:
+            await cl.get(f"/login?token={token}", allow_redirects=False)
+            r = await (await cl.get("/api/events?source=mannbot&level=important&q=проверки&limit=x")).json()
+            assert [e["kind"] for e in r] == ["x.warn"]
+        c.events.close()
+    asyncio.run(go())
