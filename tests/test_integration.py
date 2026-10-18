@@ -1,6 +1,10 @@
 """Стыки модулей центра: демо-режим, отказы ботов, порты, курс без сети."""
 import asyncio
+import os
 import sqlite3
+import subprocess
+import sys
+import threading
 import time
 
 import pytest
@@ -135,3 +139,66 @@ def test_rate_without_network_is_not_retried_every_request(tmp_path, monkeypatch
         assert r1["source"].startswith("запасной") and r2 == r1 and len(calls) == 1
         c.events.close()
     asyncio.run(go())
+
+
+def test_lisbot_identifies_only_its_own_instance(tmp_path):
+    """Подхватывается только LisBot с нашим токеном и нашей папкой данных, а не любой бот на порту."""
+    async def go():
+        ev = EventStore(tmp_path / "e.sqlite3")
+        lis = LisBotWorker(tmp_path / "lisbot", ev, port=0)
+        lis.token = lambda: "t"
+        meta = {"dataDir": str(lis.data_dir), "pid": 4242}
+        srv = await _bot_server(lambda r: web.json_response(meta) if r.headers.get("Authorization") == "Bearer t"
+                                else web.json_response({"error": "unauthorized"}, status=401), "/api/meta", "GET")
+        url = f"http://127.0.0.1:{srv.port}"
+        assert await lis.identify(url) == 4242
+        meta["dataDir"] = str(tmp_path / "other")               # другой экземпляр LisBot со своей базой
+        assert await lis.identify(url) is None
+        lis.token = lambda: "чужой"
+        assert await lis.identify(url) is None
+        await srv.close()
+        ev.close()
+    asyncio.run(go())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="на Windows бот завершается вместе с центром (Job Object)")
+def test_center_adopts_mannbot_left_after_crash(tmp_path):
+    """Настоящий MannBot (демо) работает без центра — новый центр подхватывает его, а не запускает второй."""
+    async def go():
+        ev = EventStore(tmp_path / "e.sqlite3")
+        port = _free_port()
+        w = MannBotWorker(tmp_path / "mannbot", ev, port=port, demo=True)
+        w.adopt_poll_seconds = 0.2
+        orphan = subprocess.Popen(w.command(), cwd=str(w.cwd()), env={**os.environ, **w.env()},
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        threading.Thread(target=orphan.wait, daemon=True).start()
+        try:
+            for _ in range(150):
+                if w.token() and await w.find_running() is not None:
+                    break
+                await asyncio.sleep(0.1)
+            await w.start("автозапуск центра")
+            for _ in range(100):
+                if w.state == "running":
+                    break
+                await asyncio.sleep(0.1)
+            assert w.adopted and w.pid == orphan.pid and w.port == port
+            assert (await w.summary())["demo"]
+            await w.stop()
+            for _ in range(100):
+                if orphan.poll() is not None:
+                    break
+                await asyncio.sleep(0.1)
+            assert orphan.poll() is not None and w.soft_stopped    # мягкая остановка через API MannBot
+        finally:
+            if orphan.poll() is None:
+                orphan.kill()
+            ev.close()
+    asyncio.run(go())
+
+
+def _free_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]

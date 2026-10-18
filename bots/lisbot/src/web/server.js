@@ -136,7 +136,7 @@ export function startDashboard({ cfg, db, guard, bot, log }) {
       return { ok: true };
     },
     'GET /api/rtba': (u) => rtbaReport(db, cfg, bot, Number(u.searchParams.get('days')) || 7),
-    'GET /api/meta': () => ({ appMode: !!bot.hooks?.appMode, version: bot.hooks?.version || null, dataDir: cfg.dataDir }),
+    'GET /api/meta': () => ({ appMode: !!bot.hooks?.appMode, version: bot.hooks?.version || null, dataDir: cfg.dataDir, pid: process.pid }),
     'GET /api/export/items.csv': () => {
       const rows = db.db.prepare('SELECT * FROM items WHERE dry_run=0 ORDER BY id').all();
       const cols = rows[0] ? Object.keys(rows[0]) : ['id'];

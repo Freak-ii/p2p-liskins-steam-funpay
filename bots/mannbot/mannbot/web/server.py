@@ -5,6 +5,7 @@ import asyncio
 import datetime as dt
 import hmac
 import json
+import os
 import time
 from pathlib import Path
 
@@ -102,7 +103,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         return render("login.html", request, alerts_open=0)
 
     async def ping(request: web.Request):
-        return web.json_response({"app": "mannbot", "ok": True})
+        return web.json_response({"app": "mannbot", "ok": True, "pid": os.getpid()})
 
     def back(request: web.Request, msg: str, default: str = "/") -> web.HTTPFound:
         ref = request.headers.get("Referer")

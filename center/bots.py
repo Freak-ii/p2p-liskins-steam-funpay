@@ -68,7 +68,45 @@ class BotWorker(Worker):
                 self._append(f"порт {self.port} занят, бот запускается на {p}", "center")
                 BotWorker.reserved_ports.add(p)
                 self.port = p
-            return
+            break
+        try:                                    # запомнить порт: после падения центра бот на нём будет подхвачен
+            self.port_file.write_text(str(self.port), encoding="utf-8")
+        except OSError:
+            pass
+
+    @property
+    def port_file(self) -> Path:
+        return self.home / "last-port.txt"
+
+    async def find_running(self) -> int | None:
+        """Бот этого центра, оставшийся работать после падения центра: на основном или последнем порту
+        отвечает бот с нашим токеном и нашей папкой данных. Чужой бот на том же порту не подхватывается."""
+        ports = [self.port]
+        try:
+            last = int(self.port_file.read_text(encoding="utf-8").strip())
+            if last not in ports and not (last in BotWorker.reserved_ports and last != self.port):
+                ports.append(last)
+        except (OSError, ValueError):
+            pass
+        for port in ports:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                if s.connect_ex(("127.0.0.1", port)) != 0:
+                    continue                    # порт свободен — там никого нет
+            try:
+                pid = await self.identify(f"http://127.0.0.1:{port}")
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                pid = None
+            if pid is not None:
+                if port != self.port:
+                    BotWorker.reserved_ports.add(port)
+                    self.port = port
+                return pid
+        return None
+
+    async def identify(self, base_url: str) -> int | None:
+        """Если по адресу работает бот именно этого центра — вернуть его pid (0, если бот его не сообщает)."""
+        return None
 
     def token(self) -> str:
         raise NotImplementedError
@@ -286,6 +324,23 @@ class MannBotWorker(BotWorker):
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
             async with s.get(f"{self.base_url}/api/ping") as r:
                 return r.status == 200 and "mannbot" in await r.text()
+
+    async def identify(self, base_url: str) -> int | None:
+        token = self.token()
+        if not token:
+            return None
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies={"mb_token": token}) as s:
+            async with s.get(f"{base_url}/api/ping") as r:
+                ping = await r.json(content_type=None) if r.status == 200 else {}
+            if ping.get("app") != "mannbot":
+                return None
+            async with s.get(f"{base_url}/api/status", allow_redirects=False) as r:      # вход по токену из нашего config.yaml
+                if r.status != 200:
+                    return None
+                d = await r.json(content_type=None)
+        if bool(d.get("demo")) != self.demo:
+            return None
+        return int(ping.get("pid") or 0)
 
     def _cookies(self) -> dict:
         return {"mb_token": self.token()}
@@ -516,6 +571,17 @@ class LisBotWorker(BotWorker):
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=self._headers()) as s:
             async with s.get(f"{self.base_url}/api/meta") as r:
                 return r.status == 200
+
+    async def identify(self, base_url: str) -> int | None:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=self._headers()) as s:
+            async with s.get(f"{base_url}/api/meta") as r:              # токен — из хранилища этого центра
+                if r.status != 200:
+                    return None
+                d = await r.json(content_type=None)
+        data_dir = d.get("dataDir")
+        if not data_dir or Path(data_dir).resolve() != self.data_dir.resolve():
+            return None
+        return int(d.get("pid") or 0)
 
     async def summary(self) -> dict | None:
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=self._headers()) as s:
