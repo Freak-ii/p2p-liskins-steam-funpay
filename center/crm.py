@@ -382,6 +382,9 @@ class Crm:
                            "delivered_at": o["delivered_at"], "completed_at": o["completed_at"]} for o in reversed(mine)]
         card["reviews"] = [{"order_id": o["order_id"], "stars": o["review_stars"], "ts": o["completed_at"] or o["delivered_at"]}
                            for o in reversed(mine) if o["review_stars"]]
+        if card["segment"]["key"] in ("sleeping", "lost"):
+            tpl = str(self.seg_cfg().get("winback_text") or "")
+            card["winback"] = tpl.replace("{name}", card["username"] or "")
         chats = sorted({o["chat_id"] for o in mine if o["chat_id"]})
         card["messages"] = [dict(m) for m in _rows(
             self.an.mann_db, f"SELECT order_id, direction, text, ts FROM messages WHERE chat_id IN ({','.join('?' * len(chats))}) "

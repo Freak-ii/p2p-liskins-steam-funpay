@@ -128,6 +128,9 @@ async function openCustomer(cid) {
     ${c.risk.reasons.length ? `<ul class="small">${c.risk.reasons.map((r) => `<li>${r.points > 0 ? '+' : ''}${r.points} — ${esc(r.text)}</li>`).join('')}</ul>` : '<p class="muted small">Тревожных признаков нет.</p>'}
     ${c.shared_with.length ? `<p class="small">Тот же Steam-аккаунт у: ${c.shared_with.map((u) => `<a href="#" data-cust="${u.funpay_id}">${esc(u.username || u.funpay_id)}</a>`).join(', ')}</p>` : ''}
     <p class="small muted">Steam ID: ${c.steam_ids.map((x) => `<a href="https://steamcommunity.com/profiles/${esc(x)}" target="_blank" rel="noopener" class="mono">${esc(x)}</a>`).join(', ') || '—'}</p>
+    ${c.winback ? `<h4>Вернуть покупателя</h4><p class="muted small">${esc(c.segment.why)}. Текст для чата FunPay (центр сам ничего не отправляет):</p>
+      <textarea id="crmWinback" rows="3" readonly>${esc(c.winback)}</textarea>
+      <div class="row" style="margin-top:4px"><button class="btn small" type="button" id="crmWinCopy">Скопировать</button><span id="crmWinMsg" class="small muted"></span></div>` : ''}
     <form id="crmCustForm"><label>Заметка</label><textarea name="notes" rows="3" maxlength="2000">${esc(c.notes)}</textarea>
       <label>Теги (через запятую)</label><input name="tags" maxlength="200" value="${esc(c.tags)}" placeholder="VIP, опт, проблемный">
       <label class="check"><input type="checkbox" name="blacklisted" ${c.blacklisted ? 'checked' : ''}> В чёрном списке (MannBot не будет выдавать автоматически)</label>
@@ -136,6 +139,10 @@ async function openCustomer(cid) {
       ${c.orders.map((o) => `<tr class="click" data-bot="mannbot" data-ref="${esc(o.order_id)}"><td class="mono">#${esc(o.order_id)}</td><td>${fmtTs(o.created_at)}</td>
         <td>${cm(o.price, o.currency)}</td><td>${o.keys ?? ''}</td><td>${esc(o.status_text)}</td><td>${o.risk}</td><td>${o.stars ? o.stars + '★' : ''}</td></tr>`).join('')}</tbody></table></div>
     <h4>Переписка</h4>${msgList(c.messages)}`);
+  if (c.winback) $('#crmWinCopy').onclick = async () => {
+    try { await navigator.clipboard.writeText(c.winback); $('#crmWinMsg').textContent = 'скопировано'; }
+    catch { $('#crmWinback').select(); $('#crmWinMsg').textContent = 'выделено — нажмите Ctrl+C'; }
+  };
   $('#crmCustForm').onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;

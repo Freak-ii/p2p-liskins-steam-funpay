@@ -78,6 +78,9 @@ DEFAULTS: dict = {
         "lost_days": 90,             # дольше — «ушёл»
         "vip_spent_rub": 5000,       # VIP: потратил столько ₽ или сделал vip_orders покупок
         "vip_orders": 5,
+        # текст, который предлагается отправить уснувшему покупателю в чат FunPay; {name} — ник покупателя
+        "winback_text": "Здравствуйте, {name}! Давно вас не было. Ключи Mann Co. Supply Crate Key снова в наличии "
+                        "и выдаются автоматически за пару минут после оплаты. Будем рады новому заказу 🙂",
     },
     "inventory": {                   # center/inventory.py
         "lis_old_days": 0,           # предмет LisBot «долго лежит» после стольких дней; 0 — как sell.maxHoldDaysAlert LisBot

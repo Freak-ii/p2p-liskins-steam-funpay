@@ -57,3 +57,16 @@ def test_segments(tmp_path):
         assert any("уснувших" in r["title"] for r in res["recommendations"])
     asyncio.run(go())
     c.events.close()
+
+
+def test_winback_text_for_sleeping(tmp_path):
+    seed_crm(tmp_path)
+    _orders(tmp_path, [("E1", 23, "sleepy", 900, 70, "completed"), ("E2", 23, "sleepy", 900, 45, "completed"),
+                       ("D1", 22, "newbie", 200, 3, "completed")])
+    c = Center(tmp_path)
+    card = c.crm.customer(23)
+    assert card["segment"]["key"] == "sleeping" and card["winback"].startswith("Здравствуйте, sleepy!")
+    assert "winback" not in c.crm.customer(22)
+    c.cfg.save({"crm": {"winback_text": "Привет, {name}, скидка 5%"}})
+    assert c.crm.customer(23)["winback"] == "Привет, sleepy, скидка 5%"
+    c.events.close()
