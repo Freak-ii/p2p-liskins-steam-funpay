@@ -84,3 +84,34 @@ def test_api_and_demo(tmp_path):
             assert (await (await cl.get("/api/readiness")).json())["demo"]
         d.events.close()
     asyncio.run(go())
+
+
+def test_live_mode_blocked_until_ready(tmp_path):
+    from center.coordinator import ToolError
+
+    async def go():
+        c = Center(tmp_path)
+        changes = []
+
+        async def lis_settings(ch):
+            changes.append(ch)
+            return "сохранено"
+        c.coordinator._lis_settings = lis_settings
+        try:
+            await c.coordinator.execute("set_live_mode", {"bot": "lisbot", "live": True})
+            assert False, "без ключей боевой режим включаться не должен"
+        except ToolError as e:
+            assert "ключ API LIS-SKINS" in str(e)
+        assert await c.coordinator.execute("set_live_mode", {"bot": "lisbot", "live": False}) == "сохранено"   # назад — всегда
+        c.workers["lisbot"].save_secrets(LIS)
+        _mann(c, "trader")                                              # тот же аккаунт Steam — всё ещё нельзя
+        try:
+            await c.coordinator.execute("set_live_mode", {"bot": "lisbot", "live": True})
+            assert False
+        except ToolError as e:
+            assert "одном аккаунте Steam" in str(e)
+        _mann(c, "other")
+        await c.coordinator.execute("set_live_mode", {"bot": "lisbot", "live": True})
+        assert changes[-1] == {"dryRun": False}
+        c.events.close()
+    asyncio.run(go())

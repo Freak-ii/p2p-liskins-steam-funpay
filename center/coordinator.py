@@ -541,6 +541,12 @@ class Coordinator:
             return await self._lis_settings(args["changes"])
         if tool == "set_live_mode":
             if args["bot"] == "lisbot":
+                rd = getattr(self.center, "readiness", None)
+                if args["live"] and rd is not None and not self.center.demo:
+                    blockers = [i["title"] for i in rd.check()["items"] if i["level"] == "fail"
+                                and (i["key"].startswith("lis_") or i["key"] in ("steam_separate", "tg_separate"))]
+                    if blockers:
+                        raise ToolError("боевой режим не включён — сначала исправьте: " + "; ".join(blockers))
                 return await self._lis_settings({"dryRun": not args["live"]})
             raise ToolError("режим MannBot переключается в его панели (настройки → тестовый режим)")
         raise ToolError("этот инструмент центр не выполняет — только вручную")
