@@ -18,6 +18,7 @@ from center.backup import routes as backup_routes
 from center.coordinator import routes as coordinator_routes
 from center.inventory import routes as inventory_routes
 from center.readiness import routes as readiness_routes
+from center.updates import routes as update_routes
 from center.monitor import routes as monitor_routes
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -335,6 +336,7 @@ def make_app(center: Center) -> web.Application:
     app.add_routes(backup_routes(center))
     app.add_routes(inventory_routes(center))
     app.add_routes(readiness_routes(center))
+    app.add_routes(update_routes(center))
     app.router.add_static("/static/", STATIC)
     return app
 

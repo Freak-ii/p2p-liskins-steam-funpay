@@ -62,7 +62,7 @@ NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.
                 "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
                 "backup.failed", "backup.restored", "inventory.low_stock",
                 "inventory.low_balance", "monitor.low_disk", "monitor.auto_restart", "center.config",
-                "monitor.error_spike"}
+                "monitor.error_spike", "center.update"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
 # строки вывода ботов, которые считаются ошибками: уровни логгеров LisBot и MannBot, трейсбеки Python и Node

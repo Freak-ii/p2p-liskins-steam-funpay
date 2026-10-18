@@ -18,3 +18,13 @@ async function refreshReadiness() {
 }
 refreshReadiness();
 setInterval(refreshReadiness, 60000);
+
+// Новая версия центра (/api/update): полоска со ссылкой на выпуск, центр сам ничего не скачивает
+async function refreshUpdate() {
+  let u;
+  try { u = await api('/api/update'); } catch { return; }
+  $('#update').innerHTML = u.newer ? `<div class="card" style="margin-top:14px">⬆ Вышла версия центра <b>${esc(u.latest)}</b> (у вас ${esc(u.current)}).
+    <a href="${esc(u.url)}" target="_blank" rel="noopener">Скачать</a> — выйдите из центра и распакуйте архив туда же с заменой файлов: настройки и базы в папке <code>data</code> останутся.</div>` : '';
+}
+refreshUpdate();
+setInterval(refreshUpdate, 3600000);

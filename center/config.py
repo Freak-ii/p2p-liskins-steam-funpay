@@ -28,6 +28,7 @@ DEFAULTS: dict = {
         "port": 8800,
         "token": "",
         "poll_seconds": 10,          # как часто опрашивать ботов для сводки
+        "update_check": True,        # раз в сутки смотреть, не вышла ли новая версия центра на GitHub
     },
     "workers": {
         "mannbot": {"enabled": True, "autostart": True, "port": 8801, "python": ""},

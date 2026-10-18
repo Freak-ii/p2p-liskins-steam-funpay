@@ -14,6 +14,7 @@ from center.backup import Backup
 from center.inventory import Inventory
 from center.readiness import Readiness
 from center.tgcontrol import TelegramControl
+from center.updates import Updates
 from center.bots import BotWorker, LisBotWorker, MannBotWorker
 from center.config import CenterConfig
 from center.crm import Crm
@@ -61,6 +62,7 @@ class Center:
         self.inventory = Inventory(self)
         self.readiness = Readiness(self)
         self.tg = TelegramControl(self)
+        self.updates = Updates(self)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))
@@ -72,6 +74,7 @@ class Center:
         await self.backup.start()
         await self.inventory.start()
         await self.tg.start()
+        await self.updates.start()
         for name, w in self.workers.items():
             if not self.enabled(name):
                 w._set(DISABLED, "выключен в center.yaml")
@@ -92,6 +95,7 @@ class Center:
         await self.backup.stop()
         await self.inventory.stop()
         await self.tg.stop()
+        await self.updates.stop()
         await self.coordinator.stop()
         await self.monitor.stop()
         self.events.add("center", "info", "center.stop", "Центр остановлен")
