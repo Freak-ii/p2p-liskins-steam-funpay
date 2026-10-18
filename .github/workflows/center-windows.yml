@@ -60,7 +60,7 @@ jobs:
           $ov.bots | Format-Table name, state, detail -AutoSize | Out-String -Width 300
           $mann = $ov.bots | Where-Object name -eq "mannbot"; $lis = $ov.bots | Where-Object name -eq "lisbot"
           if ($mann.state -ne "running") { throw "MannBot не работает: $($mann.state) $($mann.detail)" }
-          if ($lis.state -ne "not_configured") { throw "LisBot (Node) не дошёл до проверки настроек: $($lis.state) $($lis.detail)" }
+          if ($lis.state -ne "running") { throw "LisBot (Node) не работает на эмуляторе LIS-SKINS/Steam: $($lis.state) $($lis.detail)" }
           $s = Invoke-RestMethod http://127.0.0.1:8800/api/mannbot/settings -Headers $h
           if (-not $s.sections) { throw "настройки MannBot не пришли" }
           Invoke-RestMethod http://127.0.0.1:8800/api/quit -Method Post -Headers $h | Out-Null
@@ -69,6 +69,8 @@ jobs:
           $log.Split("`n") | Select-Object -Last 8
           if ($log -notmatch "мягкая остановка: команда отправлена боту") { throw "мягкой остановки MannBot не было" }
           if ($log -match "принудительная остановка") { throw "MannBot остановлен принудительно" }
+          $lislog = Get-Content "$root\data\demo\logs\lisbot.log" -Raw -Encoding utf8
+          if ($lislog -notmatch "мягкая остановка: команда отправлена боту") { throw "мягкой остановки LisBot не было" }
           if (Get-Process node -ErrorAction SilentlyContinue) { throw "после выхода центра остался процесс node" }
       - name: Значок в трее (pythonw, без консоли) и выход
         run: |

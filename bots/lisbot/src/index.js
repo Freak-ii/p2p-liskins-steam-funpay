@@ -18,9 +18,10 @@ import { Seller } from './engine/seller.js';
 import { BalanceWatcher } from './engine/balanceWatcher.js';
 import { summary, textReport, perItem } from './analytics.js';
 import { startDashboard } from './web/server.js';
+import { startDemo } from './emu/demo.js';
 
 export class Bot {
-  /** hooks: { onRestartRequest(), appMode } — для десктоп-приложения */
+  /** hooks: { onRestartRequest(), appMode } — для десктоп-приложения; emu — эмулятор LIS/Steam (демо, src/emu) */
   constructor(cfg, hooks = {}) {
     this.cfg = cfg;
     this.hooks = hooks;
@@ -32,6 +33,7 @@ export class Bot {
     this.balanceRef = { value: this.db.get('balance.last')?.balance ?? null };
     this.loops = new Map();
     this.stopped = false;
+    this.emu = hooks.emu || null;
   }
 
   seedWatchlist() {
@@ -91,14 +93,16 @@ export class Bot {
     if (cfg.dashboard.enabled) this.dashboard = startDashboard({ cfg, db, guard, bot: this, log: log.child('web') });
     this.registerCommands();
     this.notify.startPolling();
-    await this.notify.send('ok', `Бот запущен${cfg.dryRun ? ' в режиме <b>DRY-RUN</b> (покупки и продажи не выполняются)' : ''}. Вотчлист: ${db.watchlist().length} предм.`);
+    if (this.emu) log.warn('ДЕМО: LIS-SKINS и Steam эмулируются (src/emu), деньги и предметы ненастоящие');
+    await this.notify.send('ok', `Бот запущен${this.emu ? ' в <b>демо-режиме</b> (эмуляция LIS-SKINS и Steam)' : ''}${cfg.dryRun ? ' в режиме <b>DRY-RUN</b> (покупки и продажи не выполняются)' : ''}. Вотчлист: ${db.watchlist().length} предм.`);
     if (guard.state.halted) await this.notify.send('warn', `Бот был остановлен ранее: ${esc(guard.state.haltReason)}. Закупки/продажи не начнутся до /resume.`);
 
     // --- LIS ---
     this.balanceWatcher = new BalanceWatcher({ cfg, db, lis: this.lis, guard, notify: this.notify, log: log.child('balance'), lock: null, balanceRef: this.balanceRef });
 
     // --- Steam ---
-    this.session = new SteamSession({ cfg, secrets: cfg.secrets, db, log: log.child('steam') });
+    this.session = this.emu ? this.emu.session({ log: log.child('steam') }) : new SteamSession({ cfg, secrets: cfg.secrets, db, log: log.child('steam') });
+    this.emu?.world.adoptDb(db);
     this.session.on('critical', (c) => (c.fatal || c.code === 'STEAM_RATE_LIMIT' ? guard.critical(c.code, c.message) : guard.warn(c.code, c.message)));
     this.market = new SteamMarket({ session: this.session, db, cfg, log: log.child('market') });
     this.fx = new FxService({ cfg, market: this.market, db, guard, log: log.child('fx') });
@@ -212,6 +216,7 @@ export class Bot {
     this.dashboard?.closeAllConnections?.();
     await Promise.race([this.notify.send('info', `Бот остановлен (${reason})`), sleep(5000)]);
     await sleep(300);
+    await this.emu?.close().catch(() => {});
     try { this.db.db.close(); } catch { /* уже закрыта */ }
   }
 }
@@ -238,6 +243,8 @@ async function check(cfg) {
 // pathToFileURL: корректно и для путей с пробелами/кириллицей, и для Windows (C:\...)
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const cfg = loadConfig();
+  // демо: LIS-SKINS и Steam эмулируются, ключи не нужны (так LisBot запускает центр в демо-режиме)
+  const emu = process.argv.includes('--demo') || process.env.LISBOT_DEMO === '1' ? await startDemo(cfg) : null;
   if (process.argv.includes('--check')) {
     process.exit(await check(cfg));
   }
@@ -246,7 +253,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     console.error('Ошибки конфигурации:\n - ' + errs.join('\n - ') + '\n\nЗапустите `npm run check` после исправления.');
     process.exit(1);
   }
-  const bot = new Bot(cfg);
+  const bot = new Bot(cfg, { emu });
   const shutdown = async (sig) => { bot.log.info(`Получен ${sig}, завершаю…`); await bot.stop().catch(() => {}); process.exit(0); };
   bot.hooks.onShutdownRequest = async (why) => { bot.log.info(`Остановка: ${why}`); await bot.stop(why).catch(() => {}); process.exit(0); };
   process.on('SIGINT', shutdown);

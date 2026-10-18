@@ -2,6 +2,7 @@
 import asyncio
 import os
 import sqlite3
+import shutil
 import subprocess
 import sys
 import threading
@@ -202,3 +203,34 @@ def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+_LISBOT_READY = (LisBotWorker.src / "node_modules" / "better-sqlite3").is_dir() and bool(shutil.which("node"))
+
+
+@pytest.mark.skipif(not _LISBOT_READY, reason="нет Node.js или node_modules LisBot (npm ci в bots/lisbot)")
+def test_demo_lisbot_trades_on_emulator(tmp_path):
+    """Демо центра: LisBot запускается без ключей на эмуляции LIS-SKINS и Steam, отвечает и сам покупает."""
+    async def go():
+        c = Center(tmp_path, demo=True)
+        w = c.workers["lisbot"]
+        w.port = _free_port()
+        assert "--demo" in w.command()
+        await w.start("тест")
+        try:
+            for _ in range(300):
+                if w.state == "running":
+                    break
+                await asyncio.sleep(0.1)
+            assert w.state == "running", (w.state, w.detail, [ln["text"] for ln in w.logs()][-20:])
+            s = await w.summary()
+            assert s["demo"] and s["dry_run"] is False and s["bot_state"] == "running"
+            async with w._session() as sess:
+                async with sess.get(f"{w.base_url}/api/meta") as r:
+                    meta = await r.json()
+            assert meta["demo"] and meta["pid"] == w.pid
+        finally:
+            await w.stop("тест")
+            c.events.close()
+        assert w.soft_stopped
+    asyncio.run(go())

@@ -450,6 +450,10 @@ class LisBotWorker(BotWorker):
     actions = {"pause": "Пауза", "resume": "Продолжить / снять остановку", "buyPause": "Пауза закупки",
                "buyResume": "Возобновить закупку", "halt": "Аварийная остановка"}
 
+    def __init__(self, *a, demo: bool = False, **kw):
+        super().__init__(*a, **kw)
+        self.demo = demo              # LIS-SKINS и Steam эмулируются самим LisBot (bots/lisbot/src/emu), ключи не нужны
+
     @property
     def secrets_path(self) -> Path:
         return self.home / "secrets.env"
@@ -526,7 +530,7 @@ class LisBotWorker(BotWorker):
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def command(self) -> list[str]:
-        return [self.node() or "node", str(self.src / "src" / "index.js")]
+        return [self.node() or "node", str(self.src / "src" / "index.js")] + (["--demo"] if self.demo else [])
 
     def cwd(self) -> Path:
         return self.src
@@ -581,6 +585,8 @@ class LisBotWorker(BotWorker):
         data_dir = d.get("dataDir")
         if not data_dir or Path(data_dir).resolve() != self.data_dir.resolve():
             return None
+        if bool(d.get("demo")) != self.demo:          # демо-бот на эмуляции не подменяет боевого и наоборот
+            return None
         return int(d.get("pid") or 0)
 
     async def summary(self) -> dict | None:
@@ -594,7 +600,7 @@ class LisBotWorker(BotWorker):
         sold = d.get("sold") or {}
         state = "halted" if g.get("halted") else "paused" if g.get("paused") else "running"
         return {
-            "bot_state": state, "paused": bool(g.get("paused")), "dry_run": d.get("dryRun"),
+            "bot_state": state, "paused": bool(g.get("paused")), "dry_run": d.get("dryRun"), "demo": bool(d.get("demo")),
             "error": g.get("haltReason") or "", "configured": True,
             "flags": [t for k, t in (("buyPaused", "закупка на паузе"), ("sellPaused", "продажа на паузе")) if g.get(k)],
             "kpi": {"Баланс LIS, $": d.get("balance"), "В товаре, $": d.get("exposure"),
