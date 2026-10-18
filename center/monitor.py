@@ -613,6 +613,10 @@ class Monitor:
             losers = [(p, n, k) for p, n, k in ranked if p < 0][-3:]
             if losers:
                 lines += ["<b>В минус</b>"] + [f"• {html.escape(k)} — −${abs(p):.2f} за {n} шт" for p, n, k in reversed(losers)]
+        g = await a.goal(now)
+        if g["goal"]:
+            lines.append(f"Цель месяца: {_num(round(g['profit']))} из {_num(round(g['goal']))} ₽ ({_pct(g['progress'] / 100)}), "
+                         f"прогноз {_num(round(g['forecast']))} ₽")
         h = self.history(24 * 7, buckets=28)
         lines += ["", "Аптайм за неделю: " + " · ".join(
             f"{html.escape(self.center.workers[n].title.split(' ·')[0])} {_pct(b['uptime'])}, падений {b['crashes']}"

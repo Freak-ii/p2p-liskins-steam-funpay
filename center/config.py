@@ -39,6 +39,7 @@ DEFAULTS: dict = {
     "analytics": {
         "usd_rub": "auto",           # число — фиксированный курс; auto — курс LisBot (Steam в ₽) или ЦБ РФ
         "fallback_usd_rub": 95,      # если курс узнать неоткуда (нет сети)
+        "month_goal_rub": 0,         # цель прибыли центра на месяц, ₽; 0 — не задана
     },
     "budget": {
         "total_usd": 0,              # общий капитал центра, $; 0 — не задан. LisBot получает его минус склад MannBot
