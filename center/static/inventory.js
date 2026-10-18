@@ -38,9 +38,24 @@ async function invLoad() {
           <div><b class="${cls}">${m.days_left == null ? '—' : m.days_left.toLocaleString('ru-RU') + ' дн'}</b><span>хватит · ${txt}</span></div>
           <div><b>${money(m.value, 'RUB')}</b><span>по себестоимости</span></div>
         </div>
-        <div class="muted small">${m.restock ? `<b>Докупить ${m.restock} ключей</b>${m.restock_cost ? ` (≈${money(m.restock_cost, 'RUB')})` : ''}, чтобы хватило на ${m.target_days} дн продаж. ` : ''}Если ключей останется меньше чем на ${m.warn_days} дн продаж, центр пришлёт уведомление.</div>
+        <div class="muted small">${m.restock ? `<b>Докупить ${m.restock} ключей</b>${m.restock_cost ? ` (≈${money(m.restock_cost, 'RUB')})` : ''}, чтобы хватило на ${m.target_days} дн продаж${m.bridge_coming ? ` с учётом ${m.bridge_coming} ключей в пути по мосту` : ''}. ` : ''}Если ключей останется меньше чем на ${m.warn_days} дн продаж, центр пришлёт уведомление.</div>
+        ${invBridge(r.bridge)}
       </div>
     </div>`;
+}
+
+// Мост ключей LisBot → MannBot: куплено за кошелёк Steam, ждут 7 дней, в обмене, принято MannBot
+function invBridge(b) {
+  if (!b || (!b.enabled && !b.bought)) return '<div class="muted small" style="margin-top:8px">Мост ключей выключен: LisBot может покупать ключи за кошелёк Steam и передавать их MannBot (настройки LisBot → «Мост ключей»).</div>';
+  const cur = esc(b.currency || '');
+  return `<h3 style="margin-top:12px">Мост ключей${b.enabled ? '' : ' <span class="tag">выключен</span>'}</h3>
+    <div class="kpi mon-kpi">
+      <div><b>${b.bought}</b><span>куплено${b.avg_price != null ? ` · ≈${b.avg_price.toLocaleString('ru-RU')} ${cur} за ключ` : ''}</span></div>
+      <div><b>${b.waiting}</b><span>ждут 7 дней блокировки</span></div>
+      <div><b>${b.in_offers}</b><span>в обмене на MannBot</span></div>
+      <div><b>${b.delivered}</b><span>принято MannBot</span></div>
+    </div>
+    <div class="muted small">${b.buying ? `Закупка включена: до ${b.per_day ?? '—'} ключей в день, не дороже ${b.max_price ?? '—'} ${cur}${b.buy_order ? ', ордер на ТП стоит' : ''}.` : 'Закупка за кошелёк выключена, мост только передаёт ключи, которые уже есть у LisBot.'}${b.spent ? ` Потрачено с кошелька ${b.spent.toLocaleString('ru-RU')} ${cur}.` : ''}</div>`;
 }
 
 // Цель прибыли на месяц: прогресс и прогноз по темпу (/api/analytics/goal)

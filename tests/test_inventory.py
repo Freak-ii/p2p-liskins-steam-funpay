@@ -165,3 +165,37 @@ def test_sell_time_forecast(tmp_path):
     assert f["typical_days"] == 10.0 and f["n7"] == 4        # AK, Old, AWP и Howl (через 6 дн)
     assert any("Ожидается продаж LisBot за 7 дней" in x for x in c.inventory.report_lines())
     c.events.close()
+
+
+def test_key_bridge_state_and_restock(tmp_path):
+    seed(tmp_path, stock=1)
+    (tmp_path / "lisbot" / "config.json").write_text(json.dumps({
+        "steam": {"walletCurrencyCode": "RUB"},
+        "keyBridge": {"enabled": True, "buy": {"enabled": True, "maxKeyPrice": 160, "keysPerDay": 5}}}), encoding="utf-8")
+    state = {"buyOrder": {"id": "1"}, "totals": {"bought": 6, "spentCents": 90000, "sent": 5, "delivered": 2},
+             "ownOffers": {"A": {"assetIds": ["1", "2"], "open": False, "finalState": "Accepted"},
+                           "B": {"assetIds": ["3"], "open": True},
+                           "C": {"assetIds": ["4", "5"], "open": False, "finalState": "Declined"}}}
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    con.execute("INSERT INTO kv VALUES('keybridge', ?, 0)", (json.dumps(state),))
+    con.commit()
+    con.close()
+    c = Center(tmp_path)
+    b = c.inventory.bridge()
+    assert b["enabled"] and b["buying"] and b["buy_order"] and b["currency"] == "RUB"
+    assert (b["bought"], b["delivered"], b["in_offers"], b["failed"]) == (6, 2, 1, 2)
+    assert b["waiting"] == 3 and b["coming"] == 4 and b["avg_price"] == 150.0 and b["spent"] == 900.0
+    m = c.inventory.mannbot()
+    assert m["bridge_coming"] == 4 and m["restock"] == 3                 # 7/13 × 14 − 1 на складе − 4 в пути
+    assert "ещё 4 едут по мосту ключей" in c.inventory.check()
+    assert any(x.startswith("Мост ключей: куплено 6, принято MannBot 2, в пути 4") for x in c.inventory.report_lines())
+    c.events.close()
+
+
+def test_key_bridge_off_by_default(tmp_path):
+    seed(tmp_path)
+    c = Center(tmp_path)
+    b = c.inventory.bridge()
+    assert not b["enabled"] and b["bought"] == 0 and b["coming"] == 0
+    assert not any("Мост ключей" in x for x in c.inventory.report_lines())
+    c.events.close()

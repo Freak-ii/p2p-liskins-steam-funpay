@@ -5,6 +5,8 @@ LisBot — купленные и ещё не проданные предметы
 предмет лежит, флаги «долго лежит», «в минусе», «лимит перевыставлений».
 MannBot — ключи на складе, себестоимость, скорость продаж за 14 дней и на сколько дней хватит ключей.
 Ключей на меньше чем inventory.mann_days_warn дней — уведомление (не чаще раза в сутки).
+Мост ключей (LisBot покупает ключи за кошелёк Steam и передаёт MannBot) — сколько куплено, ждёт 7 дней,
+отправлено и принято; ключи «в пути» учитываются в подсказке «докупить».
 
 Базы ботов читаются только на чтение (как в аналитике).
 """
@@ -31,10 +33,11 @@ VALUATION_TTL = 3 * DAY          # оценка цены старше — не �
 
 def _restock_text(m: dict) -> str:
     """«: докупить N ключей (~X ₽) на T дн продаж» — сколько ключей нужно, чтобы склада хватило на target_days."""
+    coming = f" (ещё {m['bridge_coming']} едут по мосту ключей)" if m.get("bridge_coming") else ""
     if not m.get("restock"):
-        return ""
+        return coming
     cost = f" (~{m['restock_cost']:,.0f} ₽)".replace(",", " ") if m.get("restock_cost") else ""
-    return f": докупить {m['restock']} ключей{cost} на {m['target_days']:.0f} дн продаж"
+    return f": докупить {m['restock']} ключей{cost} на {m['target_days']:.0f} дн продаж{coming}"
 
 
 class Inventory:
@@ -141,12 +144,40 @@ class Inventory:
         level = ("empty" if stock is not None and stock <= 0 else
                  "low" if days_left is not None and days_left < warn_days else "ok" if stock is not None else "unknown")
         target = float(self.cfg.get("mann_target_days") or 14)
-        restock = max(0, math.ceil(rate * target - stock)) if stock is not None and rate > 0 else None
+        coming = self.bridge()["coming"]
+        restock = max(0, math.ceil(rate * target - stock - coming)) if stock is not None and rate > 0 else None
         return {"currency": "RUB", "stock": stock, "cost_per_key": cost_key, "target_days": target, "restock": restock,
+                "bridge_coming": coming,
                 "restock_cost": _r(restock * cost_key) if restock and cost_key else None,
                 "value": _r(cost_key * stock) if cost_key and stock is not None else None,
                 "sold_keys": keys, "rate_days": _r(span, 1), "per_day": _r(rate, 2), "days_left": _r(days_left, 1),
                 "warn_days": warn_days, "level": level}
+
+    # ------------------------------------------------------------------ мост ключей
+    def bridge(self) -> dict:
+        """Состояние моста ключей LisBot → MannBot из базы LisBot (kv keybridge) и его настроек.
+        waiting — куплено, но ещё не отправлено (обычно 7 дней блокировки Steam); in_offers — в открытых обменах;
+        coming = waiting + in_offers — ключи, которые скоро придут на склад MannBot."""
+        a = self.center.analytics
+        st = _kv(a.lis_db, "keybridge")
+        st = st if isinstance(st, dict) else {}
+        cfg = a.lis_config()
+        bc = cfg.get("keyBridge") if isinstance(cfg.get("keyBridge"), dict) else {}
+        buy = bc.get("buy") if isinstance(bc.get("buy"), dict) else {}
+        t = st.get("totals") if isinstance(st.get("totals"), dict) else {}
+        num = lambda k: int(t.get(k) or 0)  # noqa: E731
+        bought, sent, delivered = num("bought"), num("sent"), num("delivered")
+        offers = [o for o in (st.get("ownOffers") or {}).values() if isinstance(o, dict)]
+        in_offers = sum(len(o.get("assetIds") or []) for o in offers if o.get("open"))
+        failed = sum(len(o.get("assetIds") or []) for o in offers if not o.get("open") and o.get("finalState") not in (None, "Accepted"))
+        # отправленные, но не принятые (отклонены, истекли) ключи вернулись к LisBot и уйдут снова
+        waiting = max(0, bought - delivered - in_offers)
+        enabled = bool(bc.get("enabled"))
+        coming = (waiting + in_offers) if enabled else in_offers
+        return {"enabled": enabled, "buying": enabled and bool(buy.get("enabled")), "currency": (cfg.get("steam") if isinstance(cfg.get("steam"), dict) else {}).get("walletCurrencyCode") or "",
+                "bought": bought, "spent": _r((t.get("spentCents") or 0) / 100), "avg_price": _r(t["spentCents"] / 100 / bought) if bought and t.get("spentCents") else None,
+                "sent": sent, "delivered": delivered, "waiting": waiting, "in_offers": in_offers, "failed": failed, "coming": coming,
+                "buy_order": bool(st.get("buyOrder")), "max_price": buy.get("maxKeyPrice"), "per_day": buy.get("keysPerDay")}
 
     async def overview(self) -> dict:
         lis, mann = self.lisbot(), self.mannbot()
@@ -158,7 +189,7 @@ class Inventory:
             total[to] = {"cost": _r(sum(conv(v, c, to, rate) for v, c in parts if v is not None)),
                          "value": _r(conv(lis["value"], "USD", to, rate) + (conv(mann["value"], "RUB", to, rate) or 0)),
                          "pnl": _r(conv(lis["pnl"], "USD", to, rate))}
-        return {"lisbot": lis, "mannbot": mann, "total": total, "rate": rate}
+        return {"lisbot": lis, "mannbot": mann, "bridge": self.bridge(), "total": total, "rate": rate}
 
     def brief(self) -> dict:
         """Коротко для координатора и ежедневного отчёта."""
@@ -166,7 +197,8 @@ class Inventory:
         return {"lisbot": {k: lis[k] for k in ("n", "cost", "value", "pnl", "losing", "old", "old_days", "forecast")}
                 | {"flagged_items": [{k: i[k] for k in ("name", "days", "cost", "value", "pnl", "flags")}
                                      for i in lis["items"] if i["flags"]][:8]},
-                "mannbot": {k: mann[k] for k in ("stock", "per_day", "days_left", "level", "restock", "restock_cost", "target_days")}}
+                "mannbot": {k: mann[k] for k in ("stock", "per_day", "days_left", "level", "restock", "restock_cost", "target_days", "bridge_coming")},
+                "bridge": self.bridge()}
 
     def report_lines(self) -> list[str]:
         b = self.brief()
@@ -188,6 +220,14 @@ class Inventory:
                 line += f", хватит примерно на {mann['days_left']:.1f} дн ({mann['per_day']:.1f} в день)"
             if mann["level"] in ("low", "empty"):
                 line = "⚠ " + line + _restock_text(mann)
+            out.append(line)
+        br = b["bridge"]
+        if br["enabled"] or br["bought"]:
+            line = f"Мост ключей: куплено {br['bought']}, принято MannBot {br['delivered']}"
+            if br["coming"]:
+                line += f", в пути {br['coming']} (ждут 7 дн: {br['waiting']}, в обмене: {br['in_offers']})"
+            if not br["enabled"]:
+                line += " · мост выключен"
             out.append(line)
         b = self.lis_balance()
         if b["low"]:
