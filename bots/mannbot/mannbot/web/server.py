@@ -215,6 +215,15 @@ def make_app(sup, log_handler=None) -> web.Application:
         sup.db.exec("UPDATE alerts SET acknowledged=1")
         raise web.HTTPFound("/alerts")
 
+    async def api_alerts_ack(request: web.Request):
+        # JSON-вариант для центра: {"id": 5} — одна тревога, {"all": true} — все
+        data = await request.json()
+        if data.get("all"):
+            sup.db.exec("UPDATE alerts SET acknowledged=1")
+        else:
+            sup.db.exec("UPDATE alerts SET acknowledged=1 WHERE id=?", (int(data.get("id", 0)),))
+        return web.json_response({"ok": True})
+
     # ------------------------------------------------------------------ управление ботом
     async def control(request: web.Request):
         act = (await request.post()).get("action")
@@ -502,10 +511,10 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.post("/customers/{cid}", customer_action), web.post("/api/orders/{oid}", api_order),
         web.post("/api/customers/{cid:\\d+}", api_customer), web.get("/pricing", pricing), web.get("/alerts", alerts),
-        web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
-        web.get("/api/summary", api_status), web.get("/api/settings", api_settings),
-        web.post("/api/settings", api_settings),
-        web.get("/api/summary", api_status), web.get("/api/rtba", api_rtba), web.post("/api/rtba/config", api_rtba_config),
+        web.post("/alerts/ack", alerts_ack), web.post("/api/alerts/ack", api_alerts_ack),
+        web.post("/control", control), web.get("/api/status", api_status),
+        web.get("/api/summary", api_status), web.get("/api/settings", api_settings), web.post("/api/settings", api_settings),
+        web.get("/api/rtba", api_rtba), web.post("/api/rtba/config", api_rtba_config),
         web.get("/setup", setup), web.post("/setup", setup), web.post("/setup/mafile", setup_mafile),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),

@@ -16,6 +16,7 @@ from center.crm import Crm
 from center.events import EventStore
 from center.vault import SecretStore
 from center.rtba import Rtba
+from center.monitor import Monitor
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
 
 log = logging.getLogger("center")
@@ -44,12 +45,14 @@ class Center:
         self.analytics = Analytics(self)
         self.crm = Crm(self)
         self.rtba = Rtba(self)
+        self.monitor = Monitor(self)       # до записи «Центр запущен»: проверяет, не выключался ли центр аварийно
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))
 
     async def start(self) -> None:
         self.events.add("center", "info", "center.start", "Центр запущен" + (" (демо)" if self.demo else ""))
+        await self.monitor.start()
         for name, w in self.workers.items():
             if not self.enabled(name):
                 w._set(DISABLED, "выключен в center.yaml")
@@ -67,6 +70,7 @@ class Center:
             self._poll_task.cancel()
         await asyncio.gather(*(w.stop("завершение центра", timeout=stop_timeout) for w in self.workers.values()),
                              return_exceptions=True)
+        await self.monitor.stop()
         self.events.add("center", "info", "center.stop", "Центр остановлен")
         self.events.close()
 

@@ -65,8 +65,12 @@
     </div>
   </section>
 
-  <h2>Тревоги ботов</h2>
-  <div class="card"><table><thead><tr><th>Время</th><th>Бот</th><th>Уровень</th><th>Сообщение</th></tr></thead><tbody id="alerts"></tbody></table></div>
+
+  <h2>Мониторинг</h2>
+  <div id="monitor"></div>
+
+  <h2>Тревоги ботов <button class="btn small" onclick="ackAll()">Подтвердить все</button></h2>
+  <div class="card"><table><thead><tr><th>Время</th><th>Бот</th><th>Уровень</th><th>Сообщение</th><th></th></tr></thead><tbody id="alerts"></tbody></table></div>
 
   <h2>Журнал работы ботов</h2>
   <div class="card">
@@ -157,7 +161,7 @@ async function refresh() {
   $('#hdr').textContent = `работает ${fmtDur(state.uptime) || 'меньше минуты'}${state.demo ? ' · демо' : ''}`;
   $('#alertsBadge').innerHTML = state.open_alerts ? `<span class="badge s-crashed">тревог: ${state.open_alerts}</span>` : '';
   $('#bots').innerHTML = state.bots.map(botCard).join('');
-  $('#alerts').innerHTML = state.alerts.map((a) => `<tr style="${a.acked ? 'opacity:.55' : ''}"><td>${fmtTs(a.ts)}</td><td>${esc(a.source)}</td><td class="lv-${esc(a.level)}">${esc(a.level)}</td><td>${esc(a.message)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Тревог нет</td></tr>';
+  $('#alerts').innerHTML = state.alerts.map((a) => `<tr style="${a.acked ? 'opacity:.55' : ''}"><td>${fmtTs(a.ts)}</td><td>${esc(a.source)}</td><td class="lv-${esc(a.level)}">${esc(a.level)}</td><td>${esc(a.message)}</td><td>${a.acked ? '' : `<button class="btn small" title="Подтвердить тревогу в боте" onclick="ackAlert('${esc(a.source)}',${Number(a.id)})">✓</button>`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Тревог нет</td></tr>';
   $('#events').innerHTML = state.events.map((e) => `<tr><td>${fmtTs(e.ts)}</td><td>${esc(e.source)}</td><td class="lv-${esc(e.level)}">${esc(e.message)}</td></tr>`).join('');
   $('#logTabs').innerHTML = state.bots.map((b) => `<button class="btn ${b.name === logBot ? 'on' : ''}" onclick="switchLog('${b.name}')">${esc(b.title)}</button>`).join('');
 }
@@ -204,5 +208,6 @@ setInterval(refresh, 5000); setInterval(pollLog, 2000);
 <script src="/static/mannbot.js"></script>
 <script src="/static/analytics.js"></script>
 <script src="/static/crm.js"></script>
+<script src="/static/monitor.js"></script>
 </body>
 </html>

@@ -33,6 +33,7 @@ class EventStore:
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
         self.db.commit()
+        self.listeners: list = []      # вызываются с dict события после записи (мониторинг и др.)
 
     def add(self, source: str, level: str, kind: str, message: str, data: dict | None = None) -> int:
         with self._lock:
@@ -40,7 +41,15 @@ class EventStore:
                 "INSERT INTO events (ts, source, level, kind, message, data) VALUES (?,?,?,?,?,?)",
                 (time.time(), source, level, kind, message, json.dumps(data, ensure_ascii=False) if data else None))
             self.db.commit()
-            return int(cur.lastrowid)
+            eid = int(cur.lastrowid)
+        ev = {"id": eid, "ts": time.time(), "source": source, "level": level, "kind": kind, "message": message,
+              "data": data}
+        for fn in list(self.listeners):
+            try:
+                fn(ev)
+            except Exception:  # noqa: BLE001 — подписчик не должен ломать запись журнала
+                pass
+        return eid
 
     def recent(self, limit: int = 200, source: str | None = None) -> list[dict]:
         sql, args = "SELECT * FROM events", []
