@@ -72,6 +72,10 @@ test('общий аккаунт: обмен MannBot из реестра цент
   await env.conf.check();
   assert.deepEqual(env.steam.responded, []);
   assert.equal(env.guard.state.halted, false);
+  // тот же номер обмена, но другой состав — запомненное «своё» не помогает
+  const forged = env.offer(5001, BUYER, ['12', '777']);
+  await env.trades.onUnknownOutgoing(forged, 'audit');
+  assert.equal(env.guard.state.haltCode, 'UNKNOWN_OUTGOING_TRADE');
 });
 
 test('общий аккаунт: подтверждение раньше события обмена тоже узнаётся по составу из Steam', async () => {

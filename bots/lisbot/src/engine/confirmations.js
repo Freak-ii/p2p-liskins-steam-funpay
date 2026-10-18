@@ -61,7 +61,6 @@ export class ConfirmationWatcher {
   /** Обмен с этим id — обмен MannBot, записанный в центре? Состав берём из самого Steam, не из подтверждения. */
   async _mannbotTrade(offerId) {
     if (!this.shared?.enabled || !this.session.manager) return false;
-    if (this.shared.own.has(offerId)) return true;
     try {
       const offer = await new Promise((res, rej) => this.session.manager.getOffer(offerId, (err, o) => (err ? rej(err) : res(o))));
       return offer?.isOurOffer === true && String(offer?.id) === offerId && await this.shared.isOwn(offer);

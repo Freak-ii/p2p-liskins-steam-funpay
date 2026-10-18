@@ -12,7 +12,7 @@ export class SharedSteam {
   constructor({ url = '', token = '', shared = false, log, fetchImpl = globalThis.fetch } = {}) {
     Object.assign(this, { url: String(url).replace(/\/+$/, ''), token, log, fetchImpl });
     this.enabled = !!(shared && this.url && this.token);
-    this.own = new Map(); // offerId -> ref заказа MannBot (уже подтверждённые центром)
+    this.own = new Map(); // номер|получатель|предметы -> ref заказа MannBot (уже подтверждённые центром)
   }
 
   static fromEnv(env, log) {
@@ -23,17 +23,19 @@ export class SharedSteam {
   async isOwn(offer) {
     if (!this.enabled || !offer?.id) return false;
     const id = String(offer.id);
-    if (this.own.has(id)) return true;
     const give = (offer.itemsToGive || []).map((i) => ({ appid: Number(i.appid), assetid: String(i.assetid ?? i.id ?? '') }));
     const body = { offer_id: id, partner: offer.partner?.getSteamID64?.() || '', give, receive_count: (offer.itemsToReceive || []).length };
     if (!give.length || body.receive_count) return false;
+    // кэш по номеру И составу: тот же номер с другими предметами или получателем снова идёт в центр
+    const key = [id, body.partner, ...give.map((g) => `${g.appid}:${g.assetid}`).sort()].join('|');
+    if (this.own.has(key)) return true;
     try {
       const r = await this.fetchImpl(`${this.url}/check`, {
         method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(8000),
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}`, 'X-Bot': 'lisbot' },
       });
       const d = r.ok ? await r.json() : null;
-      if (d?.own === true && d.bot === 'mannbot') { this.own.set(id, d.ref); return true; }
+      if (d?.own === true && d.bot === 'mannbot') { this.own.set(key, d.ref); return true; }
       return false;
     } catch (e) {
       this.log?.warn?.(`Реестр обменов центра недоступен: ${errMsg(e)} — обмен ${id} считаю чужим`);
