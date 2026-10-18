@@ -17,7 +17,6 @@ import logging
 import shutil
 import sys
 import time
-from pathlib import Path
 
 import yaml
 
