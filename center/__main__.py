@@ -1,4 +1,4 @@
-"""Запуск центра перепродажи: python -m center [--home ПАПКА] [--port 8800] [--demo] [--no-browser]."""
+"""Запуск центра перепродажи: python -m center [--home ПАПКА] [--port 8800] [--demo] [--no-browser] [--restore КОПИЯ.zip]."""
 from __future__ import annotations
 
 import argparse
@@ -52,8 +52,17 @@ def setup_logging(home) -> None:
 
 async def run(home, host: str, port: int, *, demo: bool, open_browser: bool, on_ready=None) -> None:
     from center.app import Center
+    from center.backup import apply_pending_restore
     from center.web import start_web
+    restored, restore_error = None, None
+    try:
+        restored = apply_pending_restore(home)      # копия, выбранная в панели: до открытия баз и запуска ботов
+    except Exception as e:  # noqa: BLE001 — центр должен запуститься и с неудачным восстановлением
+        log.exception("восстановление резервной копии")
+        restore_error = str(e)
     center = Center(home, demo=demo)
+    if restored:
+        center.monitor.unclean = None      # копия снята с работающего центра: «аварийное выключение» в ней не настоящее
     token = center.cfg.ensure_token()
     runner = await start_web(center, host, port)
     shown = "127.0.0.1" if host in ("0.0.0.0", "") else host
@@ -64,6 +73,12 @@ async def run(home, host: str, port: int, *, demo: bool, open_browser: bool, on_
     if open_browser:
         webbrowser.open(url)
     await center.start()
+    if restored:
+        center.events.add("center", "warn", "backup.restored",
+                          f"Восстановлена резервная копия {restored['name']} (файлов {len(restored['restored'])}); "
+                          f"прежние данные сохранены в {restored['before'] or '—'}")
+    elif restore_error:
+        center.events.add("center", "critical", "backup.restore_failed", f"Резервная копия не восстановлена: {restore_error}")
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -107,6 +122,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--demo", action="store_true", help="MannBot в демо-режиме с эмуляцией FunPay и Steam")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--tray", action="store_true", help="значок в трее (портативная сборка для Windows)")
+    ap.add_argument("--restore", metavar="КОПИЯ.zip", help="восстановить резервную копию (центр должен быть закрыт) и выйти")
     args = ap.parse_args(argv)
 
     from pathlib import Path
@@ -117,6 +133,19 @@ def main(argv: list[str] | None = None) -> None:
     cfg = CenterConfig(home)
     host = args.host or cfg["center"]["host"]
     port = args.port or int(cfg["center"]["port"])
+    if args.restore:
+        if not _port_free(host, port) and _is_center(port):
+            sys.exit("Центр запущен: закройте его (кнопка «Выход» в панели) и повторите восстановление")
+        import zipfile
+        from center.backup import restore_backup
+        try:
+            res = restore_backup(Path(args.restore).expanduser(), home)
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as e:
+            sys.exit(f"Копия не восстановлена: {e}")
+        print(f"Восстановлено файлов: {len(res['restored'])} в {home}")
+        if res["before"]:
+            print(f"Прежние данные сохранены копией {home / 'backups' / res['before']}")
+        return
     if not _port_free(host, port):
         if _is_center(port):
             print(f"Центр уже запущен на порту {port}")

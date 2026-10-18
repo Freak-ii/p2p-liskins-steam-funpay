@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS monitor_kv (k TEXT PRIMARY KEY, v TEXT);
 
 # события журнала центра, о которых сообщаем всегда (плюс любые critical)
 NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.unhealthy", "worker.missing_deps",
-                "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop"}
+                "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
+                "backup.failed", "backup.restored"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
 
@@ -551,6 +552,10 @@ class Monitor:
                                    (since,)).fetchone()[0]
         lines.append("")
         lines.append(f"Центр работает {self._dur(now - self.center.started_at)} · критических событий {crit} · уведомлений {sent}")
+        bk = getattr(getattr(self.center, "backup", None), "last", None)
+        if bk:
+            lines.append(("Резервная копия " + time.strftime("%d.%m %H:%M", time.localtime(bk["at"]))) if bk.get("ok")
+                         else "⚠ Последняя резервная копия не удалась")
         return "\n".join(lines)
 
     @staticmethod

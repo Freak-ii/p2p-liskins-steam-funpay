@@ -14,6 +14,7 @@ from aiohttp import web
 from center.app import Center
 from center.bots import LIS_SECRET_KEYS, LisBotWorker, MannBotWorker, parse_mafile
 from center.crm import CrmError
+from center.backup import routes as backup_routes
 from center.coordinator import routes as coordinator_routes
 from center.monitor import routes as monitor_routes
 
@@ -296,6 +297,7 @@ def make_app(center: Center) -> web.Application:
     ])
     app.add_routes(monitor_routes(center))
     app.add_routes(coordinator_routes(center))
+    app.add_routes(backup_routes(center))
     app.router.add_static("/static/", STATIC)
     return app
 

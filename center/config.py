@@ -64,6 +64,12 @@ DEFAULTS: dict = {
         },
         "daily_report": {"enabled": True, "time": "09:00"},
     },
+    "backup": {                      # center/backup.py
+        "enabled": True,
+        "time": "04:00",             # ежедневная копия в это время (или при первом запуске после него)
+        "keep": 14,                  # сколько копий каждого вида хранить
+        "dir": "",                   # пусто — center-data/backups; можно папку Яндекс Диска / Google Drive
+    },
     "coordinator": {                 # center/coordinator.py
         "enabled": True,
         "check_seconds": 60,         # как часто сторож аномалий смотрит на ботов
