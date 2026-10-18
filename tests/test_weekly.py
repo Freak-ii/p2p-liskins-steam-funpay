@@ -39,3 +39,31 @@ def test_weekly_due_on_configured_weekday(tmp_path):
     c.cfg.save({"monitor": {"weekly_report": {"weekday": 1}}})
     assert c.monitor.weekly_due()
     c.events.close()
+
+
+def test_month_goal_progress_and_forecast(tmp_path):
+    import datetime as dt
+    seed(tmp_path)
+
+    async def go():
+        c = Center(tmp_path)
+        now = time.time()
+        g = await c.analytics.goal(now)
+        assert g["goal"] is None and g["progress"] is None
+        start = dt.datetime.fromtimestamp(now).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+        expected = sum(p for p, t in ((180.0, now - 2 * 86400), (90.0, now - 86400), (60.0, now - 86400), (30.0, now - 2 * 86400))
+                       if t >= start)
+        assert abs(g["profit"] - expected) < 1                          # LisBot +2/+1 $ ×90, MannBot 60/30 ₽
+        c.analytics.save_goal(10000)
+        g = await c.analytics.goal(now)
+        assert g["goal"] == 10000 and g["progress"] == round(g["profit"] / 100, 1)
+        assert g["forecast"] >= g["profit"]
+        token = c.cfg.ensure_token()
+        async with TestClient(TestServer(make_app(c))) as cl:
+            await cl.get(f"/login?token={token}", allow_redirects=False)
+            assert (await cl.post("/api/analytics/goal", json={"goal": -5})).status == 400
+            r = await (await cl.post("/api/analytics/goal", json={"goal": 20000})).json()
+            assert r["goal"] == 20000
+        assert "Цель месяца" in await c.monitor.weekly_report()
+        c.events.close()
+    asyncio.run(go())

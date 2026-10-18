@@ -341,6 +341,32 @@ class Analytics:
             out.append(row)
         return {"days": days, "currency": currency, "rate": rate, "series": out}
 
+    # ------------------------------------------------------------------ цель на месяц
+    async def goal(self, now: float | None = None) -> dict:
+        """Прибыль центра с начала месяца в ₽ против цели analytics.month_goal_rub и прогноз по текущему темпу."""
+        now = time.time() if now is None else now
+        today = dt.datetime.fromtimestamp(now)
+        start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        nxt = (start + dt.timedelta(days=32)).replace(day=1)
+        rate = (await self.usd_rub())["rate"]
+        profit = sum(self._conv(d["profit"], d["currency"], "RUB", rate) or 0
+                     for d in self.deals(start.timestamp()) if d["profit"] is not None and d["sold_at"] <= now)
+        elapsed = max(1 / 24, (now - start.timestamp()) / DAY)
+        days = (nxt - start).days
+        forecast = profit / elapsed * days
+        target = float(self.cfg.get("month_goal_rub") or 0)
+        return {"month": start.strftime("%Y-%m"), "days": days, "elapsed": _r(elapsed, 1), "profit": _r(profit),
+                "forecast": _r(forecast), "goal": target or None,
+                "progress": _r(profit / target * 100, 1) if target else None,
+                "forecast_pct": _r(forecast / target * 100, 1) if target else None,
+                "need_per_day": _r(max(0.0, target - profit) / max(1e-9, days - elapsed)) if target and days > elapsed else None}
+
+    def save_goal(self, value) -> None:
+        v = float(value or 0)
+        if v < 0 or v > 1e10:
+            raise ValueError("цель — неотрицательное число ₽")
+        self.center.cfg.save({"analytics": {"month_goal_rub": v}})
+
     # ------------------------------------------------------------------ детали по ботам
     def lisbot_details(self, days: float | None = None) -> dict:
         db = self.lis_db

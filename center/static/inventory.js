@@ -41,6 +41,29 @@ async function invLoad() {
     </div>`;
 }
 
+// Цель прибыли на месяц: прогресс и прогноз по темпу (/api/analytics/goal)
+async function goalLoad() {
+  let g;
+  try { g = await api('/api/analytics/goal'); } catch { return; }
+  const bar = g.goal ? `<div class="goalbar"><div style="width:${Math.min(100, g.progress || 0)}%"></div><span style="left:${Math.min(100, g.elapsed / g.days * 100)}%" title="сегодня"></span></div>` : '';
+  const ahead = g.goal && g.forecast_pct != null ? (g.forecast_pct >= 100 ? '<span class="pos">идём с опережением</span>' : '<span class="neg">отстаём от плана</span>') : '';
+  $('#goalBody').innerHTML = g.goal
+    ? `<div class="row small"><b>${money(g.profit, 'RUB')}</b>&nbsp;из ${money(g.goal, 'RUB')} · ${pct(g.progress)} · прогноз на месяц ${money(g.forecast, 'RUB')} (${pct(g.forecast_pct)}) · ${ahead}${g.need_per_day ? ` · нужно ${money(g.need_per_day, 'RUB')} в день` : ''}
+       <span class="spacer" style="flex:1"></span><button class="btn small" onclick="setGoal(${g.goal})">Изменить</button></div>${bar}`
+    : `<div class="row small">Прибыль с начала месяца ${money(g.profit, 'RUB')}, прогноз по темпу ${money(g.forecast, 'RUB')}.<span class="spacer" style="flex:1"></span><button class="btn small" onclick="setGoal(0)">Задать цель</button></div>`;
+}
+async function setGoal(cur) {
+  const v = prompt('Цель прибыли центра на месяц, ₽ (0 — без цели):', cur || '');
+  if (v == null) return;
+  const r = await api('/api/analytics/goal', { goal: Number(String(v).replace(/\s/g, '').replace(',', '.')) || 0 });
+  if (r.ok === false) flash(r.message, true);
+  goalLoad();
+}
+document.querySelector('#anPnl').closest('.card').insertAdjacentHTML('beforebegin',
+  '<div class="card" style="margin-bottom:14px"><div class="row"><h3>Цель месяца</h3></div><div id="goalBody" class="muted small">Загрузка…</div></div>');
+goalLoad();
+setInterval(goalLoad, 60000);
+
 document.querySelector('#analytics').insertAdjacentHTML('beforeend',
   '<div class="card" style="margin-top:14px"><div class="row"><h3>Склад сейчас</h3></div><div id="invBody" class="muted small">Загрузка…</div></div>');
 document.querySelector('#anCur').addEventListener('click', () => setTimeout(invLoad, 0));

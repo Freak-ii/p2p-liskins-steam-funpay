@@ -276,6 +276,15 @@ def make_app(center: Center) -> web.Application:
             res = await asyncio.to_thread(center.rtba.backtest_mannbot, variants, float(data.get("days") or 30))
         return web.json_response(res)
 
+    async def an_goal(request: web.Request):
+        if request.method == "POST":
+            try:
+                center.analytics.save_goal((await request.json()).get("goal"))
+            except (ValueError, TypeError) as e:
+                return web.json_response({"ok": False, "message": str(e)}, status=400)
+            center.events.add("center", "info", "settings", "Цель прибыли на месяц изменена из панели центра")
+        return web.json_response(await center.analytics.goal())
+
     async def quit_center(request: web.Request):
         asyncio.get_running_loop().call_later(0.5, center.quit_event.set)
         return web.json_response({"ok": True, "message": "Центр завершает работу"})
@@ -291,6 +300,7 @@ def make_app(center: Center) -> web.Application:
         web.post("/api/quit", quit_center),
         web.get("/api/analytics/pnl", an_pnl), web.get("/api/analytics/daily", an_daily),
         web.get("/api/analytics/bot/{name:lisbot|mannbot}", an_bot),
+        web.get("/api/analytics/goal", an_goal), web.post("/api/analytics/goal", an_goal),
         web.get("/api/analytics/export.{fmt:csv|xlsx}", an_export),
         web.get("/api/crm/deals", crm_deals), web.get("/api/crm/deals.csv", crm_export),
         web.get("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal), web.post("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal),

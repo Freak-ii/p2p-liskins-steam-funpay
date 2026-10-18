@@ -751,6 +751,10 @@ class Coordinator:
                 "SELECT source, kind, message FROM events WHERE ts>=? AND level IN ('critical','warn') ORDER BY id DESC LIMIT 15",
                 (self.clock() - 86400,))]
         try:
+            out["month_goal"] = await c.analytics.goal(self.clock())
+        except Exception as e:  # noqa: BLE001
+            out["month_goal"] = {"error": str(e)}
+        try:
             out["inventory"] = c.inventory.brief()
         except Exception as e:  # noqa: BLE001
             out["inventory"] = {"error": str(e)}

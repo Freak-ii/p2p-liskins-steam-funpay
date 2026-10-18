@@ -131,3 +131,6 @@ select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; ba
 .co-s-rejected, .co-s-expired { color: var(--muted); }
 #alerts td:nth-child(4), #events td:nth-child(3) { overflow-wrap: anywhere; min-width: 12em; }
 .kpi b span { font-size: inherit; color: inherit; } .kpi b span.pos { color: var(--ok); } .kpi b span.neg { color: var(--bad); }
+.goalbar { position: relative; height: 10px; border-radius: 5px; background: var(--bg); margin-top: 8px; overflow: visible; }
+.goalbar div { height: 100%; border-radius: 5px; background: var(--ok); }
+.goalbar span { position: absolute; top: -3px; width: 2px; height: 16px; background: var(--muted); }
