@@ -17,6 +17,7 @@ import { ConfirmationWatcher } from './engine/confirmations.js';
 import { Seller } from './engine/seller.js';
 import { BalanceWatcher } from './engine/balanceWatcher.js';
 import { KeyBridge } from './engine/keyBridge.js';
+import { SharedSteam } from './engine/sharedSteam.js';
 import { summary, textReport, perItem } from './analytics.js';
 import { startDashboard } from './web/server.js';
 import { startDemo } from './emu/demo.js';
@@ -112,7 +113,11 @@ export class Bot {
     this.balanceWatcher.lock = this.buyer.lock;
     this.tracker = new PurchaseTracker({ cfg, db, lis: this.lis, guard, log: log.child('track'), notify: this.notify });
     this.trades = new TradeHandler({ cfg, db, session: this.session, guard, notify: this.notify, log: log.child('trade') });
-    this.conf = new ConfirmationWatcher({ session: this.session, db, guard, log: log.child('conf'), strict: cfg.risk.strictConfirmations });
+    // один аккаунт Steam с MannBot: его обмены, записанные в центре, не считаются взломом
+    this.shared = SharedSteam.fromEnv(process.env, log.child('shared'));
+    if (this.shared.enabled) log.info('Steam: общий аккаунт с MannBot, его обмены сверяются с реестром центра');
+    this.trades.shared = this.shared;
+    this.conf = new ConfirmationWatcher({ session: this.session, db, guard, log: log.child('conf'), strict: cfg.risk.strictConfirmations, shared: this.shared });
     this.seller = new Seller({ cfg, db, session: this.session, market: this.market, conf: this.conf, valuator: this.valuator, fx: this.fx, guard, notify: this.notify, log: log.child('sell') });
     this.bridge = new KeyBridge({ cfg, db, session: this.session, market: this.market, conf: this.conf, guard, notify: this.notify, log: log.child('keys') });
     this.trades.bridge = this.bridge;

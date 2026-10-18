@@ -9,8 +9,8 @@ const TYPE_MARKET = 3;
  * (трейд, чужой лот, новый тип) — критическая тревога и отмена.
  */
 export class ConfirmationWatcher {
-  constructor({ session, db, guard, log, strict = true }) {
-    Object.assign(this, { session, db, guard, log, strict });
+  constructor({ session, db, guard, log, strict = true, shared = null }) {
+    Object.assign(this, { session, db, guard, log, strict, shared });
     this.expected = new Map(); // listingId -> { itemId, ts }
     this.graceUntil = 0; // пока бот сам выставляет лот, его подтверждение ещё «без имени»
     this.expectedTrades = new Set(); // id исходящих офферов моста ключей (создал сам бот)
@@ -58,6 +58,19 @@ export class ConfirmationWatcher {
     return true;
   }
 
+  /** Обмен с этим id — обмен MannBot, записанный в центре? Состав берём из самого Steam, не из подтверждения. */
+  async _mannbotTrade(offerId) {
+    if (!this.shared?.enabled || !this.session.manager) return false;
+    if (this.shared.own.has(offerId)) return true;
+    try {
+      const offer = await new Promise((res, rej) => this.session.manager.getOffer(offerId, (err, o) => (err ? rej(err) : res(o))));
+      return offer?.isOurOffer === true && String(offer?.id) === offerId && await this.shared.isOwn(offer);
+    } catch (e) {
+      this.log.warn(`Подтверждение обмена ${offerId}: не удалось получить обмен: ${errMsg(e)}`);
+      return false;
+    }
+  }
+
   async check() {
     let confs;
     try { confs = await this.session.getConfirmations(); this.guard.recordSuccess('steam-conf'); } catch (e) { this.guard.recordError('steam-conf', e); return; }
@@ -80,6 +93,8 @@ export class ConfirmationWatcher {
       }
       if (c.type === TYPE_MARKET && Date.now() < this.graceUntil) continue;
       if (c.type === TYPE_MARKET && this.db.db.prepare("SELECT 1 FROM items WHERE listing_id=? AND status IN ('listing','listed')").get(id)) continue;
+      // один аккаунт с MannBot: подтверждение его обмена, записанного в центре, подтверждает сам MannBot
+      if (c.type === TYPE_TRADE && await this._mannbotTrade(id)) continue;
       const kind = c.type === TYPE_TRADE ? 'обмен' : c.type === TYPE_MARKET ? 'лот на ТП' : `тип ${c.type}`;
       if (!this.strict) { this.guard.warn('FOREIGN_CONFIRMATION', `Ожидает подтверждения ${kind} «${c.title}», созданный не ботом — не трогаю (risk.strictConfirmations=false)`); continue; }
       this.guard.critical('UNKNOWN_CONFIRMATION', `Неизвестное мобильное подтверждение (${kind}): «${c.title}» ${c.sending || ''}. Бот его не создавал — отменяю. Если это не вы — СРОЧНО смените пароль и отзовите Web API ключ.`, { id: c.id, creator: id, type: c.type });
