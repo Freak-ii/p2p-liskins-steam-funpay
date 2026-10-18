@@ -135,6 +135,8 @@ class MannBotWorker(BotWorker):
 
     def command(self) -> list[str]:
         py = self.executable or sys.executable
+        if Path(py).name.lower() == "pythonw.exe":            # центр в трее работает без консоли, бот — с выводом
+            py = str(Path(py).with_name("python.exe"))
         cmd = [py, "-m", "mannbot.app.launcher", "--home", str(self.home), "--host", self.bind_host,
                "--port", str(self.port), "--no-browser"]
         if self.demo:
@@ -356,7 +358,7 @@ class LisBotWorker(BotWorker):
         return self.home / "data"
 
     def node(self) -> str | None:
-        return self.executable or shutil.which("node")
+        return self.executable or os.environ.get("CENTER_NODE") or shutil.which("node")
 
     def check_deps(self) -> str | None:
         try:
