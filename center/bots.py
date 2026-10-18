@@ -106,7 +106,7 @@ class BotWorker(Worker):
 # он нужен центру для входа и бесполезен вне этого компьютера)
 MANN_SECRET_FIELDS = [("funpay", "golden_key"), ("steam", "password"), ("steam", "shared_secret"),
                       ("steam", "identity_secret"), ("steam", "login_secure_cookie"), ("steam", "api_key"),
-                      ("notifications.telegram", "bot_token")]
+                      ("notifications.telegram", "bot_token"), ("ai", "api_key")]
 
 
 def mann_secret_env(section: str, key: str) -> str:

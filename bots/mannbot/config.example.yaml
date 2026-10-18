@@ -128,3 +128,24 @@ sla:
   link_wait_minutes: 120
   offer_accept_hours: 12
   order_total_hours: 24
+
+# ИИ-агент для покупателей: отвечает на сообщения, которые бот не понял.
+# Без api_key агент выключен, бот пересылает такие сообщения продавцу, как раньше.
+ai:
+  enabled: false
+  api_key: ${ANTHROPIC_API_KEY}   # ключ Claude API (console.anthropic.com)
+  model: claude-opus-5-5
+  effort: low                     # low | medium | high — глубина размышления
+  # suggest — черновик продавцу на одобрение (/aiok N, /aiedit N текст, /aino N)
+  # auto_safe — темы из auto_topics отвечает сам, остальное — на одобрение
+  mode: suggest
+  auto_topics: [order_status, trade_link_help, delivery_help]
+  min_confidence: 0.8
+  seller_tone: "Вежливо, коротко, на «вы», можно один эмодзи"
+  max_reply_chars: 700
+  history_messages: 12            # сколько сообщений чата видит агент
+  max_calls_per_chat_hour: 6
+  draft_ttl_minutes: 60           # устаревший черновик нельзя одобрить в один клик
+  timeout_seconds: 40
+  server_fallback: true           # при отказе модели Claude API сам повторит запрос на запасной модели
+  backend: claude                 # stub — заглушка без сети (для проверки)

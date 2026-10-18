@@ -12,6 +12,8 @@ import jinja2
 from aiohttp import web
 from yarl import URL
 
+from mannbot.ai import guard
+from mannbot.ai.agent import STATUS_TEXT as AI_STATUS, TOPIC_TEXT as AI_TOPICS
 from mannbot.analytics.analytics import fmt_dur
 from mannbot.app import schema
 from mannbot.app.supervisor import parse_mafile
@@ -66,6 +68,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("app", sup.status())
         ctx.setdefault("paused", sup.engine.paused)
         ctx.setdefault("dry_run", sup.cfg.general.dry_run)
+        ctx.setdefault("ai_pending", db.scalar("SELECT COUNT(*) FROM ai_replies WHERE status='pending'"))
         ctx.setdefault("alerts_open", db.scalar("SELECT COUNT(*) FROM alerts WHERE acknowledged=0 AND level!='INFO'"))
         ctx.setdefault("flash", request.query.get("msg", "") if request is not None else "")
         ctx.setdefault("path", request.path if request is not None else "")
@@ -223,6 +226,42 @@ def make_app(sup, log_handler=None) -> web.Application:
         else:
             sup.db.exec("UPDATE alerts SET acknowledged=1 WHERE id=?", (int(data.get("id", 0)),))
         return web.json_response({"ok": True})
+    # ------------------------------------------------------------------ ИИ-агент
+    def _ai_rows(status: str = "", limit: int = 200):
+        sql, params = "SELECT * FROM ai_replies", []
+        if status:
+            sql += " WHERE status=?"
+            params.append(status)
+        return sup.db.q(sql + " ORDER BY id DESC LIMIT ?", [*params, limit])
+
+    async def ai_page(request: web.Request):
+        st = request.query.get("status", "")
+        days = float(request.query.get("days", 30))
+        return render("ai.html", request, rows=_ai_rows(st), st=st, days=days, stats=sup.engine.ai.stats(days),
+                      ai=sup.engine.ai.state(), cfg=sup.cfg.ai, topic_text=AI_TOPICS, status_text=AI_STATUS,
+                      guard_text=guard.ISSUE_TEXT)
+
+    async def ai_action(request: web.Request):
+        rid = int(request.match_info["rid"])
+        data = await request.post()
+        act = str(data.get("action", ""))
+        ai = sup.engine.ai
+        if act in ("rate_up", "rate_down", "rate_clear"):
+            ai.rate(rid, {"rate_up": 1, "rate_down": -1, "rate_clear": 0}[act])
+            msg = "оценка сохранена"
+        elif act in ("approve", "edit", "reject"):
+            if act != "reject" and sup.state != "running" and not sup.status()["demo"]:
+                raise back(request, "Сначала запустите бота", "/ai")
+            msg = await ai.decide(rid, act, str(data.get("text", "")), by="dashboard")
+        else:
+            msg = "неизвестное действие"
+        raise back(request, msg, "/ai")
+
+    async def api_ai(request: web.Request):
+        days = float(request.query.get("days", 30))
+        rows = _ai_rows(request.query.get("status", ""), min(500, int(request.query.get("limit", 50))))
+        return web.json_response({**sup.engine.ai.state(), "stats": sup.engine.ai.stats(days),
+                                  "replies": [{**dict(r), "issues": json.loads(r["issues"] or "[]")} for r in rows]})
 
     # ------------------------------------------------------------------ управление ботом
     async def control(request: web.Request):
@@ -250,7 +289,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         raise back(request, msg)
 
     async def api_status(request: web.Request):
-        return web.json_response({**sup.status(), "summary": sup.analytics.summary(1)})
+        return web.json_response({**sup.status(), "summary": sup.analytics.summary(1), "ai": sup.engine.ai.state()})
 
     # ------------------------------------------------------------------ RTBA для центра (JSON)
     async def api_rtba(request: web.Request):
@@ -518,7 +557,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/setup", setup), web.post("/setup", setup), web.post("/setup/mafile", setup_mafile),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),
-        web.post("/api/preview", preview_message), web.get("/logs", logs), web.get("/api/logs", api_logs),
+        web.post("/api/preview", preview_message), web.get("/ai", ai_page), web.post("/ai/{rid}", ai_action),
+        web.get("/api/ai", api_ai), web.get("/logs", logs), web.get("/api/logs", api_logs),
     ])
     return app
 

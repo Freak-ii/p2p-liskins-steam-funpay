@@ -22,7 +22,7 @@ OUT_DIR = BUILD / "MannBot"
 DIST = ROOT / "dist"
 PY_MINOR = "3.12"
 REQUIREMENTS = ["aiohttp>=3.9", "beautifulsoup4>=4.12", "lxml>=5.0", "PyYAML>=6.0", "Jinja2>=3.1",
-                "cryptography>=42"]
+                "cryptography>=42", "anthropic>=1.15"]
 
 BAT = r"""@echo off
 chcp 65001 >nul
