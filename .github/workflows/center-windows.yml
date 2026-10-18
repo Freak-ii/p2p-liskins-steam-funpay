@@ -86,3 +86,21 @@ jobs:
           if (-not $p.WaitForExit(60000)) { Get-Content "$root\data\demo\logs\center.log" -Tail 40; throw "центр в трее не завершился" }
           Get-Content "$root\data\demo\logs\center.log" -Tail 15 -Encoding utf8
           if (Select-String -Path "$root\data\demo\logs\center.log" -Pattern "Traceback|pystray не установлен" -Quiet) { throw "ошибка значка в трее" }
+  # Тег center-v* → после сборки и всех проверок на Windows публикуется GitHub Release с портативным zip.
+  release:
+    if: startsWith(github.ref, 'refs/tags/center-v')
+    needs: [build, windows-tests, windows-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: Center-Windows-x64-portable }
+      - name: Выпуск
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" Center-Windows-x64-portable.zip --repo "$GITHUB_REPOSITORY" \
+            --title "Центр перепродажи ${TAG#center-v}" --notes-file packaging/release-notes.md --prerelease

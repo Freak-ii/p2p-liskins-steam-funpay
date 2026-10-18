@@ -12,7 +12,7 @@ import urllib.request
 import webbrowser
 from logging.handlers import RotatingFileHandler
 
-from center import winutil
+from center import __version__, winutil
 from center.config import CenterConfig, default_home
 
 log = logging.getLogger("center")
@@ -58,7 +58,7 @@ async def run(home, host: str, port: int, *, demo: bool, open_browser: bool, on_
     runner = await start_web(center, host, port)
     shown = "127.0.0.1" if host in ("0.0.0.0", "") else host
     url = f"http://{shown}:{port}/login?token={token}"
-    log.info("Панель центра: http://%s:%s/", shown, port)
+    log.info("Центр перепродажи %s. Панель центра: http://%s:%s/", __version__, shown, port)
     if sys.stdout is not None:
         print(f"\n  Центр открыт: {url}\n  Данные: {home}\n  Ctrl+C — выход.\n", flush=True)
     if open_browser:

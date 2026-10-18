@@ -30,8 +30,8 @@
 
 ## Шаг 1. Скачать и распаковать
 
-1. Откройте последнюю сборку: [Center Windows, запуск для PR #10](https://github.com/Freak-ii/p2p-liskins-steam-funpay/actions/runs/39095984882). Внизу страницы, в блоке **Artifacts**, скачайте `Center-Windows-x64-portable` (нужен вход в GitHub). Для более свежих PR: вкладка PR → Checks → **Center Windows** → Summary → Artifacts.
-2. GitHub отдаёт zip внутри zip: распакуйте скачанный архив, внутри будет `Center-Windows-x64-portable.zip`, распакуйте и его.
+1. Откройте [выпуски центра](https://github.com/Freak-ii/p2p-liskins-steam-funpay/releases) и в самом свежем скачайте `Center-Windows-x64-portable.zip` (блок **Assets**).
+2. Распакуйте архив. Сборки из PR, которые ещё не выпущены, лежат во вкладке PR → Checks → **Center Windows** → Summary → Artifacts; там GitHub отдаёт zip внутри zip, распакуйте оба.
 3. Положите папку `Center` в путь **без кириллицы и пробелов**, например `C:\Center`. Python и Node.js уже внутри, ставить ничего не нужно.
 
 Внутри:

@@ -13,7 +13,7 @@ import time
 
 import aiohttp
 
-from center.analytics import _r, _rows
+from center.analytics import _cached, _r, _rows
 from center.workers import RUNNING
 
 log = logging.getLogger("center.crm")
@@ -66,6 +66,11 @@ class Crm:
 
     # ------------------------------------------------------------------ сделки
     def lis_deals(self) -> list[dict]:
+        """Все сделки LisBot (общий кэш до следующей записи бота: список и словари не менять)."""
+        db = self.an.lis_db
+        return _cached(("crm.lis", str(db)), db, self._lis_deals)
+
+    def _lis_deals(self) -> list[dict]:
         out = []
         for r in _rows(self.an.lis_db, "SELECT * FROM items ORDER BY id"):
             r = dict(r)
@@ -87,7 +92,11 @@ class Crm:
         return out
 
     def mann_deals(self) -> list[dict]:
-        cost_key, fee = self.an.mann_costs()
+        """Все заказы MannBot (общий кэш до следующей записи бота: список и словари не менять)."""
+        db, costs = self.an.mann_db, self.an.mann_costs()
+        return _cached(("crm.mann", str(db), costs), db, lambda: self._mann_deals(*costs))
+
+    def _mann_deals(self, cost_key: float, fee: float) -> list[dict]:
         out = []
         for r in _rows(self.an.mann_db, "SELECT * FROM orders ORDER BY created_at"):
             r = dict(r)
@@ -112,13 +121,24 @@ class Crm:
     def all_deals(self) -> list[dict]:
         return self.lis_deals() + self.mann_deals()
 
-    def deals(self, *, q: str = "", bot: str = "", group: str = "", days: float | None = None, dry: bool = False,
-              sort: str = "created_at", desc: bool = True, limit: int = 100, offset: int = 0) -> dict:
-        rows = self.all_deals()
+    def deals(self, *, limit: int = 100, offset: int = 0, **filters) -> dict:
+        rows, groups, totals = self._select(**filters)
+        limit = max(1, min(int(limit), 1000))
+        return {"total": len(rows), "offset": offset, "limit": limit, "groups": groups, "group_names": GROUPS,
+                "totals": {c: {k: _r(v) for k, v in t.items()} for c, t in totals.items()},
+                "rows": [{k: _r(v) if isinstance(v, float) else v for k, v in d.items()} for d in rows[offset:offset + limit]]}
+
+    def _select(self, *, q: str = "", bot: str = "", group: str = "", days: float | None = None, dry: bool = False,
+                sort: str = "created_at", desc: bool = True) -> tuple[list[dict], dict, dict]:
+        """Отфильтрованные и отсортированные сделки (вся выборка), счётчики групп и итоги по валютам."""
+        if bot == "lisbot":
+            rows = list(self.lis_deals())
+        elif bot == "mannbot":
+            rows = list(self.mann_deals())
+        else:
+            rows = self.all_deals()
         if not dry:
             rows = [d for d in rows if not d["dry_run"]]
-        if bot:
-            rows = [d for d in rows if d["bot"] == bot]
         if days:
             since = time.time() - days * DAY
             rows = [d for d in rows if d["created_at"] >= since or (d["closed_at"] or 0) >= since]
@@ -140,10 +160,7 @@ class Crm:
             t["amount"] += d["amount"] or 0
             t["revenue"] += d["revenue"] or 0
             t["profit"] += d["profit"] or 0
-        limit = max(1, min(int(limit), 1000))
-        return {"total": len(rows), "offset": offset, "limit": limit, "groups": groups, "group_names": GROUPS,
-                "totals": {c: {k: _r(v) for k, v in t.items()} for c, t in totals.items()},
-                "rows": [{k: _r(v) if isinstance(v, float) else v for k, v in d.items()} for d in rows[offset:offset + limit]]}
+        return rows, groups, totals
 
     def deal(self, bot: str, ref: str) -> dict:
         if bot == "lisbot":
@@ -171,6 +188,11 @@ class Crm:
 
     # ------------------------------------------------------------------ покупатели FunPay
     def _customer_rows(self) -> tuple[list[dict], dict[int, list[dict]], dict[str, set[int]]]:
+        """Покупатели, их заказы и владельцы Steam-аккаунтов (общий кэш до следующей записи MannBot: не менять)."""
+        db = self.an.mann_db
+        return _cached(("crm.customers", str(db)), db, self._load_customers)
+
+    def _load_customers(self) -> tuple[list[dict], dict[int, list[dict]], dict[str, set[int]]]:
         db = self.an.mann_db
         custs = [dict(r) for r in _rows(db, "SELECT * FROM customers")]
         orders: dict[int, list[dict]] = {}
@@ -354,14 +376,9 @@ class Crm:
 
     def export_rows(self, **filters) -> list[list]:
         import datetime as dt
-        data = self.deals(**filters, limit=1000, offset=0)
-        rows = data["rows"]
-        if data["total"] > len(rows):                 # выгрузка — вся выборка, а не одна страница
-            rows = [self.deals(**filters, limit=1000, offset=o)["rows"] for o in range(0, data["total"], 1000)]
-            rows = [r for page in rows for r in page]
         out = [[t for _, t in self.EXPORT_COLS]]
-        for d in rows:
-            d = dict(d)
+        for d in self._select(**filters)[0]:          # выгрузка — вся выборка, а не одна страница
+            d = {k: _r(v) if isinstance(v, float) else v for k, v in d.items()}
             for k in ("created_at", "closed_at"):
                 d[k] = dt.datetime.fromtimestamp(d[k]).strftime("%Y-%m-%d %H:%M") if d[k] else ""
             out.append([d[k] for k, _ in self.EXPORT_COLS])
