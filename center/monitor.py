@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS monitor_kv (k TEXT PRIMARY KEY, v TEXT);
 
 # события журнала центра, о которых сообщаем всегда (плюс любые critical)
 NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.unhealthy", "worker.missing_deps",
-                "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop"}
+                "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
+                "backup.failed", "backup.restored", "inventory.low_stock"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
 
@@ -156,7 +157,8 @@ class Monitor:
         return {
             "telegram_enabled": bool(tg.get("enabled", True)), "telegram_token": "",
             "telegram_token_set": bool(self._token()), "telegram_chat_id": str(tg.get("chat_id") or ""),
-            "telegram_source": src, "dedup_minutes": c.get("dedup_minutes"), "quiet_hours": c.get("quiet_hours") or "",
+            "telegram_source": src, "telegram_commands": bool(tg.get("commands", True)),
+            "telegram_commands_state": getattr(getattr(self.center, "tg", None), "state", {}), "dedup_minutes": c.get("dedup_minutes"), "quiet_hours": c.get("quiet_hours") or "",
             "quiet_allow_critical": bool(c.get("quiet_allow_critical", True)),
             "bot_alert_levels": list(c.get("bot_alert_levels") or []),
             "heartbeat_url": (c.get("heartbeat") or {}).get("url") or "",
@@ -168,7 +170,8 @@ class Monitor:
         }
 
     def save_settings(self, d: dict) -> None:
-        tg: dict = {"enabled": bool(d.get("telegram_enabled", True)), "chat_id": str(d.get("telegram_chat_id") or "").strip()}
+        tg: dict = {"enabled": bool(d.get("telegram_enabled", True)), "chat_id": str(d.get("telegram_chat_id") or "").strip(),
+                    "commands": bool(d.get("telegram_commands", True))}
         vault = getattr(self.center, "vault", None)
         new_token = None
         if d.get("telegram_token"):                       # пустое поле = «не менять сохранённый токен»
@@ -269,7 +272,7 @@ class Monitor:
         with self._lock:
             return [dict(r) for r in self.db.execute("SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (limit,))]
 
-    async def send_telegram(self, text: str) -> tuple[bool, str]:
+    async def send_telegram(self, text: str, buttons: dict | None = None) -> tuple[bool, str]:
         token, ids, _ = self.telegram_target()
         if not token:
             return False, "no_channel"
@@ -277,16 +280,17 @@ class Monitor:
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
                 for chat in ids:
-                    async with s.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                                      json={"chat_id": chat, "text": text[:4000], "parse_mode": "HTML",
-                                            "disable_web_page_preview": True}) as r:
+                    payload = {"chat_id": chat, "text": text[:4000], "parse_mode": "HTML", "disable_web_page_preview": True}
+                    if buttons:
+                        payload["reply_markup"] = buttons
+                    async with s.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload) as r:
                         if r.status != 200:
                             ok_all, info = False, f"failed: HTTP {r.status} {(await r.text())[:200]}"
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
             return False, f"failed: {e}"
         return ok_all, info
 
-    async def notify(self, key: str, level: str, text: str, *, force: bool = False) -> str:
+    async def notify(self, key: str, level: str, text: str, *, force: bool = False, buttons: dict | None = None) -> str:
         """Уведомить с дедупликацией и тихими часами. Возвращает статус записи."""
         now = self.clock()
         level = level.lower()
@@ -305,7 +309,7 @@ class Monitor:
         self._last_sent[key] = now
         extra = self._suppressed.pop(key, 0)
         body = f"{ICONS.get(level, '')} {text}" + (f"\n<i>(ещё {extra} похожих скрыто)</i>" if extra else "")
-        ok, info = await self.send_telegram(body)
+        ok, info = await (self.send_telegram(body, buttons) if buttons else self.send_telegram(body))
         status = "sent" if ok else ("no_channel" if info == "no_channel" else "failed")
         if status == "failed":
             log.warning("Telegram: %s", info)
@@ -549,9 +553,96 @@ class Monitor:
             crit = self.db.execute("SELECT COUNT(*) FROM events WHERE ts >= ? AND level='critical'", (since,)).fetchone()[0]
             sent = self.db.execute("SELECT COUNT(*) FROM notifications WHERE ts >= ? AND status != 'duplicate'",
                                    (since,)).fetchone()[0]
+        inv = getattr(self.center, "inventory", None)
+        if inv:
+            try:
+                stock = inv.report_lines()
+            except Exception:  # noqa: BLE001
+                stock = []
+            if stock:
+                lines.append("")
+                lines += [html.escape(x) for x in stock]
         lines.append("")
         lines.append(f"Центр работает {self._dur(now - self.center.started_at)} · критических событий {crit} · уведомлений {sent}")
+        bk = getattr(getattr(self.center, "backup", None), "last", None)
+        if bk:
+            lines.append(("Резервная копия " + time.strftime("%d.%m %H:%M", time.localtime(bk["at"]))) if bk.get("ok")
+                         else "⚠ Последняя резервная копия не удалась")
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------ недельный отчёт
+    async def weekly_report(self) -> str:
+        """Неделя против прошлой: сделки, выручка, прибыль по ботам в ₽, лучшие и худшие предметы LisBot,
+        аптайм за 7 дней, склад."""
+        now = self.clock()
+        a = self.center.analytics
+        rate = (await a.usd_rub())["rate"]
+        deals = a.deals(now - 14 * 86400)
+        rub = lambda v, d: a._conv(v, d["currency"], "RUB", rate) or 0  # noqa: E731
+
+        def stats(sel):
+            known = [d for d in sel if d["profit"] is not None]
+            return {"n": len(sel), "rev": sum(rub(d["revenue"], d) for d in sel), "profit": sum(rub(d["profit"], d) for d in known)}
+
+        def delta(cur, prev):
+            if not prev:
+                return ""
+            ch = (cur - prev) / abs(prev) * 100
+            return f" ({'+' if ch >= 0 else '−'}{abs(ch):.0f}% к прошлой)"
+
+        week = [d for d in deals if d["sold_at"] >= now - 7 * 86400]
+        prev = [d for d in deals if d["sold_at"] < now - 7 * 86400]
+        lines = [f"<b>📅 Неделя центра</b> · {time.strftime('%d.%m', time.localtime(now - 7 * 86400))}–"
+                 f"{time.strftime('%d.%m.%Y', time.localtime(now))}"]
+        tw, tp = stats(week), stats(prev)
+        lines.append(f"Сделок {tw['n']}{delta(tw['n'], tp['n'])} · выручка {_num(round(tw['rev']))} ₽"
+                     f"{delta(tw['rev'], tp['rev'])}")
+        lines.append(f"<b>Прибыль {_num(round(tw['profit']))} ₽</b>{delta(tw['profit'], tp['profit'])}")
+        for name, w in self.center.workers.items():
+            bw, bp = stats([d for d in week if d["bot"] == name]), stats([d for d in prev if d["bot"] == name])
+            lines.append(f"• {html.escape(w.title)}: сделок {bw['n']}, прибыль {_num(round(bw['profit']))} ₽"
+                         f"{delta(bw['profit'], bp['profit'])}")
+        items: dict[str, list[float]] = defaultdict(list)
+        for d in week:
+            if d["bot"] == "lisbot" and d["profit"] is not None:
+                items[d["name"]].append(d["profit"])
+        ranked = sorted(((sum(v), len(v), k) for k, v in items.items()), reverse=True)
+        if ranked:
+            lines += ["", "<b>LisBot, лучшие предметы недели</b>"]
+            lines += [f"{i + 1}. {html.escape(k)} — {'+' if p >= 0 else '−'}${abs(p):.2f} за {n} шт" for i, (p, n, k) in enumerate(ranked[:3])]
+            losers = [(p, n, k) for p, n, k in ranked if p < 0][-3:]
+            if losers:
+                lines += ["<b>В минус</b>"] + [f"• {html.escape(k)} — −${abs(p):.2f} за {n} шт" for p, n, k in reversed(losers)]
+        g = await a.goal(now)
+        if g["goal"]:
+            lines.append(f"Цель месяца: {_num(round(g['profit']))} из {_num(round(g['goal']))} ₽ ({_pct(g['progress'] / 100)}), "
+                         f"прогноз {_num(round(g['forecast']))} ₽")
+        h = self.history(24 * 7, buckets=28)
+        lines += ["", "Аптайм за неделю: " + " · ".join(
+            f"{html.escape(self.center.workers[n].title.split(' ·')[0])} {_pct(b['uptime'])}, падений {b['crashes']}"
+            for n, b in h["bots"].items())]
+        inv = getattr(self.center, "inventory", None)
+        if inv:
+            try:
+                lines += [html.escape(x) for x in inv.report_lines()]
+            except Exception:  # noqa: BLE001
+                pass
+        return "\n".join(lines)
+
+    async def send_weekly_report(self) -> str:
+        text = await self.weekly_report()
+        self.events.add("center", "info", "monitor.weekly_report", "Недельный отчёт сформирован")
+        return await self.notify("monitor:weekly_report", "info", text, force=True)
+
+    def weekly_due(self) -> bool:
+        wr = self.cfg.get("weekly_report") or {}
+        if not wr.get("enabled", True):
+            return False
+        at = parse_hhmm(wr.get("time") or "09:00")
+        lt = time.localtime(self.clock())
+        if at is None or lt.tm_wday != int(wr.get("weekday", 0)) % 7 or lt.tm_hour * 60 + lt.tm_min < at:
+            return False
+        return self.kv_get("weekly_report_date") != time.strftime("%Y-%m-%d", lt)
 
     @staticmethod
     def _dur(s: float) -> str:
@@ -577,6 +668,9 @@ class Monitor:
                     if self.clock() - self.center.started_at < 120:
                         await asyncio.sleep(120)
                     await self.send_daily_report()
+                if self.weekly_due():
+                    self.kv_set("weekly_report_date", time.strftime("%Y-%m-%d", time.localtime(self.clock())))
+                    await self.send_weekly_report()
             except Exception:  # noqa: BLE001
                 log.exception("ежедневный отчёт")
             await asyncio.sleep(30)
@@ -624,6 +718,13 @@ def routes(center) -> list:
                                                                                           "подробности в журнале центра")})
 
     async def report(request: web.Request):
+        week = request.query.get("period") == "week"
+        if week:
+            if request.method == "POST":
+                st = await m.send_weekly_report()
+                return web.json_response({"ok": st == "sent", "message": "Отчёт за неделю отправлен в Telegram" if st == "sent"
+                                          else "Отчёт сохранён в уведомлениях центра (Telegram не настроен или недоступен)"})
+            return web.json_response({"text": await m.weekly_report()})
         if request.method == "POST":
             st = await m.send_daily_report()
             return web.json_response({"ok": st == "sent", "message": "Отчёт отправлен в Telegram" if st == "sent"

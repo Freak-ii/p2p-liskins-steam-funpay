@@ -67,7 +67,7 @@ BOTS = ("lisbot", "mannbot")
 LIMIT_KEYS = {"strategy.maxSpendPerHourUsd", "strategy.maxSpendPerDayUsd", "strategy.maxOpenExposureUsd",
               "strategy.maxItemCapitalShare", "strategy.maxItemPriceUsd", "strategy.balanceReservePct",
               "strategy.maxPerItemPerDay", "strategy.maxHeldPerItem", "risk.maxDailyLossUsd", "risk.lowBalanceUsd",
-              "risk.unknownSpendIsCritical", "risk.strictConfirmations"}
+              "risk.unknownSpendIsCritical", "risk.strictConfirmations", "risk.acceptFreeOffers"}
 STRATEGY_KEYS = {"strategy.minRoi", "strategy.roiPerHoldDay", "strategy.valuationQuantile", "strategy.minDailyVolume",
                  "strategy.bottomTolerancePct", "strategy.maxFloorRisePct", "strategy.maxBookSharePerScan",
                  "strategy.maxShareOfDailyVolume", "strategy.minItemPriceUsd", "strategy.scanIntervalSec",
@@ -84,6 +84,13 @@ def _bot(args: dict, allowed=BOTS) -> str:
     if b not in allowed:
         raise ToolError(f"бот должен быть одним из: {', '.join(allowed)}")
     return b
+
+
+def _item_name(args: dict) -> str:
+    name = str(args.get("name") or "").strip()
+    if not name or len(name) > 200:
+        raise ToolError("нужно название предмета (name) из списка закупок LisBot")
+    return name
 
 
 def _changes(args: dict, keys: set[str]) -> dict:
@@ -107,6 +114,8 @@ TOOLS: dict[str, tuple[str, str, object]] = {
     "resume_bot": ("Снять паузу торговли бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
     "restart_bot": ("Перезапустить процесс бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
     "ack_alerts": ("Подтвердить все тревоги бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
+    "disable_item": ("Перестать закупать предмет LisBot (name): выключить его в списке закупок, продажи не трогает",
+                     "propose", lambda a: {"name": _item_name(a)}),
     "change_strategy": ("Изменить настройки стратегии LisBot (changes: {ключ: значение}; ключи: "
                         + ", ".join(sorted(STRATEGY_KEYS)) + ")", "propose",
                         lambda a: {"changes": _changes(a, STRATEGY_KEYS)}),
@@ -264,6 +273,18 @@ class StubBackend:
                  "change_strategy", {"changes": {"strategy.minRoi": 0.12}})
         for w in (p7.get("warnings") or [])[:2]:
             reco("Проверить настройки MannBot", w)
+        inv = f.get("inventory") or {}
+        il, im = inv.get("lisbot") or {}, inv.get("mannbot") or {}
+        if il.get("n"):
+            hi.append(f"Склад LisBot: {il['n']} шт на ${_n(il.get('cost'), 2)}, по рынку {_n(il.get('pnl'), 2)} $")
+        if il.get("losing") or il.get("old"):
+            reco("Разобрать залежавшиеся предметы LisBot",
+                 f"В минусе по рынку: {il.get('losing', 0)}, лежат дольше {_n(il.get('old_days'), 0)} дн: {il.get('old', 0)}. "
+                 "Решите, держать или снизить цену (раздел «Склад» в аналитике).")
+        if im.get("level") in ("low", "empty"):
+            reco("Пополнить склад ключей MannBot",
+                 f"На складе {im.get('stock')} ключей" + (f", хватит примерно на {_n(im.get('days_left'), 1)} дн."
+                                                          if im.get("days_left") is not None else "."))
         for a in f.get("anomalies_24h", [])[:3]:
             hi.append(f"Аномалия: {a}")
         bad = [b["title"] for b in f.get("bots", []) if b["state"] != RUNNING]
@@ -475,6 +496,24 @@ class Coordinator:
             return "настройки сохранены. " + await w.restart("координатор: смена режима")
         return "настройки сохранены"
 
+    async def _disable_item(self, name: str) -> str:
+        w = self._worker("lisbot")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15), headers=w._headers()) as s:
+            async with s.get(f"{w.base_url}/api/watchlist") as r:
+                items = await r.json(content_type=None)
+            it = next((x for x in items if isinstance(x, dict) and x.get("name") == name), None) if isinstance(items, list) else None
+            if it is None:
+                raise ToolError(f"«{name}» нет в списке закупок LisBot")
+            if not it.get("enabled"):
+                return "уже выключен"
+            keep = {k: it.get(k) for k in ("max_held", "max_per_day", "min_roi", "max_price_usd", "notes")}
+            note = (keep["notes"] + "; " if keep["notes"] else "") + time.strftime("выключен координатором %d.%m")
+            async with s.post(f"{w.base_url}/api/watchlist", json={**keep, "name": name, "enabled": False, "notes": note}) as r:
+                d = await r.json(content_type=None)
+                if r.status != 200 or not d.get("ok"):
+                    raise ToolError(f"LisBot не принял изменение: {d.get('error') or r.status}")
+        return "закупки предмета выключены"
+
     async def execute(self, tool: str, args: dict) -> str:
         """Выполнить инструмент через API центра. Проверка полномочий — у вызывающего."""
         args = self.validate(tool, args)
@@ -490,6 +529,8 @@ class Coordinator:
             if not ok:
                 raise ToolError(msg)
             return msg
+        if tool == "disable_item":
+            return await self._disable_item(args["name"])
         if tool in ("change_strategy", "change_limits"):
             return await self._lis_settings(args["changes"])
         if tool == "set_live_mode":
@@ -502,6 +543,8 @@ class Coordinator:
         bot = {"lisbot": "LisBot", "mannbot": "MannBot"}.get(args.get("bot", ""), "")
         if tool in ("change_strategy", "change_limits"):
             return f"{TOOLS[tool][0].split(' (')[0]}: " + ", ".join(f"{k} = {v}" for k, v in args["changes"].items())
+        if tool == "disable_item":
+            return f"Перестать закупать «{args['name']}»"
         if tool == "set_live_mode":
             return f"{bot}: {'включить боевой режим' if args['live'] else 'вернуть тестовый режим'}"
         if tool == "withdraw":
@@ -575,11 +618,21 @@ class Coordinator:
                         f"Одобрено FrayZ: {d['title']} — {result}")
         return status == "done", result
 
-    async def _notify(self, key: str, level: str, text: str) -> None:
+    async def _notify(self, key: str, level: str, text: str, buttons: dict | None = None) -> None:
         try:
-            await self.center.monitor.notify(key, level, text)
+            if buttons:
+                await self.center.monitor.notify(key, level, text, buttons=buttons)
+            else:
+                await self.center.monitor.notify(key, level, text)
         except Exception:  # noqa: BLE001
             log.exception("уведомление координатора")
+
+    def _buttons(self, d: dict) -> dict | None:
+        """Кнопки одобрения в Telegram, если у центра свой Telegram-бот с командами."""
+        tg = getattr(self.center, "tg", None)
+        if tg is None or not tg.target()[0]:
+            return None
+        return tg.keyboard(d)
 
     # ------------------------------------------------------------------ сторож аномалий
     def _lis_db(self):
@@ -623,7 +676,17 @@ class Coordinator:
             out.append({"code": "mann_refunds", "auto": False, "tool": "pause_bot", "args": {"bot": "mannbot"},
                         "title": "MannBot: много возвратов",
                         "reason": f"За сутки {nref} возвратов/отмен заказов MannBot"})
-        # 4. бот упал окончательно — центр перестал его перезапускать
+        # 4. предмет LisBot стабильно в минус — предложить выключить его закупку
+        k, days = int(a.get("item_loss_sales") or 3), float(a.get("item_loss_days") or 30)
+        for r in _rows(self._lis_db(), "SELECT i.name, COUNT(*) n, SUM(i.profit_usd) p FROM items i JOIN watchlist w "
+                       "ON w.name=i.name WHERE i.dry_run=0 AND i.status='sold' AND i.sold_at>=? AND w.enabled=1 "
+                       "GROUP BY i.name HAVING COUNT(*)>=? AND SUM(i.profit_usd)<=?",
+                       ((now - days * 86400) * 1000, k, -float(a.get("item_loss_min_usd") or 3))):
+            out.append({"code": f"lis_item_loss:{r['name']}", "auto": False, "tool": "disable_item", "args": {"name": r["name"]},
+                        "title": f"LisBot: «{r['name']}» в минусе",
+                        "reason": f"«{r['name']}»: {r['n']} продаж за {days:.0f} дн, итог −${-r['p']:.2f}. "
+                                  "Предлагаю перестать его закупать (уже купленное продаётся как обычно)."})
+        # 5. бот упал окончательно — центр перестал его перезапускать
         for name, w in self.center.workers.items():
             if w.state == CRASHED:
                 out.append({"code": f"{name}_crashed", "auto": False, "tool": "restart_bot", "args": {"bot": name},
@@ -653,9 +716,11 @@ class Coordinator:
             d = await self.act_or_propose(an["tool"], an["args"], reason=an["reason"], source=f"rule:{an['code']}",
                                           allow_auto=an["auto"])
             if d and d["kind"] == "proposal":
+                kb = self._buttons(d)
+                where = "кнопкой ниже или в панели центра" if kb else "в панели центра → «Координатор»"
                 await self._notify(f"coord:anomaly:{an['code']}", "warn",
                                    f"<b>🤖 Координатор: {html.escape(an['title'])}</b>\n{html.escape(an['reason'])}\n"
-                                   f"Предлагаю: {html.escape(d['title'])}. Одобрить можно в панели центра → «Координатор».")
+                                   f"Предлагаю: {html.escape(d['title'])}. Одобрить можно {where}.", kb)
         self.last_check = {"at": now, "anomalies": [a["title"] for a in found]}
         return found
 
@@ -685,6 +750,14 @@ class Coordinator:
             crit = [dict(r) for r in self.db.execute(
                 "SELECT source, kind, message FROM events WHERE ts>=? AND level IN ('critical','warn') ORDER BY id DESC LIMIT 15",
                 (self.clock() - 86400,))]
+        try:
+            out["month_goal"] = await c.analytics.goal(self.clock())
+        except Exception as e:  # noqa: BLE001
+            out["month_goal"] = {"error": str(e)}
+        try:
+            out["inventory"] = c.inventory.brief()
+        except Exception as e:  # noqa: BLE001
+            out["inventory"] = {"error": str(e)}
         out["events_24h"] = crit
         out["open_proposals"] = [{"id": p["id"], "title": p["title"], "tool": p["tool"], "args": p["args"]}
                                  for p in self.decisions(20, kind="proposal", status="proposed")]
@@ -750,7 +823,9 @@ class Coordinator:
                 lines += ["", "<b>Рекомендации</b>"] + [
                     f"{i + 1}. {html.escape(r['title'])}" + (" — нужно подтверждение" if r.get("tier") == "confirm" else "")
                     for i, r in enumerate(recs) if r]
-                lines.append("<i>Одобрить или отклонить — в панели центра, раздел «Координатор».</i>")
+                lines.append("<i>Одобрить или отклонить — в панели центра, раздел «Координатор»"
+                             + (", или командой /proposals." if self._buttons({"kind": "proposal", "status": "proposed", "id": 0})
+                                else ".") + "</i>")
             await self._notify("coord:briefing", "info", "\n".join(lines))
         self.events.add("center", "info", "coordinator.briefing", "Координатор подготовил брифинг")
         return b

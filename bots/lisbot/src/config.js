@@ -122,6 +122,7 @@ export const EDITABLE_SETTINGS = {
   'risk.lowBalanceUsd': { type: 'num', min: 0, max: 1e6, label: 'Уведомлять о низком балансе, $' },
   'risk.unknownSpendIsCritical': { type: 'bool', label: 'Неизвестная трата баланса = аварийная остановка' },
   'risk.strictConfirmations': { type: 'bool', label: 'Отменять чужие мобильные подтверждения' },
+  'risk.acceptFreeOffers': { type: 'bool', label: 'Принимать входящие обмены от любого, если от нас ничего не требуется' },
   'watchlist.mode': { type: 'enum', values: ['list', 'auto'], label: 'Вотчлист: список / авто' },
   'watchlist.auto.minPriceUsd': { type: 'num', min: 0, max: 1e5, label: 'Автовотчлист: цена от, $' },
   'watchlist.auto.maxPriceUsd': { type: 'num', min: 0, max: 1e5, label: 'Автовотчлист: цена до, $' },

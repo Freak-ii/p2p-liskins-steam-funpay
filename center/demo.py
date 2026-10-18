@@ -95,6 +95,10 @@ def seed_lisbot(data_dir: Path, now: float | None = None) -> bool:
                                   ("AWP | Asiimov (Field-Tested)", "trade_sent", 2 * 3600)):
             buy, net = ITEMS[name]
             _item(con, ms, name, "rtba", status, buy, net, now - ago, None, None, PARTNERS[0])
+        # залежавшийся предмет для раздела «Склад»: куплен дороже нынешнего рынка, перевыставлен до лимита
+        _item(con, ms, "Desert Eagle | Blaze (Factory New)", "scan", "listed", 455.0, 470.0, now - 24 * DAY, None, None,
+              PARTNERS[2])
+        con.execute("UPDATE items SET relists=5 WHERE status='listed' AND buy_price_usd=455.0")
         _item(con, ms, "M4A1-S | Printstream (Minimal Wear)", "rtba", "sold", 148.0, 163.5, now - 9 * DAY,
               now - DAY, 165.0, PARTNERS[1], dry=True)       # тестовая (dry-run) — CRM прячет её по умолчанию
         for key, value in (("center.demo", 1), ("fx", {"rate": 92.4, "ts": ms(now - 1800)}),

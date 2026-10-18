@@ -14,7 +14,9 @@ from aiohttp import web
 from center.app import Center
 from center.bots import LIS_SECRET_KEYS, LisBotWorker, MannBotWorker, parse_mafile
 from center.crm import CrmError
+from center.backup import routes as backup_routes
 from center.coordinator import routes as coordinator_routes
+from center.inventory import routes as inventory_routes
 from center.monitor import routes as monitor_routes
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -175,15 +177,15 @@ def make_app(center: Center) -> web.Application:
     async def an_bot(request: web.Request):
         a = center.analytics
         if request.match_info["name"] == "lisbot":
-            return web.json_response(a.lisbot_details(days_q(request, None)))
-        return web.json_response(a.mannbot_details(days_q(request)))
+            return web.json_response(await asyncio.to_thread(a.lisbot_details, days_q(request, None)))
+        return web.json_response(await asyncio.to_thread(a.mannbot_details, days_q(request)))
 
     async def an_export(request: web.Request):
         a = center.analytics
         rows = await a.export_rows(days_q(request, None))
         fmt = request.match_info["fmt"]
-        body, ctype = (a.to_xlsx(rows), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") \
-            if fmt == "xlsx" else (a.to_csv(rows), "text/csv; charset=utf-8")
+        body, ctype = (await asyncio.to_thread(a.to_xlsx, rows), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") \
+            if fmt == "xlsx" else (await asyncio.to_thread(a.to_csv, rows), "text/csv; charset=utf-8")
         name = f"center-deals-{time.strftime('%Y%m%d')}.{fmt}"
         return web.Response(body=body, content_type=ctype.split(";")[0], charset="utf-8" if fmt == "csv" else None,
                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
@@ -206,8 +208,9 @@ def make_app(center: Center) -> web.Application:
         return web.json_response({"ok": False, "message": str(e)}, status=e.status)
 
     async def crm_deals(request: web.Request):
-        return web.json_response(center.crm.deals(**crm_filters(request), limit=crm_int(request, "limit", 100),
-                                                  offset=crm_int(request, "offset", 0)))
+        return web.json_response(await asyncio.to_thread(
+            lambda: center.crm.deals(**crm_filters(request), limit=crm_int(request, "limit", 100),
+                                     offset=crm_int(request, "offset", 0))))
 
     async def crm_deal(request: web.Request):
         bot, ref = request.match_info["bot"], request.match_info["ref"]
@@ -217,21 +220,23 @@ def make_app(center: Center) -> web.Application:
                 text = lambda k: data[k] if isinstance(data.get(k), str) else None  # noqa: E731
                 return web.json_response({"ok": True, "message": await center.crm.update_deal(
                     bot, ref, notes=text("notes"), tags=text("tags"))})
-            return web.json_response(center.crm.deal(bot, ref))
+            return web.json_response(await asyncio.to_thread(center.crm.deal, bot, ref))
         except CrmError as e:
             return crm_error(e)
 
     async def crm_export(request: web.Request):
-        rows = center.crm.export_rows(**crm_filters(request))
+        filters = crm_filters(request)
+        body = await asyncio.to_thread(lambda: center.analytics.to_csv(center.crm.export_rows(**filters)))
         name = f"crm-deals-{time.strftime('%Y%m%d')}.csv"
-        return web.Response(body=center.analytics.to_csv(rows), content_type="text/csv", charset="utf-8",
+        return web.Response(body=body, content_type="text/csv", charset="utf-8",
                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     async def crm_customers(request: web.Request):
         q = request.query
-        return web.json_response(center.crm.customers(q=q.get("q", "").strip()[:200], risk=q.get("risk", ""),
-                                                      tag=q.get("tag", ""), sort=q.get("sort", "last_order"),
-                                                      limit=crm_int(request, "limit", 200), offset=crm_int(request, "offset", 0)))
+        return web.json_response(await asyncio.to_thread(
+            lambda: center.crm.customers(q=q.get("q", "").strip()[:200], risk=q.get("risk", ""), tag=q.get("tag", ""),
+                                         sort=q.get("sort", "last_order"), limit=crm_int(request, "limit", 200),
+                                         offset=crm_int(request, "offset", 0))))
 
     async def crm_customer(request: web.Request):
         cid = int(request.match_info["cid"])
@@ -242,7 +247,7 @@ def make_app(center: Center) -> web.Application:
                 bl = data.get("blacklisted")
                 return web.json_response({"ok": True, "message": await center.crm.update_customer(
                     cid, notes=text("notes"), tags=text("tags"), blacklisted=bl if isinstance(bl, bool) else None)})
-            return web.json_response(center.crm.customer(cid))
+            return web.json_response(await asyncio.to_thread(center.crm.customer, cid))
         except CrmError as e:
             return crm_error(e)
     async def rtba_status(request: web.Request):
@@ -271,6 +276,15 @@ def make_app(center: Center) -> web.Application:
             res = await asyncio.to_thread(center.rtba.backtest_mannbot, variants, float(data.get("days") or 30))
         return web.json_response(res)
 
+    async def an_goal(request: web.Request):
+        if request.method == "POST":
+            try:
+                center.analytics.save_goal((await request.json()).get("goal"))
+            except (ValueError, TypeError) as e:
+                return web.json_response({"ok": False, "message": str(e)}, status=400)
+            center.events.add("center", "info", "settings", "Цель прибыли на месяц изменена из панели центра")
+        return web.json_response(await center.analytics.goal())
+
     async def quit_center(request: web.Request):
         asyncio.get_running_loop().call_later(0.5, center.quit_event.set)
         return web.json_response({"ok": True, "message": "Центр завершает работу"})
@@ -286,6 +300,7 @@ def make_app(center: Center) -> web.Application:
         web.post("/api/quit", quit_center),
         web.get("/api/analytics/pnl", an_pnl), web.get("/api/analytics/daily", an_daily),
         web.get("/api/analytics/bot/{name:lisbot|mannbot}", an_bot),
+        web.get("/api/analytics/goal", an_goal), web.post("/api/analytics/goal", an_goal),
         web.get("/api/analytics/export.{fmt:csv|xlsx}", an_export),
         web.get("/api/crm/deals", crm_deals), web.get("/api/crm/deals.csv", crm_export),
         web.get("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal), web.post("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal),
@@ -296,6 +311,8 @@ def make_app(center: Center) -> web.Application:
     ])
     app.add_routes(monitor_routes(center))
     app.add_routes(coordinator_routes(center))
+    app.add_routes(backup_routes(center))
+    app.add_routes(inventory_routes(center))
     app.router.add_static("/static/", STATIC)
     return app
 

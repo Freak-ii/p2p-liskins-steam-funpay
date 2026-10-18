@@ -73,6 +73,9 @@
   <h2>Мониторинг</h2>
   <div id="monitor"></div>
 
+  <h2>Резервные копии</h2>
+  <div id="backup"></div>
+
   <h2>Тревоги ботов <button class="btn small" onclick="ackAll()">Подтвердить все</button></h2>
   <div class="card tablewrap"><table><thead><tr><th>Время</th><th>Бот</th><th>Уровень</th><th>Сообщение</th><th></th></tr></thead><tbody id="alerts"></tbody></table></div>
 
@@ -211,8 +214,10 @@ setInterval(refresh, 5000); setInterval(pollLog, 2000);
 </script>
 <script src="/static/mannbot.js"></script>
 <script src="/static/analytics.js"></script>
+<script src="/static/inventory.js"></script>
 <script src="/static/crm.js"></script>
 <script src="/static/monitor.js"></script>
+<script src="/static/backup.js"></script>
 <script src="/static/coordinator.js"></script>
 </body>
 </html>

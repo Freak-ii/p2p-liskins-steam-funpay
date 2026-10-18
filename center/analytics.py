@@ -9,6 +9,7 @@ MannBot — в валюте FunPay (обычно ₽); себестоимост�
 from __future__ import annotations
 
 import asyncio
+import bisect
 import csv
 import datetime as dt
 import io
@@ -16,6 +17,7 @@ import json
 import logging
 import sqlite3
 import statistics
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -51,6 +53,48 @@ def _rows(path: Path, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         return []
     finally:
         con.close()
+
+
+def _sig(path: Path) -> tuple:
+    """Отпечаток базы SQLite: время изменения и размер файла и его WAL. Любая запись бота меняет отпечаток."""
+    out = []
+    for p in (path, Path(f"{path}-wal")):
+        try:
+            st = p.stat()
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+_cache: dict = {}
+_cache_lock = threading.Lock()
+CACHE_TTL = 30.0      # страховка: отметка времени файла грубая (на Linux ~4 мс), поэтому кэш живёт не дольше 30 с
+
+
+def _cached(key: tuple, path: Path, build):
+    """Результат build() для key, пока база path не менялась. Панель и координатор много раз подряд читают
+    одни и те же десятки тысяч сделок: без кэша каждый запрос заново разбирает всю историю ботов.
+    Возвращаемое значение общее для всех вызовов — его нельзя менять на месте."""
+    sig, now = _sig(path), time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and hit[0] == sig and now - hit[1] < CACHE_TTL:
+            return hit[2]
+    value = build()
+    with _cache_lock:
+        if len(_cache) > 32:
+            _cache.clear()
+        _cache[key] = (sig, now, value)
+    return value
+
+
+def _since(deals: list[dict], since: float, key: str = "sold_at") -> list[dict]:
+    """Сделки не раньше since из списка, отсортированного по key."""
+    if not since:
+        return list(deals)
+    lo = bisect.bisect_left(deals, since, key=lambda d: d[key])
+    return deals[lo:]
 
 
 def _kv(path: Path, key: str):
@@ -149,8 +193,13 @@ class Analytics:
 
     # ------------------------------------------------------------------ сделки
     def lis_deals(self, since: float = 0) -> list[dict]:
-        rows = _rows(self.lis_db, "SELECT * FROM items WHERE dry_run=0 AND status='sold' AND sold_at>=? ORDER BY sold_at",
-                     (since * 1000,))
+        db = self.lis_db
+        return _since(_cached(("an.lis", str(db)), db, self._lis_deals_all), since)
+
+    def _lis_deals_all(self) -> list[dict]:
+        rows = _rows(self.lis_db, "SELECT id, name, mode, status, buy_price_usd, sold_usd, profit_usd, expected_net_usd, "
+                     "partner_steamid, received_at, created_at, sold_at FROM items "
+                     "WHERE dry_run=0 AND status='sold' AND sold_at IS NOT NULL ORDER BY sold_at")
         out = []
         for r in rows:
             recv = r["received_at"] or r["created_at"]
@@ -169,9 +218,13 @@ class Analytics:
         return float(rt.get("cost_per_key") or 0), float(rt.get("funpay_fee_pct") or 0) / 100
 
     def mann_deals(self, since: float = 0) -> list[dict]:
-        cost_key, fee = self.mann_costs()
-        rows = _rows(self.mann_db, "SELECT * FROM orders WHERE delivered_at IS NOT NULL AND delivered_at>=? AND "
-                     "status<>'refunded' ORDER BY delivered_at", (since,))
+        db, costs = self.mann_db, self.mann_costs()
+        return _since(_cached(("an.mann", str(db), costs), db, lambda: self._mann_deals_all(*costs)), since)
+
+    def _mann_deals_all(self, cost_key: float, fee: float) -> list[dict]:
+        rows = _rows(self.mann_db, "SELECT order_id, description, keys_qty, quantity, currency, price, paid_at, created_at, "
+                     "delivered_at, buyer_username, status FROM orders WHERE delivered_at IS NOT NULL AND "
+                     "status<>'refunded' ORDER BY delivered_at")
         out = []
         for r in rows:
             cur = str(r["currency"] or "₽").strip()
@@ -219,10 +272,11 @@ class Analytics:
     async def pnl(self, days: float | None = 30) -> dict:
         since = time.time() - days * DAY if days else 0
         rate = await self.usd_rub()
-        cap = self._capital()
+        # чтение баз ботов — в отдельном потоке, чтобы большая история не останавливала центр (пинги ботов, панель)
+        cap, lis, mann = await asyncio.to_thread(lambda: (self._capital(), self.lis_deals(since), self.mann_deals(since)))
         cost_key, fee = self.mann_costs()
         bots: dict[str, dict] = {}
-        for name, deals in (("lisbot", self.lis_deals(since)), ("mannbot", self.mann_deals(since))):
+        for name, deals in (("lisbot", lis), ("mannbot", mann)):
             b = {"deals": len(deals), "units": sum(d["qty"] for d in deals)}
             for to in ("USD", "RUB"):
                 c = lambda v, d: self._conv(v, d["currency"], to, rate["rate"])  # noqa: E731
@@ -263,7 +317,10 @@ class Analytics:
         series = {k: {"day": k, "lisbot_revenue": 0.0, "lisbot_profit": 0.0, "lisbot_deals": 0, "lisbot_spent": 0.0,
                       "mannbot_revenue": 0.0, "mannbot_profit": 0.0, "mannbot_deals": 0} for k in keys}
         since = dt.datetime.combine(today - dt.timedelta(days=days - 1), dt.time()).timestamp()
-        for d in self.deals(since):
+        deals, spent = await asyncio.to_thread(lambda: (self.deals(since), _rows(
+            self.lis_db, "SELECT created_at, buy_price_usd FROM items WHERE dry_run=0 AND status<>'failed' AND created_at>=?",
+            (since * 1000,))))
+        for d in deals:
             row = series.get(_day(d["sold_at"]))
             if row is None:
                 continue
@@ -272,8 +329,7 @@ class Analytics:
             row[f"{p}_profit"] += self._conv(d["profit"] or 0, d["currency"], currency, rate)
             row[f"{p}_deals"] += 1
         # закупки LisBot — отток капитала, полезно видеть рядом с выручкой
-        for r in _rows(self.lis_db, "SELECT created_at, buy_price_usd FROM items WHERE dry_run=0 AND status<>'failed' "
-                       "AND created_at>=?", (since * 1000,)):
+        for r in spent:
             row = series.get(_day(r["created_at"] / 1000))
             if row:
                 row["lisbot_spent"] += self._conv(r["buy_price_usd"] or 0, "USD", currency, rate)
@@ -285,8 +341,39 @@ class Analytics:
             out.append(row)
         return {"days": days, "currency": currency, "rate": rate, "series": out}
 
+    # ------------------------------------------------------------------ цель на месяц
+    async def goal(self, now: float | None = None) -> dict:
+        """Прибыль центра с начала месяца в ₽ против цели analytics.month_goal_rub и прогноз по текущему темпу."""
+        now = time.time() if now is None else now
+        today = dt.datetime.fromtimestamp(now)
+        start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        nxt = (start + dt.timedelta(days=32)).replace(day=1)
+        rate = (await self.usd_rub())["rate"]
+        deals = await asyncio.to_thread(self.deals, start.timestamp())
+        profit = sum(self._conv(d["profit"], d["currency"], "RUB", rate) or 0
+                     for d in deals if d["profit"] is not None and d["sold_at"] <= now)
+        elapsed = max(1 / 24, (now - start.timestamp()) / DAY)
+        days = (nxt - start).days
+        forecast = profit / elapsed * days
+        target = float(self.cfg.get("month_goal_rub") or 0)
+        return {"month": start.strftime("%Y-%m"), "days": days, "elapsed": _r(elapsed, 1), "profit": _r(profit),
+                "forecast": _r(forecast), "goal": target or None,
+                "progress": _r(profit / target * 100, 1) if target else None,
+                "forecast_pct": _r(forecast / target * 100, 1) if target else None,
+                "need_per_day": _r(max(0.0, target - profit) / max(1e-9, days - elapsed)) if target and days > elapsed else None}
+
+    def save_goal(self, value) -> None:
+        v = float(value or 0)
+        if v < 0 or v > 1e10:
+            raise ValueError("цель — неотрицательное число ₽")
+        self.center.cfg.save({"analytics": {"month_goal_rub": v}})
+
     # ------------------------------------------------------------------ детали по ботам
     def lisbot_details(self, days: float | None = None) -> dict:
+        db = self.lis_db
+        return _cached(("an.lisd", str(db), days), db, lambda: self._lisbot_details(days))
+
+    def _lisbot_details(self, days: float | None) -> dict:
         since_ms = (time.time() - days * DAY) * 1000 if days else 0
         items = [dict(r) for r in _rows(self.lis_db, f"""
             SELECT name, COUNT(*) bought, SUM(status='sold') sold,
@@ -321,6 +408,10 @@ class Analytics:
         }
 
     def mannbot_details(self, days: float | None = 30) -> dict:
+        db = self.mann_db
+        return _cached(("an.mannd", str(db), days), db, lambda: self._mannbot_details(days))
+
+    def _mannbot_details(self, days: float | None) -> dict:
         since = time.time() - days * DAY if days else 0
         rows = _rows(self.mann_db, "SELECT * FROM orders WHERE created_at>=?", (since,))
         n = len(rows)
@@ -358,6 +449,9 @@ class Analytics:
 
     async def export_rows(self, days: float | None = None) -> list[list]:
         rate = (await self.usd_rub())["rate"]
+        return await asyncio.to_thread(self._export_rows, days, rate)
+
+    def _export_rows(self, days: float | None, rate: float) -> list[list]:
         out = [[t for _, t in self.EXPORT_COLS]]
         for d in self.deals(time.time() - days * DAY if days else 0):
             d = dict(d)
@@ -386,11 +480,12 @@ class Analytics:
                 s = chr(65 + m) + s
             return s
 
+        letters = [col(i) for i in range(max((len(r) for r in rows), default=0))]
         xml_rows = []
         for ri, row in enumerate(rows, 1):
             cells = []
             for ci, v in enumerate(row):
-                ref = f"{col(ci)}{ri}"
+                ref = f"{letters[ci]}{ri}"
                 if isinstance(v, bool) or v is None or v == "":
                     continue
                 if isinstance(v, (int, float)):
@@ -399,10 +494,10 @@ class Analytics:
                     style = ' s="1"' if ri == 1 else ""
                     cells.append(f'<c r="{ref}" t="inlineStr"{style}><is><t>{escape(str(v))}</t></is></c>')
             xml_rows.append(f'<row r="{ri}">{"".join(cells)}</row>')
-        sheet_xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-                     '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews>'
-                     f'<sheetData>{"".join(xml_rows)}</sheetData></worksheet>')
+        sheet_head = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                      '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews>'
+                      '<sheetData>')
         files = {
             "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -435,10 +530,16 @@ class Analytics:
             '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
             '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
             '</styleSheet>',
-            "xl/worksheets/sheet1.xml": sheet_xml,
         }
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for name, body in files.items():
                 z.writestr(name, body)
+            # лист пишется частями: на годовой истории это десятки МБ XML, а одна огромная строка надолго
+            # занимает интерпретатор и подвешивает остальную работу центра
+            with z.open("xl/worksheets/sheet1.xml", "w") as f:
+                f.write(sheet_head.encode())
+                for i in range(0, len(xml_rows), 500):
+                    f.write("".join(xml_rows[i:i + 500]).encode())
+                f.write(b"</sheetData></worksheet>")
         return buf.getvalue()
