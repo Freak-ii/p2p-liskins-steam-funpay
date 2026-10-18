@@ -54,6 +54,8 @@ class Center:
         self.crm = Crm(self)
         self.rtba = Rtba(self)
         self.monitor = Monitor(self)       # до записи «Центр запущен»: проверяет, не выключался ли центр аварийно
+        for level, text in self.cfg.problems:      # ошибки и опечатки center.yaml — в журнал (оттуда в Telegram)
+            self.events.add("center", level, "center.config", text)
         self.coordinator = Coordinator(self)
         self.backup = Backup(self)
         self.inventory = Inventory(self)

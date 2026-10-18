@@ -10,8 +10,11 @@
 from __future__ import annotations
 
 import copy
+import io
 import os
 import secrets
+import time
+import zipfile
 from pathlib import Path
 
 import yaml
@@ -55,6 +58,7 @@ DEFAULTS: dict = {
             "enabled": True,
             "token": "",             # пусто — берутся токен и chat id из подключений LisBot
             "chat_id": "",           # можно несколько через запятую
+            "commands": True,        # команды центра в Telegram (только со своим ботом центра, center/tgcontrol.py)
         },
         "dedup_minutes": 15,         # одинаковое уведомление не чаще раза за столько минут
         "quiet_hours": "",           # например "23:00-08:00": некритичное копится и приходит одним сообщением
@@ -126,6 +130,32 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
+FREE_FORM = {("budget", "plan"), ("coordinator", "permissions"), ("workers",)}
+
+
+def check_config(user: dict, base: dict = DEFAULTS, path: tuple = ()) -> list[str]:
+    """Опечатки в center.yaml: неизвестные ключи (центр их молча не видит) и значения не того типа."""
+    out = []
+    for k, v in (user or {}).items():
+        here = (*path, k)
+        if k not in base:
+            out.append(f"center.yaml: неизвестная настройка {'.'.join(map(str, here))} — опечатка? Центр её не использует")
+            continue
+        d = base[k]
+        if isinstance(d, dict):
+            if not isinstance(v, dict):
+                out.append(f"center.yaml: {'.'.join(here)} должно быть разделом настроек, а не значением")
+            elif d and here not in FREE_FORM and here[:1] not in FREE_FORM:
+                out += check_config(v, d, here)
+        elif isinstance(d, bool):
+            if not isinstance(v, bool):
+                out.append(f"center.yaml: {'.'.join(here)} должно быть true или false, а не «{v}»")
+        elif isinstance(d, (int, float)):
+            if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))):
+                out.append(f"center.yaml: {'.'.join(here)} должно быть числом, а не «{v}»")
+    return out
+
+
 def default_home() -> Path:
     if os.environ.get("CENTER_HOME"):
         return Path(os.environ["CENTER_HOME"]).expanduser().resolve()
@@ -137,9 +167,43 @@ class CenterConfig:
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.path = self.home / "center.yaml"
-        user = yaml.safe_load(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
-        self.user: dict = user or {}
+        self.problems: list[tuple[str, str]] = []   # (уровень, текст) — центр запишет их в журнал при запуске
+        self.user: dict = self._load()
         self.data: dict = _merge(DEFAULTS, self.user)
+        self.problems += [("warn", p) for p in check_config(self.user)]
+
+    def _load(self) -> dict:
+        """center.yaml с ошибкой не должен мешать запуску: испорченный файл откладывается в сторону, настройки
+        берутся из последней резервной копии (или по умолчанию), а в журнал пишется, что случилось."""
+        if not self.path.exists():
+            return {}
+        try:
+            user = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+            if not isinstance(user, dict):
+                raise yaml.YAMLError("в файле должен быть словарь настроек")
+            return user
+        except (yaml.YAMLError, UnicodeDecodeError) as e:
+            err = str(e).splitlines()[0] if str(e) else type(e).__name__
+            mark = getattr(e, "problem_mark", None)
+            where = f" (строка {mark.line + 1})" if mark is not None else ""
+        broken = self.path.with_name(f"center.yaml.broken-{time.strftime('%Y%m%d-%H%M%S')}")
+        os.replace(self.path, broken)
+        user, src = {}, ""
+        for z in sorted((self.home / "backups").glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                with zipfile.ZipFile(z) as zf:
+                    cand = yaml.safe_load(io.TextIOWrapper(zf.open("center.yaml"), encoding="utf-8")) or {}
+                if isinstance(cand, dict):
+                    user, src = cand, z.name
+                    break
+            except (KeyError, OSError, zipfile.BadZipFile, yaml.YAMLError, UnicodeDecodeError):
+                continue
+        if src:
+            self.path.write_text(yaml.safe_dump(user, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        self.problems.append(("critical", f"center.yaml с ошибкой{where}: {err}. Файл сохранён как {broken.name}; "
+                              + (f"настройки восстановлены из резервной копии {src}" if src else
+                                 "центр запущен с настройками по умолчанию") + ". Исправьте ошибку и верните файл."))
+        return user
 
     def __getitem__(self, key: str):
         return self.data[key]
