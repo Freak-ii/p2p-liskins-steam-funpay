@@ -13,6 +13,34 @@ export class ConfirmationWatcher {
     Object.assign(this, { session, db, guard, log, strict });
     this.expected = new Map(); // listingId -> { itemId, ts }
     this.graceUntil = 0; // пока бот сам выставляет лот, его подтверждение ещё «без имени»
+    this.expectedTrades = new Set(); // id исходящих офферов моста ключей (создал сам бот)
+    this.expectedIds = new Set(); // id подтверждений ордеров моста ключей (Steam вернул их сам)
+  }
+
+  expectTrade(offerId) { this.expectedTrades.add(String(offerId)); }
+
+  expectConfirmation(confId) { this.expectedIds.add(String(confId)); }
+
+  /** Подтвердить свой исходящий оффер (только по его id). */
+  async confirmTrade(offerId) {
+    const confs = await this.session.getConfirmations();
+    const conf = confs.find((c) => c.type === TYPE_TRADE && String(c.creator) === String(offerId));
+    if (!conf) return false;
+    await this.session.respondConfirmation(conf, true);
+    this.expectedTrades.delete(String(offerId));
+    this.db.event('confirm.trade', { offerId: String(offerId) });
+    return true;
+  }
+
+  /** Подтвердить подтверждение с известным id (ордер на покупку моста ключей). */
+  async confirmById(confId) {
+    const confs = await this.session.getConfirmations();
+    const conf = confs.find((c) => String(c.id) === String(confId) || String(c.creator) === String(confId));
+    if (!conf) return false;
+    await this.session.respondConfirmation(conf, true);
+    this.expectedIds.delete(String(confId));
+    this.db.event('confirm.buy_order', { confId: String(confId) });
+    return true;
   }
 
   beginListing() { this.graceUntil = Date.now() + 5 * 60_000; }
@@ -37,6 +65,17 @@ export class ConfirmationWatcher {
       const id = String(c.creator);
       if (c.type === TYPE_MARKET && this.expected.has(id)) {
         try { await this.session.respondConfirmation(c, true); this.expected.delete(id); this.db.event('confirm.listing', { listingId: id, late: true }); } catch (e) { this.log.warn(`Подтверждение лота ${id}: ${errMsg(e)}`); }
+        continue;
+      }
+      const ownTrade = c.type === TYPE_TRADE && this.expectedTrades.has(id);
+      const ownConf = this.expectedIds.has(String(c.id)) || this.expectedIds.has(id);
+      if (ownTrade || ownConf) {
+        try {
+          await this.session.respondConfirmation(c, true);
+          if (ownTrade) this.expectedTrades.delete(id);
+          this.expectedIds.delete(String(c.id)); this.expectedIds.delete(id);
+          this.db.event(ownTrade ? 'confirm.trade' : 'confirm.buy_order', { creator: id, late: true });
+        } catch (e) { this.log.warn(`Подтверждение моста ключей ${id}: ${errMsg(e)}`); }
         continue;
       }
       if (c.type === TYPE_MARKET && Date.now() < this.graceUntil) continue;

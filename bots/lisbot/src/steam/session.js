@@ -57,6 +57,8 @@ export class SteamSession extends EventEmitter {
       this.log.info(`Steam: вход выполнен (${this.steamId})`);
       this.user.setPersona(SteamUser.EPersonaState.Invisible);
     });
+    // баланс кошелька Steam (в валюте кошелька) — нужен мосту ключей для закупа на ТП
+    this.user.on('wallet', (hasWallet, currency, balance) => { this.wallet = hasWallet ? { currency, balance: Number(balance), ts: Date.now() } : null; });
     this.user.on('refreshToken', (token) => {
       try { fs.writeFileSync(this.tokenFile, token, { mode: 0o600 }); } catch (e) { this.log.error('не удалось сохранить refresh-токен', e); }
     });
@@ -150,10 +152,10 @@ export class SteamSession extends EventEmitter {
     }), { priority });
   }
 
-  /** Инвентарь CS2 (appid 730, context 2). */
-  inventory() {
+  /** Инвентарь (по умолчанию CS2: appid 730, context 2). tradableOnly — только передаваемые предметы. */
+  inventory(appid = 730, contextid = 2, tradableOnly = false) {
     return this.webSched.schedule(() => new Promise((resolve, reject) => {
-      this.community.getUserInventoryContents(this.steamId, 730, 2, false, 'english', (err, items) => {
+      this.community.getUserInventoryContents(this.steamId, appid, contextid, tradableOnly, 'english', (err, items) => {
         if (err) {
           if (/429/.test(err.message)) { this.webSched.rateLimited(); return reject(new RateLimitedError('Steam inventory 429')); }
           return reject(err);

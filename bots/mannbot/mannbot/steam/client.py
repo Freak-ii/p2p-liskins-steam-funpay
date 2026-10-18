@@ -293,6 +293,30 @@ class SteamClient:
             raise SteamError(f"не удалось получить трейд {offer_id}", "api")
         return offer
 
+    async def get_offer_item_names(self, offer_id: str) -> list[str]:
+        """market_hash_name каждого получаемого предмета входящего трейда (для проверки подарков)."""
+        _, data = await self._req("GET", f"{API}/IEconService/GetTradeOffer/v1",
+                                  params={**self._auth_params(), "tradeofferid": offer_id, "language": "english",
+                                          "get_descriptions": 1}, expect_json=True)
+        r = data.get("response") or {}
+        desc = {(str(d.get("classid")), str(d.get("instanceid", "0"))): d.get("market_hash_name", "")
+                for d in r.get("descriptions", [])}
+        return [desc.get((str(i.get("classid")), str(i.get("instanceid", "0"))), "")
+                for i in (r.get("offer") or {}).get("items_to_receive", [])]
+
+    async def accept_offer(self, offer_id: str, partner_steam_id: str) -> bool:
+        """Принять входящий трейд. Только для подарков, где мы ничего не отдаём: подтверждение не нужно."""
+        if self.dry_run:
+            log.info("[DRY-RUN] принял бы трейд %s", offer_id)
+            return True
+        status, resp = await self._req(
+            "POST", f"{COMMUNITY}/tradeoffer/{offer_id}/accept",
+            data={"sessionid": self.session_id, "serverid": "1", "tradeofferid": offer_id,
+                  "partner": partner_steam_id, "captcha": ""},
+            headers={"Referer": f"{COMMUNITY}/tradeoffer/{offer_id}/", "Origin": COMMUNITY},
+            expect_json=True, retries=1)
+        return status == 200 and not resp.get("strError")
+
     async def get_offer_state(self, offer_id: str) -> TradeOfferState:
         if offer_id.startswith("dry"):
             return TradeOfferState.ACCEPTED

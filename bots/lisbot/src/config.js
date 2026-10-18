@@ -82,6 +82,7 @@ export function validateConfig(cfg) {
   if (st.balanceReservePct < 0 || st.balanceReservePct >= 1) errs.push('strategy.balanceReservePct должен быть в [0;1)');
   if (cfg.lis.allowLockedDays < 0 || cfg.lis.allowLockedDays > 8) errs.push('lis.allowLockedDays должен быть 0..8');
   if (cfg.watchlist.mode === 'list' && !(cfg.watchlist.items || []).length) errs.push('watchlist.items пуст');
+  if (cfg.keyBridge?.enabled && !parseTradeUrl(cfg.keyBridge.tradeUrl)) errs.push('keyBridge.tradeUrl: нужна трейд-ссылка аккаунта MannBot (мост ключей включён)');
   return errs;
 }
 
@@ -127,6 +128,13 @@ export const EDITABLE_SETTINGS = {
   'watchlist.auto.minPriceUsd': { type: 'num', min: 0, max: 1e5, label: 'Автовотчлист: цена от, $' },
   'watchlist.auto.maxPriceUsd': { type: 'num', min: 0, max: 1e5, label: 'Автовотчлист: цена до, $' },
   'watchlist.auto.maxItems': { type: 'int', min: 1, max: 1000, label: 'Автовотчлист: макс. предметов' },
+  'keyBridge.enabled': { type: 'bool', label: 'Мост ключей: отправлять ключи Mann Co. на аккаунт MannBot' },
+  'keyBridge.tradeUrl': { type: 'str', label: 'Мост ключей: трейд-ссылка аккаунта MannBot' },
+  'keyBridge.minKeysToSend': { type: 'int', min: 1, max: 1000, label: 'Мост ключей: отправлять от, ключей' },
+  'keyBridge.buy.enabled': { type: 'bool', label: 'Мост ключей: покупать ключи на ТП Steam за кошелёк' },
+  'keyBridge.buy.maxKeyPrice': { type: 'num', min: 0, max: 100000, label: 'Мост ключей: макс. цена ключа (валюта кошелька)' },
+  'keyBridge.buy.keysPerDay': { type: 'int', min: 0, max: 1000, label: 'Мост ключей: ключей в день, максимум' },
+  'keyBridge.buy.walletReserve': { type: 'num', min: 0, max: 1e7, label: 'Мост ключей: оставлять на кошельке' },
   timezone: { type: 'str', label: 'Часовой пояс (IANA)' },
 };
 
@@ -153,6 +161,7 @@ export function saveSettings(cfg, changes) {
       if (v < def.min || v > def.max) { errs.push(`${def.label}: допустимо ${def.min}…${def.max}`); continue; }
     } else if (def.type === 'enum') { if (!def.values.includes(v)) { errs.push(`${def.label}: недопустимое значение`); continue; } }
     else if (typeof v !== 'string' || !v.trim()) { errs.push(`${def.label}: пусто`); continue; }
+    if (k === 'keyBridge.tradeUrl' && !parseTradeUrl(v)) { errs.push(`${def.label}: нужна ссылка вида https://steamcommunity.com/tradeoffer/new/?partner=…&token=…`); continue; }
     if (k === 'timezone') { try { new Intl.DateTimeFormat('en', { timeZone: v }); } catch { errs.push('Неизвестный часовой пояс'); continue; } }
     clean[k] = v;
   }

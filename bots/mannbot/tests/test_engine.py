@@ -122,3 +122,26 @@ def test_adopts_existing_offer_instead_of_double_send():
     o = db.get_order(oid)
     assert o["offer_id"] == "424242" and o["status"] == S.OFFER_SENT.value
     assert len([k for k, v in steam.offers.items() if v["to"] == str(888 + 76561197960265728)]) == 1
+
+
+def test_bridge_gift_accepted_only_from_lisbot_with_keys_only():
+    db, notifier, fp, steam, engine, analytics = make()
+    lis = "76561198000000777"
+    key = engine.cfg.steam.key_market_hash_name
+    before = len(steam.inventory)
+    steam.incoming["501"] = {"from": lis, "names": [key, key, key]}
+    steam.incoming["502"] = {"from": "76561198000000999", "names": [key]}          # чужой аккаунт
+    steam.incoming["503"] = {"from": lis, "names": [key, "Strange Scattergun"]}      # не только ключи
+    steam.incoming["504"] = {"from": lis, "names": [key], "give": 1}                # просит наши предметы
+
+    asyncio.run(engine.security_watch())                 # мост выключен: ничего не принимаем
+    assert len(steam.inventory) == before and "501" in steam.incoming
+
+    engine.cfg.security["accept_gifts_from"] = [lis]
+    asyncio.run(engine.security_watch())
+    assert len(steam.inventory) == before + 3
+    assert "501" not in steam.incoming and "502" in steam.incoming and "503" in steam.incoming
+    assert "504" not in steam.incoming                    # отклонён как запрос наших предметов
+    assert db.kv_get("gift_done:501") == "accepted" and db.kv_get("gift_done:503") == "skipped"
+    assert any("Мост ключей: принято 3" in t for _, t in notifier.sent)
+    assert any("не только ключи" in t for _, t in notifier.sent)
