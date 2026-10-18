@@ -24,7 +24,7 @@ BOT_NAMES = {"lisbot": "lisbot", "lis": "lisbot", "mannbot": "mannbot", "mann": 
 PANEL_ONLY = {"set_live_mode", "withdraw"}          # деньги и боевой режим — только из панели
 HELP = ("<b>Центр перепродажи</b>\n"
         "/status — состояние ботов и тревоги\n"
-        "/report — отчёт за сутки\n"
+        "/report — отчёт за сутки, /week — за неделю\n"
         "/stock — склад LisBot и ключи MannBot\n"
         "/proposals — предложения координатора с кнопками\n"
         "/pause lisbot|mannbot — пауза торговли, /resume — продолжить\n"
@@ -104,6 +104,8 @@ class TelegramControl:
             return [(self._status_text(), None)]
         if cmd == "/report":
             return [(c.monitor.daily_report(), None)]
+        if cmd == "/week":
+            return [(await c.monitor.weekly_report(), None)]
         if cmd == "/stock":
             lines = c.inventory.report_lines()
             return [("\n".join(html.escape(x) for x in lines) or "Склады пусты или нет данных", None)]

@@ -91,7 +91,8 @@ async function refreshMonitor() {
       <span class="spacer" style="flex:1"></span>
       <button class="btn" onclick="openMonSettings()">Настройки уведомлений</button>
       <button class="btn" onclick="monTest()">Проверить</button>
-      <button class="btn" onclick="openReport()">Отчёт за сутки</button></div></div>
+      <button class="btn" onclick="openReport()">Отчёт за сутки</button>
+      <button class="btn" onclick="openReport('week')">За неделю</button></div></div>
     <div class="tabs" style="margin-top:10px">${tabs}</div>
     <div class="grid" id="monCharts">${Object.entries(monHist.bots).map(([n, b]) => botChart(n, b, monHist)).join('')}</div>
     <details class="card" style="margin-top:14px"><summary>Уведомления центра (${st.notifications.length})</summary>
@@ -101,8 +102,11 @@ async function refreshMonitor() {
 
 async function monTest() { flash('Отправляю…'); const r = await api('/api/monitor/test', {}); flash(r.message, !r.ok); refreshMonitor(); }
 
-async function openReport() {
-  const r = await api('/api/monitor/report');
+let repPeriod = '';
+async function openReport(period = '') {
+  repPeriod = period;
+  const r = await api(`/api/monitor/report${period ? '?period=' + period : ''}`);
+  $('#repTitle').textContent = period === 'week' ? 'Отчёт центра за неделю' : 'Отчёт центра за сутки';
   $('#repText').innerHTML = esc(r.text).replace(/&lt;(\/?)(b|i|code)&gt;/g, '<$1$2>');
   $('#repDlg').showModal();
 }
@@ -147,7 +151,7 @@ document.body.insertAdjacentHTML('beforeend', `
   </div>
 </form></dialog>
 <dialog id="repDlg"><form method="dialog">
-  <h3>Отчёт центра за сутки</h3>
+  <h3 id="repTitle">Отчёт центра за сутки</h3>
   <pre id="repText" class="mon-report"></pre>
   <div class="row" style="margin-top:14px">
     <button class="btn primary" value="send">Отправить в Telegram</button>
@@ -164,7 +168,7 @@ $('#monDlg').addEventListener('close', async () => {
 });
 $('#repDlg').addEventListener('close', async () => {
   if ($('#repDlg').returnValue !== 'send') return;
-  const r = await api('/api/monitor/report', {});
+  const r = await api(`/api/monitor/report${repPeriod ? '?period=' + repPeriod : ''}`, {});
   flash(r.message, !r.ok); refreshMonitor();
 });
 

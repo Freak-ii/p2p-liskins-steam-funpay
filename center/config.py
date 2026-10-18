@@ -63,6 +63,7 @@ DEFAULTS: dict = {
             "fail_when_bot_down": False,    # слать <url>/fail, пока включённый бот не работает
         },
         "daily_report": {"enabled": True, "time": "09:00"},
+        "weekly_report": {"enabled": True, "weekday": 0, "time": "09:00"},   # 0 — понедельник
     },
     "inventory": {                   # center/inventory.py
         "lis_old_days": 0,           # предмет LisBot «долго лежит» после стольких дней; 0 — как sell.maxHoldDaysAlert LisBot

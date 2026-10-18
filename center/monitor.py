@@ -570,6 +570,76 @@ class Monitor:
                          else "⚠ Последняя резервная копия не удалась")
         return "\n".join(lines)
 
+    # ------------------------------------------------------------------ недельный отчёт
+    async def weekly_report(self) -> str:
+        """Неделя против прошлой: сделки, выручка, прибыль по ботам в ₽, лучшие и худшие предметы LisBot,
+        аптайм за 7 дней, склад."""
+        now = self.clock()
+        a = self.center.analytics
+        rate = (await a.usd_rub())["rate"]
+        deals = a.deals(now - 14 * 86400)
+        rub = lambda v, d: a._conv(v, d["currency"], "RUB", rate) or 0  # noqa: E731
+
+        def stats(sel):
+            known = [d for d in sel if d["profit"] is not None]
+            return {"n": len(sel), "rev": sum(rub(d["revenue"], d) for d in sel), "profit": sum(rub(d["profit"], d) for d in known)}
+
+        def delta(cur, prev):
+            if not prev:
+                return ""
+            ch = (cur - prev) / abs(prev) * 100
+            return f" ({'+' if ch >= 0 else '−'}{abs(ch):.0f}% к прошлой)"
+
+        week = [d for d in deals if d["sold_at"] >= now - 7 * 86400]
+        prev = [d for d in deals if d["sold_at"] < now - 7 * 86400]
+        lines = [f"<b>📅 Неделя центра</b> · {time.strftime('%d.%m', time.localtime(now - 7 * 86400))}–"
+                 f"{time.strftime('%d.%m.%Y', time.localtime(now))}"]
+        tw, tp = stats(week), stats(prev)
+        lines.append(f"Сделок {tw['n']}{delta(tw['n'], tp['n'])} · выручка {_num(round(tw['rev']))} ₽"
+                     f"{delta(tw['rev'], tp['rev'])}")
+        lines.append(f"<b>Прибыль {_num(round(tw['profit']))} ₽</b>{delta(tw['profit'], tp['profit'])}")
+        for name, w in self.center.workers.items():
+            bw, bp = stats([d for d in week if d["bot"] == name]), stats([d for d in prev if d["bot"] == name])
+            lines.append(f"• {html.escape(w.title)}: сделок {bw['n']}, прибыль {_num(round(bw['profit']))} ₽"
+                         f"{delta(bw['profit'], bp['profit'])}")
+        items: dict[str, list[float]] = defaultdict(list)
+        for d in week:
+            if d["bot"] == "lisbot" and d["profit"] is not None:
+                items[d["name"]].append(d["profit"])
+        ranked = sorted(((sum(v), len(v), k) for k, v in items.items()), reverse=True)
+        if ranked:
+            lines += ["", "<b>LisBot, лучшие предметы недели</b>"]
+            lines += [f"{i + 1}. {html.escape(k)} — {'+' if p >= 0 else '−'}${abs(p):.2f} за {n} шт" for i, (p, n, k) in enumerate(ranked[:3])]
+            losers = [(p, n, k) for p, n, k in ranked if p < 0][-3:]
+            if losers:
+                lines += ["<b>В минус</b>"] + [f"• {html.escape(k)} — −${abs(p):.2f} за {n} шт" for p, n, k in reversed(losers)]
+        h = self.history(24 * 7, buckets=28)
+        lines += ["", "Аптайм за неделю: " + " · ".join(
+            f"{html.escape(self.center.workers[n].title.split(' ·')[0])} {_pct(b['uptime'])}, падений {b['crashes']}"
+            for n, b in h["bots"].items())]
+        inv = getattr(self.center, "inventory", None)
+        if inv:
+            try:
+                lines += [html.escape(x) for x in inv.report_lines()]
+            except Exception:  # noqa: BLE001
+                pass
+        return "\n".join(lines)
+
+    async def send_weekly_report(self) -> str:
+        text = await self.weekly_report()
+        self.events.add("center", "info", "monitor.weekly_report", "Недельный отчёт сформирован")
+        return await self.notify("monitor:weekly_report", "info", text, force=True)
+
+    def weekly_due(self) -> bool:
+        wr = self.cfg.get("weekly_report") or {}
+        if not wr.get("enabled", True):
+            return False
+        at = parse_hhmm(wr.get("time") or "09:00")
+        lt = time.localtime(self.clock())
+        if at is None or lt.tm_wday != int(wr.get("weekday", 0)) % 7 or lt.tm_hour * 60 + lt.tm_min < at:
+            return False
+        return self.kv_get("weekly_report_date") != time.strftime("%Y-%m-%d", lt)
+
     @staticmethod
     def _dur(s: float) -> str:
         return f"{s / 60:.0f} мин" if s < 3600 else f"{s / 3600:.1f} ч" if s < 86400 else f"{s / 86400:.1f} д"
@@ -594,6 +664,9 @@ class Monitor:
                     if self.clock() - self.center.started_at < 120:
                         await asyncio.sleep(120)
                     await self.send_daily_report()
+                if self.weekly_due():
+                    self.kv_set("weekly_report_date", time.strftime("%Y-%m-%d", time.localtime(self.clock())))
+                    await self.send_weekly_report()
             except Exception:  # noqa: BLE001
                 log.exception("ежедневный отчёт")
             await asyncio.sleep(30)
@@ -641,6 +714,13 @@ def routes(center) -> list:
                                                                                           "подробности в журнале центра")})
 
     async def report(request: web.Request):
+        week = request.query.get("period") == "week"
+        if week:
+            if request.method == "POST":
+                st = await m.send_weekly_report()
+                return web.json_response({"ok": st == "sent", "message": "Отчёт за неделю отправлен в Telegram" if st == "sent"
+                                          else "Отчёт сохранён в уведомлениях центра (Telegram не настроен или недоступен)"})
+            return web.json_response({"text": await m.weekly_report()})
         if request.method == "POST":
             st = await m.send_daily_report()
             return web.json_response({"ok": st == "sent", "message": "Отчёт отправлен в Telegram" if st == "sent"
