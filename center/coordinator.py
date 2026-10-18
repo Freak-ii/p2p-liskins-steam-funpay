@@ -285,6 +285,10 @@ class StubBackend:
             reco("Пополнить склад ключей MannBot",
                  f"На складе {im.get('stock')} ключей" + (f", хватит примерно на {_n(im.get('days_left'), 1)} дн."
                                                           if im.get("days_left") is not None else "."))
+        rd = f.get("readiness") or {}
+        if rd.get("problems"):
+            reco("Доделать настройку перед боевым режимом", "Не готово: " + "; ".join(rd["problems"][:4])
+                 + (f" и ещё {len(rd['problems']) - 4}" if len(rd["problems"]) > 4 else "") + ". Подробности — карточка под ботами или /ready.")
         cu = f.get("customers") or {}
         if (cu.get("counts") or {}).get("sleeping"):
             names = ", ".join(x["username"] or str(x["funpay_id"]) for x in cu.get("sleeping_top", [])[:3])
@@ -830,6 +834,14 @@ class Coordinator:
             out["inventory"] = c.inventory.brief()
         except Exception as e:  # noqa: BLE001
             out["inventory"] = {"error": str(e)}
+        rd = getattr(c, "readiness", None)
+        if rd is not None and not c.demo:
+            try:
+                r = rd.check()
+                out["readiness"] = {"ready": r["ready"], "problems": [i["title"] for i in r["items"] if i["level"] == "fail"],
+                                    "warnings": [i["title"] for i in r["items"] if i["level"] == "warn"]}
+            except Exception as e:  # noqa: BLE001
+                out["readiness"] = {"error": str(e)}
         try:
             out["customers"] = await asyncio.to_thread(c.crm.segments_brief, self.clock())
         except Exception as e:  # noqa: BLE001

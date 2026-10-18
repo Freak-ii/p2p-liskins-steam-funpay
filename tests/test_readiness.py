@@ -115,3 +115,17 @@ def test_live_mode_blocked_until_ready(tmp_path):
         assert changes[-1] == {"dryRun": False}
         c.events.close()
     asyncio.run(go())
+
+
+def test_readiness_in_coordinator_briefing(tmp_path):
+    import json
+    from center.coordinator import StubBackend
+
+    async def go():
+        c = Center(tmp_path)
+        f = await c.coordinator.facts()
+        assert f["readiness"]["ready"] is False and any("LIS-SKINS" in p for p in f["readiness"]["problems"])
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps(f)}</facts>", {})
+        assert any(r["title"] == "Доделать настройку перед боевым режимом" for r in res["recommendations"])
+        c.events.close()
+    asyncio.run(go())
