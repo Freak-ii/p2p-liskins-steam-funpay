@@ -86,6 +86,13 @@ def _bot(args: dict, allowed=BOTS) -> str:
     return b
 
 
+def _item_name(args: dict) -> str:
+    name = str(args.get("name") or "").strip()
+    if not name or len(name) > 200:
+        raise ToolError("нужно название предмета (name) из списка закупок LisBot")
+    return name
+
+
 def _changes(args: dict, keys: set[str]) -> dict:
     ch = args.get("changes")
     if not isinstance(ch, dict) or not ch:
@@ -107,6 +114,8 @@ TOOLS: dict[str, tuple[str, str, object]] = {
     "resume_bot": ("Снять паузу торговли бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
     "restart_bot": ("Перезапустить процесс бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
     "ack_alerts": ("Подтвердить все тревоги бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
+    "disable_item": ("Перестать закупать предмет LisBot (name): выключить его в списке закупок, продажи не трогает",
+                     "propose", lambda a: {"name": _item_name(a)}),
     "change_strategy": ("Изменить настройки стратегии LisBot (changes: {ключ: значение}; ключи: "
                         + ", ".join(sorted(STRATEGY_KEYS)) + ")", "propose",
                         lambda a: {"changes": _changes(a, STRATEGY_KEYS)}),
@@ -487,6 +496,24 @@ class Coordinator:
             return "настройки сохранены. " + await w.restart("координатор: смена режима")
         return "настройки сохранены"
 
+    async def _disable_item(self, name: str) -> str:
+        w = self._worker("lisbot")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15), headers=w._headers()) as s:
+            async with s.get(f"{w.base_url}/api/watchlist") as r:
+                items = await r.json(content_type=None)
+            it = next((x for x in items if isinstance(x, dict) and x.get("name") == name), None) if isinstance(items, list) else None
+            if it is None:
+                raise ToolError(f"«{name}» нет в списке закупок LisBot")
+            if not it.get("enabled"):
+                return "уже выключен"
+            keep = {k: it.get(k) for k in ("max_held", "max_per_day", "min_roi", "max_price_usd", "notes")}
+            note = (keep["notes"] + "; " if keep["notes"] else "") + time.strftime("выключен координатором %d.%m")
+            async with s.post(f"{w.base_url}/api/watchlist", json={**keep, "name": name, "enabled": False, "notes": note}) as r:
+                d = await r.json(content_type=None)
+                if r.status != 200 or not d.get("ok"):
+                    raise ToolError(f"LisBot не принял изменение: {d.get('error') or r.status}")
+        return "закупки предмета выключены"
+
     async def execute(self, tool: str, args: dict) -> str:
         """Выполнить инструмент через API центра. Проверка полномочий — у вызывающего."""
         args = self.validate(tool, args)
@@ -502,6 +529,8 @@ class Coordinator:
             if not ok:
                 raise ToolError(msg)
             return msg
+        if tool == "disable_item":
+            return await self._disable_item(args["name"])
         if tool in ("change_strategy", "change_limits"):
             return await self._lis_settings(args["changes"])
         if tool == "set_live_mode":
@@ -514,6 +543,8 @@ class Coordinator:
         bot = {"lisbot": "LisBot", "mannbot": "MannBot"}.get(args.get("bot", ""), "")
         if tool in ("change_strategy", "change_limits"):
             return f"{TOOLS[tool][0].split(' (')[0]}: " + ", ".join(f"{k} = {v}" for k, v in args["changes"].items())
+        if tool == "disable_item":
+            return f"Перестать закупать «{args['name']}»"
         if tool == "set_live_mode":
             return f"{bot}: {'включить боевой режим' if args['live'] else 'вернуть тестовый режим'}"
         if tool == "withdraw":
@@ -645,7 +676,17 @@ class Coordinator:
             out.append({"code": "mann_refunds", "auto": False, "tool": "pause_bot", "args": {"bot": "mannbot"},
                         "title": "MannBot: много возвратов",
                         "reason": f"За сутки {nref} возвратов/отмен заказов MannBot"})
-        # 4. бот упал окончательно — центр перестал его перезапускать
+        # 4. предмет LisBot стабильно в минус — предложить выключить его закупку
+        k, days = int(a.get("item_loss_sales") or 3), float(a.get("item_loss_days") or 30)
+        for r in _rows(self._lis_db(), "SELECT i.name, COUNT(*) n, SUM(i.profit_usd) p FROM items i JOIN watchlist w "
+                       "ON w.name=i.name WHERE i.dry_run=0 AND i.status='sold' AND i.sold_at>=? AND w.enabled=1 "
+                       "GROUP BY i.name HAVING COUNT(*)>=? AND SUM(i.profit_usd)<=?",
+                       ((now - days * 86400) * 1000, k, -float(a.get("item_loss_min_usd") or 3))):
+            out.append({"code": f"lis_item_loss:{r['name']}", "auto": False, "tool": "disable_item", "args": {"name": r["name"]},
+                        "title": f"LisBot: «{r['name']}» в минусе",
+                        "reason": f"«{r['name']}»: {r['n']} продаж за {days:.0f} дн, итог −${-r['p']:.2f}. "
+                                  "Предлагаю перестать его закупать (уже купленное продаётся как обычно)."})
+        # 5. бот упал окончательно — центр перестал его перезапускать
         for name, w in self.center.workers.items():
             if w.state == CRASHED:
                 out.append({"code": f"{name}_crashed", "auto": False, "tool": "restart_bot", "args": {"bot": name},

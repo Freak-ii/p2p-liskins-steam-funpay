@@ -95,6 +95,9 @@ DEFAULTS: dict = {
             "loss_streak": 4,        # столько продаж LisBot подряд в минус…
             "loss_streak_min_usd": 5,     # …на общую сумму не меньше — пауза закупок
             "refunds_24h": 3,        # столько возвратов MannBot за сутки — предложить паузу
+            "item_loss_sales": 3,    # предмет LisBot продан столько раз за item_loss_days…
+            "item_loss_days": 30,
+            "item_loss_min_usd": 3,  # …с общим убытком не меньше — предложить выключить его закупку
             "cooldown_hours": 6,     # одна и та же аномалия не чаще
         },
     },
