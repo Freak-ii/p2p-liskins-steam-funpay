@@ -89,7 +89,17 @@ async def run(home, host: str, port: int, *, demo: bool, open_browser: bool, on_
         done.set()
 
 
+def _utf8_output() -> None:
+    """Windows: при выводе в файл или канал Python пишет в cp1252, и русский текст роняет центр. Пишем в UTF-8."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> None:
+    _utf8_output()
     ap = argparse.ArgumentParser(prog="center", description="Центр перепродажи: LisBot (LIS-SKINS → Steam) + MannBot (FunPay)")
     ap.add_argument("--home", help="папка данных центра (по умолчанию ./center-data или $CENTER_HOME)")
     ap.add_argument("--host", default=None)
