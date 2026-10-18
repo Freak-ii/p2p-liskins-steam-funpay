@@ -700,6 +700,34 @@ class Monitor:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ недельный отчёт
+    async def today_report(self) -> str:
+        """Сегодня с полуночи против вчера к этому же времени (/today в Telegram)."""
+        a = self.center.analytics
+        now = self.clock()
+        lt = time.localtime(now)
+        midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+        rate = (await a.usd_rub())["rate"]
+        deals = await asyncio.to_thread(a.deals, midnight - 86400)
+        rub = lambda v, d: a._conv(v, d["currency"], "RUB", rate) or 0  # noqa: E731
+
+        def stats(sel):
+            return {"n": len(sel), "rev": sum(rub(d["revenue"], d) for d in sel),
+                    "profit": sum(rub(d["profit"], d) for d in sel if d["profit"] is not None)}
+
+        def delta(cur, prev):
+            return f" (вчера {_num(round(prev))})" if prev else ""
+
+        cur = [d for d in deals if midnight <= d["sold_at"] <= now]
+        prev = [d for d in deals if midnight - 86400 <= d["sold_at"] <= now - 86400]
+        t, p = stats(cur), stats(prev)
+        lines = [f"<b>📅 Сегодня до {time.strftime('%H:%M', lt)}</b> · в скобках — вчера к этому времени",
+                 f"Сделок {t['n']}{delta(t['n'], p['n'])} · выручка {_num(round(t['rev']))} ₽{delta(t['rev'], p['rev'])}",
+                 f"<b>Прибыль {_num(round(t['profit']))} ₽</b>{delta(t['profit'], p['profit'])}"]
+        for name, w in self.center.workers.items():
+            b, bp = stats([d for d in cur if d["bot"] == name]), stats([d for d in prev if d["bot"] == name])
+            lines.append(f"• {html.escape(w.title)}: сделок {b['n']}, прибыль {_num(round(b['profit']))} ₽{delta(b['profit'], bp['profit'])}")
+        return "\n".join(lines)
+
     async def weekly_report(self) -> str:
         """Неделя против прошлой: сделки, выручка, прибыль по ботам в ₽, лучшие и худшие предметы LisBot,
         аптайм за 7 дней, склад."""

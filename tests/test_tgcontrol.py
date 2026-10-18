@@ -132,3 +132,31 @@ def test_errors_command_and_daily_report(tmp_path):
         assert "Ошибок в выводе: 3" in c.monitor.daily_report()
         c.events.close()
     asyncio.run(go())
+
+
+def test_today_command(tmp_path):
+    import sqlite3
+    import time
+    from tests.test_analytics import seed
+    seed(tmp_path)
+    lt = time.localtime(time.time() + 30 * 86400)      # через месяц: сделки seed() не попадают ни в сегодня, ни во вчера
+    noon = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 12, 0, 0, 0, 0, -1))
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    for name, sold, profit in (("T1", noon - 3600, 2.0), ("Y1", noon - 86400 - 3600, 1.0), ("Y2", noon - 86400 + 3600, 5.0)):
+        ms = int(sold * 1000)
+        con.execute("INSERT INTO items(name,mode,status,dry_run,buy_price_usd,expected_net_usd,received_at,sold_at,sold_usd,"
+                    "profit_usd,created_at,updated_at) VALUES(?,'rtba','sold',0,10,12,?,?,?,?,?,?)",
+                    (name, ms - 9 * 86400000, ms, 10 + profit, profit, ms - 10 * 86400000, ms))
+    con.commit()
+    con.close()
+
+    async def go():
+        c, calls = _center(tmp_path)
+        c.monitor.clock = lambda: noon
+        c._updates = [_msg(1, "/today")]
+        await c.tg.poll_once()
+        text = calls[-1][1]["text"]
+        # курс seed — 90 ₽/$: сегодня +2 $ = 180 ₽, вчера к полудню +1 $ = 90 ₽ (Y2 продан вчера после полудня — не в счёт)
+        assert "Сегодня до 12:00" in text and "Прибыль 180 ₽</b> (вчера 90)" in text and "Сделок 1 (вчера 1)" in text
+        c.events.close()
+    asyncio.run(go())
