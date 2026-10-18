@@ -76,3 +76,27 @@ label.check input { width: auto; }
 #anPnl { overflow-x: auto; }
 .grid > * { min-width: 0; }
 @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+
+/* CRM */
+.filters { margin-bottom: 8px; }
+.filters input[type=search] { flex: 1 1 260px; width: auto; }
+select, textarea { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; }
+textarea { width: 100%; resize: vertical; }
+label.check { display: inline-flex; gap: 6px; align-items: center; margin: 8px 0 0; }
+label.check input { width: auto; }
+.tablewrap { overflow-x: auto; }
+table.crm td { white-space: nowrap; }
+tr.click { cursor: pointer; } tr.click:hover td { background: color-mix(in srgb, var(--primary) 6%, transparent); }
+th.sortable { cursor: pointer; user-select: none; } th.sortable:hover { color: var(--primary); }
+.warn { color: var(--warn); }
+.badge.pos, .badge.neg, .badge.warn { font-weight: 600; }
+.tag { display: inline-block; padding: 0 6px; margin-right: 3px; border-radius: 5px; font-size: 11px; background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.nowrap { white-space: nowrap; }
+dialog.wide { max-width: 860px; max-height: 88vh; overflow: auto; }
+dialog h4 { margin: 14px 0 6px; font-size: 13px; }
+.msgs { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.msg { padding: 6px 9px; border-radius: 8px; max-width: 80%; white-space: pre-wrap; background: var(--bg); }
+.msg.out { align-self: flex-end; background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.stat b span { font-size: inherit; color: inherit; } .stat b span.pos { color: var(--ok); } .stat b span.neg { color: var(--bad); }
+#crmGroups, #crmRisk, #crmView { flex-wrap: wrap; }

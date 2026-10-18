@@ -12,6 +12,7 @@ from pathlib import Path
 from center.analytics import Analytics
 from center.bots import BotWorker, LisBotWorker, MannBotWorker
 from center.config import CenterConfig
+from center.crm import Crm
 from center.events import EventStore
 from center.vault import SecretStore
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
@@ -40,6 +41,7 @@ class Center:
         self._poll_task: asyncio.Task | None = None
         self.started_at = time.time()
         self.analytics = Analytics(self)
+        self.crm = Crm(self)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))

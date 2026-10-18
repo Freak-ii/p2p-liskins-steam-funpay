@@ -13,6 +13,7 @@ from aiohttp import web
 
 from center.app import Center
 from center.bots import LIS_SECRET_KEYS, LisBotWorker, MannBotWorker, parse_mafile
+from center.crm import CrmError
 
 STATIC = Path(__file__).resolve().parent / "static"
 COOKIE = "center_token"
@@ -180,6 +181,64 @@ def make_app(center: Center) -> web.Application:
         return web.Response(body=body, content_type=ctype.split(";")[0], charset="utf-8" if fmt == "csv" else None,
                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
+    # ------------------------------------------------------------------ CRM
+    def crm_filters(request: web.Request) -> dict:
+        q = request.query
+        bot = q.get("bot", "")
+        return {"q": q.get("q", "").strip()[:200], "bot": bot if bot in center.workers else "", "group": q.get("group", ""),
+                "days": days_q(request, None), "dry": q.get("dry") == "1", "sort": q.get("sort", "created_at"),
+                "desc": q.get("dir", "desc") != "asc"}
+
+    def crm_int(request: web.Request, key: str, default: int) -> int:
+        try:
+            return max(0, int(request.query.get(key, default)))
+        except ValueError:
+            return default
+
+    def crm_error(e: CrmError) -> web.Response:
+        return web.json_response({"ok": False, "message": str(e)}, status=e.status)
+
+    async def crm_deals(request: web.Request):
+        return web.json_response(center.crm.deals(**crm_filters(request), limit=crm_int(request, "limit", 100),
+                                                  offset=crm_int(request, "offset", 0)))
+
+    async def crm_deal(request: web.Request):
+        bot, ref = request.match_info["bot"], request.match_info["ref"]
+        try:
+            if request.method == "POST":
+                data = await request.json()
+                text = lambda k: data[k] if isinstance(data.get(k), str) else None  # noqa: E731
+                return web.json_response({"ok": True, "message": await center.crm.update_deal(
+                    bot, ref, notes=text("notes"), tags=text("tags"))})
+            return web.json_response(center.crm.deal(bot, ref))
+        except CrmError as e:
+            return crm_error(e)
+
+    async def crm_export(request: web.Request):
+        rows = center.crm.export_rows(**crm_filters(request))
+        name = f"crm-deals-{time.strftime('%Y%m%d')}.csv"
+        return web.Response(body=center.analytics.to_csv(rows), content_type="text/csv", charset="utf-8",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    async def crm_customers(request: web.Request):
+        q = request.query
+        return web.json_response(center.crm.customers(q=q.get("q", "").strip()[:200], risk=q.get("risk", ""),
+                                                      tag=q.get("tag", ""), sort=q.get("sort", "last_order"),
+                                                      limit=crm_int(request, "limit", 200), offset=crm_int(request, "offset", 0)))
+
+    async def crm_customer(request: web.Request):
+        cid = int(request.match_info["cid"])
+        try:
+            if request.method == "POST":
+                data = await request.json()
+                text = lambda k: data[k] if isinstance(data.get(k), str) else None  # noqa: E731
+                bl = data.get("blacklisted")
+                return web.json_response({"ok": True, "message": await center.crm.update_customer(
+                    cid, notes=text("notes"), tags=text("tags"), blacklisted=bl if isinstance(bl, bool) else None)})
+            return web.json_response(center.crm.customer(cid))
+        except CrmError as e:
+            return crm_error(e)
+
     async def quit_center(request: web.Request):
         asyncio.get_running_loop().call_later(0.5, center.quit_event.set)
         return web.json_response({"ok": True, "message": "Центр завершает работу"})
@@ -196,6 +255,10 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/analytics/pnl", an_pnl), web.get("/api/analytics/daily", an_daily),
         web.get("/api/analytics/bot/{name:lisbot|mannbot}", an_bot),
         web.get("/api/analytics/export.{fmt:csv|xlsx}", an_export),
+        web.get("/api/crm/deals", crm_deals), web.get("/api/crm/deals.csv", crm_export),
+        web.get("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal), web.post("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal),
+        web.get("/api/crm/customers", crm_customers),
+        web.get("/api/crm/customers/{cid:-?\\d+}", crm_customer), web.post("/api/crm/customers/{cid:-?\\d+}", crm_customer),
     ])
     app.router.add_static("/static/", STATIC)
     return app

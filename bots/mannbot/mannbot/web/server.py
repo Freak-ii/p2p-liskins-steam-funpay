@@ -171,6 +171,28 @@ def make_app(sup, log_handler=None) -> web.Application:
                                    str(data.get("note", "")))
         raise web.HTTPFound("/customers")
 
+    # JSON для CRM центра: заметки к заказу, заметки/теги/чёрный список покупателя
+    async def api_order(request: web.Request):
+        oid = request.match_info["oid"]
+        if not sup.db.get_order(oid):
+            return web.json_response({"ok": False, "error": "заказ не найден"}, status=404)
+        data = await request.json()
+        if not isinstance(data.get("notes"), str):
+            return web.json_response({"ok": False, "error": "нужно поле notes"}, status=400)
+        sup.db.update_order(oid, notes=data["notes"][:2000])
+        sup.db.add_event(oid, "dashboard_action", action="note", result="заметка сохранена", by=data.get("by", "api"))
+        return web.json_response({"ok": True})
+
+    async def api_customer(request: web.Request):
+        cid = int(request.match_info["cid"])
+        data = await request.json()
+        text = lambda k, n: data[k][:n] if isinstance(data.get(k), str) else None  # noqa: E731
+        if not sup.db.update_customer(cid, notes=text("notes", 2000), tags=text("tags", 200)):
+            return web.json_response({"ok": False, "error": "покупатель не найден"}, status=404)
+        if isinstance(data.get("blacklisted"), bool):
+            sup.engine.admin_blacklist(cid, data["blacklisted"])
+        return web.json_response({"ok": True})
+
     async def pricing(request: web.Request):
         db, a = sup.db, sup.analytics
         snap = db.one("SELECT * FROM competitor_snapshots ORDER BY id DESC LIMIT 1")
@@ -414,7 +436,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/login", login), web.post("/login", login), web.get("/api/ping", ping),
         web.get("/", dashboard), web.get("/orders", orders), web.get("/orders/{oid}", order),
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
-        web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing), web.get("/alerts", alerts),
+        web.post("/customers/{cid}", customer_action), web.post("/api/orders/{oid}", api_order),
+        web.post("/api/customers/{cid:\\d+}", api_customer), web.get("/pricing", pricing), web.get("/alerts", alerts),
         web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
         web.get("/api/summary", api_status), web.get("/api/settings", api_settings),
         web.post("/api/settings", api_settings),
