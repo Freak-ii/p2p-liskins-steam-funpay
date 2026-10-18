@@ -129,3 +129,16 @@ def test_readiness_in_coordinator_briefing(tmp_path):
         assert any(r["title"] == "Доделать настройку перед боевым режимом" for r in res["recommendations"])
         c.events.close()
     asyncio.run(go())
+
+
+def test_center_yaml_typos_and_broken_file(tmp_path):
+    c = Center(tmp_path)
+    assert "center_yaml" not in _levels(c.readiness.check())
+    c.cfg.save({"monitor": {"dedup_minutse": 5}})
+    item = next(i for i in c.readiness.check()["items"] if i["key"] == "center_yaml")
+    assert item["level"] == "warn" and "dedup_minutse" in item["detail"]
+    c.events.close()
+    (tmp_path / "center.yaml").write_text("center: [oops\n", encoding="utf-8")
+    c2 = Center(tmp_path)
+    assert _levels(c2.readiness.check())["center_yaml"] == "fail"
+    c2.events.close()

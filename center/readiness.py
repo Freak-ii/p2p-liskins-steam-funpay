@@ -10,6 +10,8 @@ import re
 
 from aiohttp import web
 
+from center.config import check_config
+
 STEAM64_BASE = 76561197960265728
 LEVELS = ("fail", "warn", "info", "ok")
 
@@ -143,6 +145,15 @@ class Readiness:
         add("budget", "ok" if budget else "info", f"Общий капитал центра: ${budget:g}" if budget else "Общий капитал центра не задан",
             "" if budget else "Лимиты ботов не согласованы с вашим бюджетом.", "" if budget else "RTBA и лимиты")
 
+        cfg = self.center.cfg
+        cfg_problems = [(lv, t) for lv, t in getattr(cfg, "problems", []) if lv == "critical"] + \
+            [("warn", t) for t in check_config(cfg.user)]          # опечатки — по текущему файлу, после правки пропадают
+        if cfg_problems:
+            crit = any(lv == "critical" for lv, _ in cfg_problems)
+            add("center_yaml", "fail" if crit else "warn",
+                "center.yaml был с ошибкой и не прочитан" if crit else f"В center.yaml есть опечатки: {len(cfg_problems)}",
+                "; ".join(t for _, t in cfg_problems[:3]) + (f" и ещё {len(cfg_problems) - 3}" if len(cfg_problems) > 3 else ""),
+                "center.yaml в папке данных центра")
         items.sort(key=lambda i: LEVELS.index(i["level"]))
         counts = {lv: sum(1 for i in items if i["level"] == lv) for lv in LEVELS}
         return {"ready": counts["fail"] == 0, "counts": counts, "items": items}
