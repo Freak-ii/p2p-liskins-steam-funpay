@@ -628,6 +628,14 @@ class Monitor:
                 lines += [html.escape(x) for x in inv.report_lines()]
             except Exception:  # noqa: BLE001
                 pass
+        crm = getattr(self.center, "crm", None)
+        if crm:
+            try:
+                seg = await asyncio.to_thread(crm.segment_lines, now)
+                if seg:
+                    lines += [""] + [html.escape(x) for x in seg]
+            except Exception:  # noqa: BLE001
+                log.exception("сегменты покупателей для недельного отчёта")
         return "\n".join(lines)
 
     async def send_weekly_report(self) -> str:

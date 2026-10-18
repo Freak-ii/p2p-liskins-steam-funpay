@@ -235,6 +235,7 @@ def make_app(center: Center) -> web.Application:
         q = request.query
         return web.json_response(await asyncio.to_thread(
             lambda: center.crm.customers(q=q.get("q", "").strip()[:200], risk=q.get("risk", ""), tag=q.get("tag", ""),
+                                         segment=q.get("segment", ""),
                                          sort=q.get("sort", "last_order"), limit=crm_int(request, "limit", 200),
                                          offset=crm_int(request, "offset", 0))))
 

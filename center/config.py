@@ -66,6 +66,12 @@ DEFAULTS: dict = {
         "daily_report": {"enabled": True, "time": "09:00"},
         "weekly_report": {"enabled": True, "weekday": 0, "time": "09:00"},   # 0 — понедельник
     },
+    "crm": {                         # сегменты покупателей FunPay, center/crm.py
+        "sleep_days": 30,            # нет покупок дольше — «уснул» (стоит написать)
+        "lost_days": 90,             # дольше — «ушёл»
+        "vip_spent_rub": 5000,       # VIP: потратил столько ₽ или сделал vip_orders покупок
+        "vip_orders": 5,
+    },
     "inventory": {                   # center/inventory.py
         "lis_old_days": 0,           # предмет LisBot «долго лежит» после стольких дней; 0 — как sell.maxHoldDaysAlert LisBot
         "mann_days_warn": 3,         # ключей MannBot меньше чем на столько дней продаж — уведомление

@@ -1,12 +1,14 @@
 // Вкладка «CRM» общей панели: единый список сделок обоих ботов, покупатели FunPay, карточки, заметки и теги.
 // Использует $, esc, api, fmtTs, flash из index.html и tabs из analytics.js.
 const CRM = { view: 'deals', q: '', bot: '', group: '', days: 'all', dry: false, sort: 'created_at', dir: 'desc', offset: 0, limit: 50,
-  cq: '', risk: '', tag: '', csort: 'last_order' };
+  cq: '', risk: '', tag: '', segment: '', csort: 'last_order' };
 const RISK = { low: ['низкий', 'pos'], medium: ['средний', 'warn'], high: ['высокий', 'neg'] };
 const BOT_T = { lisbot: 'LisBot', mannbot: 'MannBot' };
 const cm = (v, cur) => v == null ? '—' : v.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + (cur === 'USD' ? ' $' : ' ₽');
 const cprofit = (v, cur) => v == null ? '—' : `<span class="${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${v > 0 ? '+' : ''}${cm(v, cur)}</span>`;
 const riskBadge = (r) => `<span class="badge ${RISK[r.level][1]}" title="${esc(r.reasons.map((x) => `${x.points > 0 ? '+' : ''}${x.points}: ${x.text}`).join('\n'))}">${r.score} · ${RISK[r.level][0]}</span>`;
+const SEG_CLS = { vip: 'pos', regular: 'pos', new: '', sleeping: 'warn', lost: 'muted', risky: 'neg', prospect: 'muted' };
+const segBadge = (g) => g ? `<span class="badge ${SEG_CLS[g.key] || ''}" title="${esc(g.why)}">${esc(g.text)}</span>` : '';
 const grpCls = { open: '', attention: 'warn', done: 'pos', failed: 'neg' };
 let crmTimer = null;
 
@@ -48,19 +50,21 @@ async function crmDeals() {
 async function crmCustomers() {
   let d;
   try {
-    d = await api(`/api/crm/customers?${new URLSearchParams({ q: CRM.cq, risk: CRM.risk, tag: CRM.tag, sort: CRM.csort })}`);
+    d = await api(`/api/crm/customers?${new URLSearchParams({ q: CRM.cq, risk: CRM.risk, tag: CRM.tag, segment: CRM.segment, sort: CRM.csort })}`);
   } catch { return; }
   const all = d.levels.low + d.levels.medium + d.levels.high;
   tabs('#crmRisk', [['', `Все ${all}`], ...Object.entries(RISK).map(([k, [t]]) => [k, `${t} риск ${d.levels[k]}`])], CRM.risk, (k) => { CRM.risk = k; crmCustomers(); });
+  tabs('#crmSeg', [['', 'Все сегменты'], ...Object.entries(d.segment_names).filter(([k]) => d.segments[k] || k === CRM.segment)
+    .map(([k, t]) => [k, `${t} ${d.segments[k]}`])], CRM.segment, (k) => { CRM.segment = k; crmCustomers(); });
   $('#crmTag').innerHTML = `<option value="">все теги</option>${d.tags.map((t) => `<option ${t === CRM.tag ? 'selected' : ''}>${esc(t)}</option>`).join('')}`;
   $('#crmCustTable').innerHTML = `<thead><tr><th>Покупатель</th><th>Заказов</th><th>Подтв.</th><th>Возвр.</th><th>Потратил</th><th>Ключей</th>
-    <th>Последний заказ</th><th>Отзывы</th><th>Риск</th><th>Теги / заметка</th></tr></thead><tbody>
+    <th>Последний заказ</th><th>Отзывы</th><th>Сегмент</th><th>Риск</th><th>Теги / заметка</th></tr></thead><tbody>
     ${d.rows.map((c) => `<tr class="click" data-cust="${c.funpay_id}"><td>${c.blacklisted ? '⛔ ' : ''}<b>${esc(c.username || c.funpay_id)}</b> <span class="muted small">${c.funpay_id}</span></td>
       <td>${c.stats.orders}</td><td>${c.stats.completed}</td><td class="${c.stats.refunded ? 'neg' : ''}">${c.stats.refunded}</td>
       <td>${cm(c.stats.spent, c.stats.currency)}</td><td>${c.stats.keys}</td><td>${fmtTs(c.stats.last_order || c.last_seen)}</td>
-      <td>${c.stats.avg_stars == null ? '—' : `${c.stats.avg_stars}★ (${c.stats.reviews})`}</td><td>${riskBadge(c.risk)}</td>
+      <td>${c.stats.avg_stars == null ? '—' : `${c.stats.avg_stars}★ (${c.stats.reviews})`}</td><td>${segBadge(c.segment)}</td><td>${riskBadge(c.risk)}</td>
       <td class="small">${c.tags.split(',').filter((t) => t.trim()).map((t) => `<span class="tag">${esc(t.trim())}</span>`).join('')} ${esc(c.notes.slice(0, 50))}</td></tr>`).join('')
-      || '<tr><td colspan="10" class="muted">Покупателей пока нет — они появятся после первых заказов MannBot</td></tr>'}</tbody>`;
+      || '<tr><td colspan="11" class="muted">Покупателей пока нет — они появятся после первых заказов MannBot</td></tr>'}</tbody>`;
 }
 
 function crmLoad() {
@@ -115,7 +119,7 @@ async function openCustomer(cid) {
   if (c.ok === false) { flash(c.message, true); return; }
   const s = c.stats, cur = s.currency;
   crmShow(`<div class="row"><h3>${c.blacklisted ? '⛔ ' : ''}${esc(c.username || c.funpay_id)}</h3><span class="muted small">FunPay ID ${c.funpay_id}</span>
-      <span class="spacer" style="flex:1"></span>${riskBadge(c.risk)}</div>
+      <span class="spacer" style="flex:1"></span>${segBadge(c.segment)} ${riskBadge(c.risk)}</div>
     <div class="muted small">первый заказ ${fmtTs(s.first_order) || '—'} · последний ${fmtTs(s.last_order) || '—'}</div>
     <div class="stat">${kv(s.orders, 'заказов')}${kv(s.completed, 'подтвердил')}${kv(s.refunded, 'возвратов')}${kv(s.active, 'в работе')}
       ${kv(cm(s.spent, cur), 'потратил')}${kv(cm(s.avg_check, cur), 'средний чек')}${kv(s.keys, 'ключей')}

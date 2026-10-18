@@ -285,6 +285,12 @@ class StubBackend:
             reco("Пополнить склад ключей MannBot",
                  f"На складе {im.get('stock')} ключей" + (f", хватит примерно на {_n(im.get('days_left'), 1)} дн."
                                                           if im.get("days_left") is not None else "."))
+        cu = f.get("customers") or {}
+        if (cu.get("counts") or {}).get("sleeping"):
+            names = ", ".join(x["username"] or str(x["funpay_id"]) for x in cu.get("sleeping_top", [])[:3])
+            reco("Вернуть уснувших покупателей FunPay",
+                 f"Не покупают дольше {_n(cu.get('sleep_days'), 0)} дн: {cu['counts']['sleeping']} покупателей"
+                 + (f" ({names})" if names else "") + ". Напишите им в чат FunPay или сделайте скидку (вкладка CRM → «Уснул»).")
         for a in f.get("anomalies_24h", [])[:3]:
             hi.append(f"Аномалия: {a}")
         bad = [b["title"] for b in f.get("bots", []) if b["state"] != RUNNING]
@@ -758,6 +764,10 @@ class Coordinator:
             out["inventory"] = c.inventory.brief()
         except Exception as e:  # noqa: BLE001
             out["inventory"] = {"error": str(e)}
+        try:
+            out["customers"] = await asyncio.to_thread(c.crm.segments_brief, self.clock())
+        except Exception as e:  # noqa: BLE001
+            out["customers"] = {"error": str(e)}
         out["events_24h"] = crit
         out["open_proposals"] = [{"id": p["id"], "title": p["title"], "tool": p["tool"], "args": p["args"]}
                                  for p in self.decisions(20, kind="proposal", status="proposed")]
