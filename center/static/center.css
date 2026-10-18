@@ -116,3 +116,16 @@ dialog h4 { margin: 14px 0 6px; font-size: 13px; }
 .mon-tip { position: fixed; display: none; pointer-events: none; z-index: 10; background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0, 0, 0, .15); }
 .mon-report { white-space: pre-wrap; font: 13px/1.5 system-ui, sans-serif; background: var(--bg); padding: 10px; border-radius: 8px; max-height: 60vh; overflow: auto; }
 details summary { cursor: pointer; font-weight: 500; }
+
+/* ИИ-координатор (static/coordinator.js) */
+select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; width: 100%; }
+.btn[disabled] { opacity: .5; cursor: default; }
+.co-prop { border-top: 1px solid var(--line); padding: 9px 0; }
+.co-prop:first-of-type { border-top: 0; }
+.co-strict { border-left: 3px solid var(--warn); padding-left: 9px; }
+.co-t-auto, .co-t-propose { color: var(--info); } .co-t-confirm { color: var(--warn); } .co-t-manual { color: var(--bad); }
+.co-list { margin: 6px 0; padding-left: 18px; }
+.co-list li { margin: 2px 0; }
+.co-answer { white-space: pre-wrap; margin: 10px 0 4px; }
+.co-s-done { color: var(--ok); } .co-s-failed { color: var(--bad); } .co-s-proposed, .co-s-manual { color: var(--warn); }
+.co-s-rejected, .co-s-expired { color: var(--muted); }

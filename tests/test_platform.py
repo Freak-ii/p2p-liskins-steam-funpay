@@ -88,3 +88,16 @@ def test_soft_stop_lets_bot_exit_cleanly(tmp_path):
         assert "bye" in texts and w.last_exit == 0 and w.soft_stopped
         assert not any("принудительная" in t for t in texts)
     asyncio.run(go())
+
+
+def test_center_keys_live_in_vault(tmp_path):
+    from center.app import Center
+    c = Center(tmp_path)
+    c.cfg.save({"monitor": {"telegram": {"token": "123:plain"}}, "coordinator": {"ai": {"api_key": "sk-old-key-123"}}})
+    assert c.monitor._token() == "123:plain" and c.coordinator.api_key() == "sk-old-key-123"   # старые значения перенесены
+    c.coordinator.save_settings({"ai": {"api_key": "sk-new-key-456"}})
+    c.monitor.save_settings({"telegram_token": "456:new", "telegram_chat_id": "1"})
+    text = (tmp_path / "center.yaml").read_text(encoding="utf-8")
+    assert "plain" not in text and "sk-" not in text and "456:new" not in text
+    assert c.coordinator.api_key() == "sk-new-key-456" and c.monitor.telegram_target()[0] == "456:new"
+    c.events.close()
