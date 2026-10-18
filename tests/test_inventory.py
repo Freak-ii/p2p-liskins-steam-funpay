@@ -78,7 +78,9 @@ def test_mannbot_days_left_and_low_stock_event(tmp_path):
     # 7 ключей за 13 дней (первая выдача 13 дней назад), возврат не считается
     assert m["sold_keys"] == 7 and m["rate_days"] == 13.0 and m["per_day"] == round(7 / 13, 2)
     assert m["days_left"] == round(1 / (7 / 13), 1) and m["level"] == "low" and m["value"] == 150.0
-    assert c.inventory.check() and c.inventory.check() is None          # не чаще раза в сутки
+    assert m["restock"] == 7 and m["restock_cost"] == 1050.0              # 7/13 в день × 14 дн − 1 на складе
+    msg = c.inventory.check()
+    assert "докупить 7 ключей (~1 050 ₽) на 14 дн продаж" in msg and c.inventory.check() is None   # не чаще раза в сутки
     ev = c.events.recent(5)[0]
     assert ev["kind"] == "inventory.low_stock" and ev["source"] == "mannbot"
     assert any("Склад MannBot" in x and x.startswith("⚠") for x in c.inventory.report_lines())
@@ -94,6 +96,7 @@ def test_mannbot_no_forecast_without_a_day_of_history(tmp_path):
     con.close()
     m = Center(tmp_path).inventory.mannbot()
     assert m["sold_keys"] == 30 and m["per_day"] == 0 and m["days_left"] is None and m["level"] == "ok"
+    assert m["restock"] is None
 
 
 def test_inventory_api_and_coordinator(tmp_path):

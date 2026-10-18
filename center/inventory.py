@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 
 from aiohttp import web
@@ -26,6 +27,14 @@ STATUS_TEXT = {"bought": "куплен", "locked_on_lis": "блокировка 
                "ready": "готов к продаже", "listing": "выставляется", "listed": "на ТП"}
 AGE_BUCKETS = ((0, 7, "до 7 дн"), (7, 14, "7–14 дн"), (14, 30, "14–30 дн"), (30, None, "30+ дн"))
 VALUATION_TTL = 3 * DAY          # оценка цены старше — не доверяем, берём прогноз при покупке
+
+
+def _restock_text(m: dict) -> str:
+    """«: докупить N ключей (~X ₽) на T дн продаж» — сколько ключей нужно, чтобы склада хватило на target_days."""
+    if not m.get("restock"):
+        return ""
+    cost = f" (~{m['restock_cost']:,.0f} ₽)".replace(",", " ") if m.get("restock_cost") else ""
+    return f": докупить {m['restock']} ключей{cost} на {m['target_days']:.0f} дн продаж"
 
 
 class Inventory:
@@ -131,7 +140,10 @@ class Inventory:
         warn_days = float(self.cfg.get("mann_days_warn") or 3)
         level = ("empty" if stock is not None and stock <= 0 else
                  "low" if days_left is not None and days_left < warn_days else "ok" if stock is not None else "unknown")
-        return {"currency": "RUB", "stock": stock, "cost_per_key": cost_key,
+        target = float(self.cfg.get("mann_target_days") or 14)
+        restock = max(0, math.ceil(rate * target - stock)) if stock is not None and rate > 0 else None
+        return {"currency": "RUB", "stock": stock, "cost_per_key": cost_key, "target_days": target, "restock": restock,
+                "restock_cost": _r(restock * cost_key) if restock and cost_key else None,
                 "value": _r(cost_key * stock) if cost_key and stock is not None else None,
                 "sold_keys": keys, "rate_days": _r(span, 1), "per_day": _r(rate, 2), "days_left": _r(days_left, 1),
                 "warn_days": warn_days, "level": level}
@@ -154,7 +166,7 @@ class Inventory:
         return {"lisbot": {k: lis[k] for k in ("n", "cost", "value", "pnl", "losing", "old", "old_days", "forecast")}
                 | {"flagged_items": [{k: i[k] for k in ("name", "days", "cost", "value", "pnl", "flags")}
                                      for i in lis["items"] if i["flags"]][:8]},
-                "mannbot": {k: mann[k] for k in ("stock", "per_day", "days_left", "level")}}
+                "mannbot": {k: mann[k] for k in ("stock", "per_day", "days_left", "level", "restock", "restock_cost", "target_days")}}
 
     def report_lines(self) -> list[str]:
         b = self.brief()
@@ -175,7 +187,7 @@ class Inventory:
             if mann["days_left"] is not None:
                 line += f", хватит примерно на {mann['days_left']:.1f} дн ({mann['per_day']:.1f} в день)"
             if mann["level"] in ("low", "empty"):
-                line = "⚠ " + line
+                line = "⚠ " + line + _restock_text(mann)
             out.append(line)
         b = self.lis_balance()
         if b["low"]:
@@ -194,7 +206,7 @@ class Inventory:
             return None
         mon.kv_set("inventory_low_date", today)
         msg = (f"Ключи MannBot заканчиваются: на складе {m['stock']}, продаётся {m['per_day']:.1f} в день, "
-               f"хватит примерно на {m['days_left']:.1f} дн. Пополните склад.")
+               f"хватит примерно на {m['days_left']:.1f} дн. Пополните склад{_restock_text(m)}.")
         self.center.events.add("mannbot", "warn", "inventory.low_stock", msg)
         return msg
 

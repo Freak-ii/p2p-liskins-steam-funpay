@@ -38,7 +38,7 @@ async function invLoad() {
           <div><b class="${cls}">${m.days_left == null ? '—' : m.days_left.toLocaleString('ru-RU') + ' дн'}</b><span>хватит · ${txt}</span></div>
           <div><b>${money(m.value, 'RUB')}</b><span>по себестоимости</span></div>
         </div>
-        <div class="muted small">Если ключей останется меньше чем на ${m.warn_days} дн продаж, центр пришлёт уведомление.</div>
+        <div class="muted small">${m.restock ? `<b>Докупить ${m.restock} ключей</b>${m.restock_cost ? ` (≈${money(m.restock_cost, 'RUB')})` : ''}, чтобы хватило на ${m.target_days} дн продаж. ` : ''}Если ключей останется меньше чем на ${m.warn_days} дн продаж, центр пришлёт уведомление.</div>
       </div>
     </div>`;
 }

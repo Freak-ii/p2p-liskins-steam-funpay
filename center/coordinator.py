@@ -284,7 +284,8 @@ class StubBackend:
         if im.get("level") in ("low", "empty"):
             reco("Пополнить склад ключей MannBot",
                  f"На складе {im.get('stock')} ключей" + (f", хватит примерно на {_n(im.get('days_left'), 1)} дн."
-                                                          if im.get("days_left") is not None else "."))
+                                                          if im.get("days_left") is not None else ".")
+                 + (f" Докупите {im['restock']} ключей, чтобы хватило на {_n(im.get('target_days'), 0)} дн." if im.get("restock") else ""))
         rd = f.get("readiness") or {}
         if rd.get("problems"):
             reco("Доделать настройку перед боевым режимом", "Не готово: " + "; ".join(rd["problems"][:4])
