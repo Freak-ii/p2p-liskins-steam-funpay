@@ -131,3 +131,14 @@ def test_low_lis_balance_only_in_live_mode(tmp_path):
     assert ev["kind"] == "inventory.low_balance" and ev["source"] == "lisbot"
     assert any("Баланс LIS-SKINS $4.50" in x for x in c.inventory.report_lines())
     c.events.close()
+
+
+def test_market_drop_rule(tmp_path):
+    seed(tmp_path)
+    c = Center(tmp_path)
+    assert "lis_market_drop" not in {a["code"] for a in c.coordinator.detect()}    # AWP −10% — меньше порога 15%
+    c.cfg.save({"coordinator": {"anomaly": {"lis_drop_pct": 8}}})
+    an = next(a for a in c.coordinator.detect() if a["code"] == "lis_market_drop")
+    assert an["tool"] is None and "AWP -10%" in an["reason"] and "−$5.00" in an["reason"]
+    assert "Old" not in an["reason"]                                               # устаревшая оценка не считается
+    c.events.close()

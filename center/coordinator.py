@@ -730,7 +730,24 @@ class Coordinator:
                             "reason": f"Последняя покупка {(now - last / 1000) / 3600:.0f} ч назад, а за неделю обычно "
                                       f"{per_day:.1f} в день. Проверьте баланс LIS-SKINS, лимиты, подключение к LIS "
                                       "и журнал LisBot."})
-        # 7. бот упал окончательно — центр перестал его перезапускать
+        # 7. рынок пошёл вниз: купленные предметы LisBot подешевели больше порога (по свежей оценке цены)
+        drop = float(a.get("lis_drop_pct") or 0)
+        inv = getattr(self.center, "inventory", None)
+        if drop and inv is not None:
+            try:
+                fallen = [i for i in inv.lisbot()["items"] if i["value_source"] == "рынок" and i["pnl_pct"] is not None
+                          and i["pnl_pct"] <= -drop]
+            except Exception:  # noqa: BLE001
+                fallen = []
+            if fallen:
+                loss = -sum(i["pnl"] for i in fallen)
+                lst = ", ".join(f"{i['name']} {i['pnl_pct']:.0f}%" for i in sorted(fallen, key=lambda i: i["pnl_pct"])[:5])
+                out.append({"code": "lis_market_drop", "auto": False, "tool": None, "args": {},
+                            "title": f"LisBot: {len(fallen)} предмет(ов) подешевели больше чем на {drop:.0f}%",
+                            "reason": f"По рынку сейчас −${loss:.2f}: {lst}" + (f" и ещё {len(fallen) - 5}" if len(fallen) > 5 else "")
+                                      + ". Решите, держать или продавать (аналитика → «Склад»); если падает весь рынок, "
+                                        "поставьте закупки на паузу."})
+        # 8. бот упал окончательно — центр перестал его перезапускать
         for name, w in self.center.workers.items():
             if w.state == CRASHED:
                 out.append({"code": f"{name}_crashed", "auto": False, "tool": "restart_bot", "args": {"bot": name},
