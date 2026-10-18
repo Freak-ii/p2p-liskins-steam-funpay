@@ -19,9 +19,23 @@ function crmQuery(extra = {}) {
 }
 
 function crmControls() {
-  tabs('#crmView', [['deals', 'Сделки'], ['customers', 'Покупатели FunPay']], CRM.view, (k) => { CRM.view = k; crmLoad(); });
+  tabs('#crmView', [['deals', 'Сделки'], ['customers', 'Покупатели FunPay'], ['cohorts', 'Удержание']], CRM.view, (k) => { CRM.view = k; crmLoad(); });
   $('#crmDeals').hidden = CRM.view !== 'deals';
   $('#crmCust').hidden = CRM.view !== 'customers';
+  $('#crmCoh').hidden = CRM.view !== 'cohorts';
+}
+
+const MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+async function crmCohorts() {
+  let d;
+  try { d = await api('/api/crm/cohorts?months=6'); } catch { return; }
+  const n = d.months - 1;
+  const cell = (v) => v == null ? '<td class="muted">·</td>' : `<td style="background:color-mix(in srgb, var(--ok) ${Math.round(Math.min(100, v) * 0.6)}%, transparent)">${v.toLocaleString('ru-RU')}%</td>`;
+  $('#crmCohTable').innerHTML = `<thead><tr><th>Когорта</th><th>Новых</th>${Array.from({ length: n }, (_, i) => `<th>Через ${i + 1} мес</th>`).join('')}
+    <th>Вернулись</th><th>Принёс</th></tr></thead><tbody>
+    ${d.rows.slice().reverse().map((r) => { const [y, m] = r.month.split('-'); return `<tr><td>${MONTHS[+m - 1]} ${y}</td><td>${r.new}</td>
+      ${Array.from({ length: n }, (_, i) => i < r.retention.length && r.new ? cell(r.retention[i]) : '<td></td>').join('')}
+      <td>${r.repeat == null ? '—' : r.repeat.toLocaleString('ru-RU') + '%'}</td><td>${cm(r.ltv, 'RUB')}</td></tr>`; }).join('')}</tbody>`;
 }
 
 async function crmDeals() {
@@ -69,7 +83,7 @@ async function crmCustomers() {
 
 function crmLoad() {
   crmControls();
-  return CRM.view === 'deals' ? crmDeals() : crmCustomers();
+  return CRM.view === 'deals' ? crmDeals() : CRM.view === 'cohorts' ? crmCohorts() : crmCustomers();
 }
 
 // ---------------------------------------------------------------- карточки

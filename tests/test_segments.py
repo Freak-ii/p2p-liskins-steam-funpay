@@ -70,3 +70,25 @@ def test_winback_text_for_sleeping(tmp_path):
     c.cfg.save({"crm": {"winback_text": "Привет, {name}, скидка 5%"}})
     assert c.crm.customer(23)["winback"] == "Привет, sleepy, скидка 5%"
     c.events.close()
+
+
+def test_cohorts(tmp_path):
+    import time as _t
+    seed_crm(tmp_path)                                    # заказы seed_crm — больше года назад относительно now ниже
+    lt = _t.localtime(NOW + 400 * DAY)
+    now = _t.mktime((lt.tm_year, lt.tm_mon, 15, 12, 0, 0, 0, 0, -1))
+    m = lambda back: (NOW - now) / DAY + back * 30.4    # noqa: E731 — «дней назад от NOW» для заказа back месяцев до now
+    _orders(tmp_path, [
+        ("K1", 30, "a", 500, m(2), "completed"), ("K2", 30, "a", 300, m(1), "completed"),   # когорта −2, вернулся через 1
+        ("K3", 31, "b", 200, m(2), "completed"),                                           # когорта −2, не вернулся
+        ("K4", 32, "c", 400, m(2), "refunded"), ("K5", 32, "c", 100, m(0), "completed"),    # возврат не в счёт: когорта 0
+    ])
+    c = Center(tmp_path)
+    d = c.crm.cohorts(6, now=now)
+    rows = {r["month"]: r for r in d["rows"]}
+    assert len(d["rows"]) == 6
+    first = d["rows"][-3]
+    assert first["new"] == 2 and first["retention"] == [50.0, 0.0] and first["repeat"] == 50.0 and first["ltv"] == 500.0
+    assert d["rows"][-1]["new"] == 1 and d["rows"][-1]["retention"] == []
+    assert d["rows"][-2]["new"] == 0 and d["rows"][-2]["retention"] == [None]
+    assert sum(r["new"] for r in rows.values()) == 3

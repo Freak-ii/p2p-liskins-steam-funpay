@@ -361,6 +361,35 @@ class Crm:
             out.append(f"Уснули {n['sleeping']} (раньше потратили {b['sleeping_spent']:.0f} ₽): {names} — можно написать им в чат FunPay")
         return out
 
+    def cohorts(self, months: int = 6, now: float | None = None) -> dict:
+        """Удержание покупателей FunPay: когорты по месяцу первой покупки и доля тех, кто покупал снова
+        в каждый следующий месяц. Выручка — сколько в среднем принёс покупатель когорты за всё время (только ₽)."""
+        now = time.time() if now is None else now
+        lt = time.localtime(now)
+        cur = lt.tm_year * 12 + lt.tm_mon - 1
+        months = max(2, min(int(months), 24))
+        mi = lambda ts: (lambda t: t.tm_year * 12 + t.tm_mon - 1)(time.localtime(ts))  # noqa: E731
+        _, orders, _ = self._customer_rows()
+        groups: dict[int, list[tuple[set[int], float]]] = {}
+        for os_ in orders.values():
+            done = [o for o in os_ if o["delivered_at"] and o["status"] != "refunded"]
+            if not done:
+                continue
+            first = mi(min(o["created_at"] for o in done))
+            if first <= cur - months:
+                continue
+            spent = sum(float(o["price"] or 0) for o in done if _cur(o["currency"]) == "RUB")
+            groups.setdefault(first, []).append(({mi(o["created_at"]) for o in done}, spent))
+        rows = []
+        for m in range(cur - months + 1, cur + 1):
+            g = groups.get(m, [])
+            n = len(g)
+            ret = [(_r(sum(1 for ms, _ in g if m + k in ms) / n * 100, 1) if n else None) for k in range(1, cur - m + 1)]
+            rows.append({"month": f"{m // 12}-{m % 12 + 1:02d}", "new": n, "retention": ret,
+                         "repeat": _r(sum(1 for ms, _ in g if len(ms) > 1) / n * 100, 1) if n else None,
+                         "ltv": _r(sum(sp for _, sp in g) / n) if n else None})
+        return {"months": months, "rows": rows}
+
     def customer_brief(self, funpay_id: int) -> dict | None:
         custs, orders, owners = self._customer_rows()
         c = next((x for x in custs if x["funpay_id"] == funpay_id), None)

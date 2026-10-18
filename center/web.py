@@ -240,6 +240,9 @@ def make_app(center: Center) -> web.Application:
                                          sort=q.get("sort", "last_order"), limit=crm_int(request, "limit", 200),
                                          offset=crm_int(request, "offset", 0))))
 
+    async def crm_cohorts(request: web.Request):
+        return web.json_response(await asyncio.to_thread(center.crm.cohorts, crm_int(request, "months", 6)))
+
     async def crm_customer(request: web.Request):
         cid = int(request.match_info["cid"])
         try:
@@ -307,6 +310,7 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/crm/deals", crm_deals), web.get("/api/crm/deals.csv", crm_export),
         web.get("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal), web.post("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal),
         web.get("/api/crm/customers", crm_customers),
+        web.get("/api/crm/cohorts", crm_cohorts),
         web.get("/api/crm/customers/{cid:-?\\d+}", crm_customer), web.post("/api/crm/customers/{cid:-?\\d+}", crm_customer),
         web.get("/rtba", rtba_page), web.get("/api/rtba", rtba_status), web.get("/api/rtba/budget", rtba_budget), web.post("/api/rtba/budget", rtba_budget),
         web.post("/api/rtba/apply", rtba_apply), web.post("/api/rtba/backtest", rtba_backtest),
