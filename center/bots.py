@@ -95,6 +95,20 @@ def mann_secret_env(section: str, key: str) -> str:
     return "CENTER_MB_" + f"{section}_{key}".replace(".", "_").upper()
 
 
+def parse_mafile(content: str | bytes) -> dict:
+    """maFile Steam Desktop Authenticator → поля Steam MannBot (как parse_mafile в самом MannBot)."""
+    data = json.loads(content)
+    out = {"shared_secret": data.get("shared_secret", ""), "identity_secret": data.get("identity_secret", "")}
+    if not out["shared_secret"] or not out["identity_secret"]:
+        raise ValueError("в maFile нет shared_secret/identity_secret (файл зашифрован? отключите шифрование в SDA)")
+    if data.get("account_name"):
+        out["username"] = data["account_name"]
+    sid = (data.get("Session") or {}).get("SteamID") or data.get("steamid")
+    if sid:
+        out["steam_id"] = str(sid)
+    return out
+
+
 class MannBotWorker(BotWorker):
     """MannBot (Python): запускается своим лаунчером в режиме приложения, без браузера."""
 
@@ -182,6 +196,46 @@ class MannBotWorker(BotWorker):
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
             async with s.post(f"{self.base_url}/control", data={"action": "quit"}, allow_redirects=False) as r:
                 return r.status == 200
+
+    # ------------------------------------------------------------------ настройки MannBot из центра
+    async def get_settings(self) -> dict:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
+            async with s.get(f"{self.base_url}/api/settings", allow_redirects=False) as r:
+                if r.status != 200:
+                    raise RuntimeError(f"MannBot ответил {r.status}")
+                d = await r.json()
+        stored = self.stored_secrets()
+        for sec in d.get("sections", []):
+            for f in sec["fields"]:
+                if f["type"] == "secret":
+                    f["set"] = bool(f.get("set") or stored.get((sec["id"], f["key"])))
+        return d
+
+    async def save_settings(self, values: dict, lots: list | None = None) -> tuple[dict, bool]:
+        """Секреты уходят в зашифрованное хранилище центра, MannBot получает только ссылку ${...}.
+        Вернуть (ответ MannBot, нужен ли перезапуск процесса, чтобы бот увидел новые секреты)."""
+        values = {sec: dict(v) for sec, v in (values or {}).items() if isinstance(v, dict)}
+        new_secrets = {}
+        for sec, key in MANN_SECRET_FIELDS:
+            v = values.get(sec, {}).get(key)
+            if v is None:
+                continue
+            if str(v).strip():
+                new_secrets[f"mannbot.{sec}.{key}"] = str(v).strip()
+                values[sec][key] = "${" + mann_secret_env(sec, key) + "}"
+            else:
+                values[sec].pop(key)                                 # пусто = «не менять»
+        payload: dict = {"values": values}
+        if lots is not None:
+            payload["lots"] = lots
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
+            async with s.post(f"{self.base_url}/api/settings", json=payload, allow_redirects=False) as r:
+                d = await r.json(content_type=None)
+                if r.status != 200:
+                    return {"ok": False, "error": d.get("error") or f"MannBot ответил {r.status}"}, False
+        changed = any(self.vault.get(k) != v for k, v in new_secrets.items())
+        self.vault.update(new_secrets)
+        return d, changed or bool(d.get("restart_required"))
 
     def token(self) -> str:
         try:

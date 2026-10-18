@@ -33,7 +33,7 @@
 <dialog id="lisDlg">
   <form method="dialog" id="lisForm">
     <h3>Подключения LisBot</h3>
-    <p class="muted small">Хранятся только на этом компьютере, в папке данных центра (lisbot/secrets.env).</p>
+    <p class="muted small">Хранятся только на этом компьютере, в папке данных центра, в зашифрованном виде (secrets.dat).</p>
     <label>Ключ API LIS-SKINS</label><input name="LIS_API_KEY" autocomplete="off">
     <label>Логин Steam</label><input name="STEAM_ACCOUNT_NAME" autocomplete="off">
     <label>Пароль Steam <span class="muted small" id="pwHint"></span></label><input name="STEAM_PASSWORD" type="password" autocomplete="new-password">
@@ -84,6 +84,7 @@ function botCard(b) {
     extra.push(`<button class="btn" onclick="openLis()">Подключения</button>`);
     if (b.state === 'missing_deps') extra.push(`<button class="btn primary" onclick="act('lisbot','install')">Установить зависимости</button>`);
   }
+  if (b.name === 'mannbot' && running) extra.push(`<button class="btn" onclick="openMann()">Настройки</button>`);
   if (running) extra.push(`<a class="btn" href="/open/${b.name}" target="_blank" rel="noopener">Открыть панель бота ↗</a>`);
   const botActs = running && s ? Object.entries(b.actions).map(([k, v]) => `<button class="btn ${k === 'halt' ? 'danger' : ''}" onclick="act('${b.name}','${k}')">${esc(v)}</button>`).join('') : '';
   const kpi = s?.kpi ? `<div class="kpi">${Object.entries(s.kpi).map(([k, v]) => `<div><b>${fmtNum(v)}</b><span>${esc(k)}</span></div>`).join('')}</div>` : '';
@@ -147,5 +148,6 @@ if (msg) { flash(msg, true); history.replaceState(null, '', '/'); }
 refresh(); pollLog();
 setInterval(refresh, 5000); setInterval(pollLog, 2000);
 </script>
+<script src="/static/mannbot.js"></script>
 </body>
 </html>

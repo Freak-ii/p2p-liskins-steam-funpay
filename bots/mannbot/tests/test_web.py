@@ -98,3 +98,32 @@ def test_parse_mafile_errors():
         raise AssertionError
     except ValueError:
         pass
+
+
+def test_api_settings_json(tmp_path):
+    sup = Supervisor(tmp_path)
+
+    async def go():
+        client = await _client(sup)
+        try:
+            d = await (await client.get("/api/settings")).json()
+            fp = next(s for s in d["sections"] if s["id"] == "funpay")
+            gk = next(f for f in fp["fields"] if f["key"] == "golden_key")
+            assert gk == {"key": "golden_key", "label": gk["label"], "type": "secret", "help": gk["help"], "set": False}
+            r = await client.post("/api/settings", json={
+                "values": {"funpay": {"golden_key": "GK", "poll_interval": "9"}, "rtba": {"strategy": "median"},
+                           "risk": {"blacklist_funpay_users": "a\nb"}},
+                "lots": [{"offer_id": "777", "keys_per_unit": 2}, {"offer_id": ""}]})
+            assert (await r.json())["ok"]
+            assert sup.cfg.funpay.golden_key == "GK" and sup.cfg.funpay.poll_interval == 9
+            assert sup.cfg.rtba.strategy == "median" and sup.cfg.risk.blacklist_funpay_users == ["a", "b"]
+            assert sup.cfg.funpay.lots == [{"offer_id": 777, "node_id": 1808, "game_id": 435, "keys_per_unit": 2}]
+            await client.post("/api/settings", json={"values": {"funpay": {"golden_key": ""}}})
+            assert sup.cfg.funpay.golden_key == "GK"                       # пустой секрет не затирает
+            r = await client.post("/api/settings", json={"values": {"rtba": {"strategy": "bogus"}}})
+            assert r.status == 400
+            d = await (await client.get("/api/settings")).json()
+            assert "GK" not in json.dumps(d)                                # секреты наружу не отдаются
+        finally:
+            await client.close()
+    asyncio.run(go())

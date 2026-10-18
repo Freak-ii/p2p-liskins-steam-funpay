@@ -11,7 +11,7 @@ from pathlib import Path
 from aiohttp import web
 
 from center.app import Center
-from center.bots import LIS_SECRET_KEYS, LisBotWorker
+from center.bots import LIS_SECRET_KEYS, LisBotWorker, MannBotWorker, parse_mafile
 
 STATIC = Path(__file__).resolve().parent / "static"
 COOKIE = "center_token"
@@ -119,6 +119,32 @@ def make_app(center: Center) -> web.Application:
             return web.json_response({"ok": True, "message": msg})
         return web.json_response(w.masked_secrets())
 
+    async def mann_settings(request: web.Request):
+        w: MannBotWorker = center.workers["mannbot"]  # type: ignore[assignment]
+        if w.state != "running":
+            return web.json_response({"ok": False, "error": "MannBot не запущен: запустите процесс, настройки "
+                                      "меняются через него (торговля при этом не начнётся)"}, status=409)
+        try:
+            if request.method == "GET":
+                return web.json_response(await w.get_settings())
+            data = await request.json()
+            values = data.get("values") or {}
+            if data.get("mafile"):
+                try:
+                    values.setdefault("steam", {}).update(parse_mafile(data["mafile"]))
+                except ValueError as e:
+                    return web.json_response({"ok": False, "error": f"maFile не распознан: {e}"}, status=400)
+            res, need_restart = await w.save_settings(values, data.get("lots"))
+        except Exception as e:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": f"MannBot не ответил: {e}"}, status=502)
+        if not res.get("ok"):
+            return web.json_response(res, status=400)
+        center.events.add("mannbot", "info", "settings", "Настройки MannBot изменены из панели центра")
+        msg = "Сохранено"
+        if need_restart:
+            msg += ". " + await w.restart("новые настройки")
+        return web.json_response({"ok": True, "message": msg, "problems": res.get("problems", [])})
+
     async def quit_center(request: web.Request):
         asyncio.get_running_loop().call_later(0.5, center.quit_event.set)
         return web.json_response({"ok": True, "message": "Центр завершает работу"})
@@ -130,6 +156,7 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/workers/{name}/logs", worker_logs), web.get("/open/{name}", open_panel),
         web.get("/api/alerts", alerts), web.get("/api/events", events),
         web.get("/api/lisbot/secrets", lis_secrets), web.post("/api/lisbot/secrets", lis_secrets),
+        web.get("/api/mannbot/settings", mann_settings), web.post("/api/mannbot/settings", mann_settings),
         web.post("/api/quit", quit_center),
     ])
     app.router.add_static("/static/", STATIC)

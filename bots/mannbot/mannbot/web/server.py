@@ -295,6 +295,77 @@ def make_app(sup, log_handler=None) -> web.Application:
                       secret=lambda s, k: sup.secret_is_set(s, k), problems=sup.problems,
                       config_path=str(sup.config_path))
 
+    # ------------------------------------------------------------------ JSON-настройки для центра
+    def _coerce(typ: str, key: str, v):
+        if typ == "bool":
+            return bool(v)
+        if typ == "int":
+            return int(float(v or 0))
+        if typ == "float":
+            return float(str(v or 0).replace(",", "."))
+        if typ == "list":
+            items = v if isinstance(v, list) else str(v or "").replace(",", "\n").splitlines()
+            items = [str(x).strip() for x in items if str(x).strip()]
+            return [int(x) if key == "admin_chat_ids" and x.lstrip("-").isdigit() else x for x in items]
+        if typ.startswith("choice:") and str(v) not in typ[7:].split("|"):
+            raise ValueError(f"{key}: допустимо {typ[7:]}")
+        return str(v if v is not None else "").strip()
+
+    async def api_settings(request: web.Request):
+        """Те же поля, что на странице «Настройки», в JSON: центр показывает и меняет их у себя.
+        Секреты не отдаются — только признак, задан ли секрет. Пустой секрет при сохранении = «не менять»."""
+        if request.method == "POST":
+            data = await request.json()
+            values = data.get("values") or {}
+            upd: dict = {}
+            errors = []
+            for section, fields in schema.SETTINGS:
+                got = values.get(section) or {}
+                for key, _label, typ, _help in fields:
+                    if key not in got:
+                        continue
+                    try:
+                        val = _coerce(typ, key, got[key])
+                    except (TypeError, ValueError) as e:
+                        errors.append(f"{section}.{key}: {e}")
+                        continue
+                    node = upd
+                    for part in section.split("."):
+                        node = node.setdefault(part, {})
+                    node[key] = val
+            if isinstance(data.get("lots"), list):
+                lots = []
+                for l in data["lots"]:
+                    try:
+                        if str(l.get("offer_id", "")).strip().isdigit():
+                            lots.append({"offer_id": int(l["offer_id"]), "node_id": int(l.get("node_id") or 1808),
+                                         "game_id": int(l.get("game_id") or 435),
+                                         "keys_per_unit": int(l.get("keys_per_unit") or 1)})
+                    except (TypeError, ValueError):
+                        errors.append(f"лот {l.get('offer_id')}: неверные числа")
+                upd.setdefault("funpay", {})["lots"] = lots
+            if errors:
+                return web.json_response({"ok": False, "error": "; ".join(errors)}, status=400)
+            sup.save(upd)
+            return web.json_response({"ok": True, "restart_required": sup.restart_required,
+                                      "configured": sup.configured, "problems": sup.problems})
+        sections = []
+        for section, fields in schema.SETTINGS:
+            out = []
+            for key, label, typ, hlp in fields:
+                f = {"key": key, "label": label, "type": typ, "help": hlp}
+                if typ == "secret":
+                    f["set"] = sup.secret_is_set(section, key)
+                else:
+                    f["value"] = schema.get_value(sup.cfg, section, key)
+                out.append(f)
+            sections.append({"id": section, "title": schema.SECTION_TITLES.get(section, section), "fields": out})
+        lots = [{k: l.get(k) for k in ("offer_id", "node_id", "game_id", "keys_per_unit")}
+                for l in (sup.cfg.funpay.lots or []) if l.get("offer_id")]
+        return web.json_response({"sections": sections, "lots": lots, "problems": sup.problems,
+                                  "configured": sup.configured, "restart_required": sup.restart_required,
+                                  "state": sup.state})
+
     # ------------------------------------------------------------------ сообщения
     async def messages_page(request: web.Request):
         lang = request.query.get("lang", "ru") if request.query.get("lang") in ("ru", "en") else "ru"
@@ -345,7 +416,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing), web.get("/alerts", alerts),
         web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
-        web.get("/api/summary", api_status),
+        web.get("/api/summary", api_status), web.get("/api/settings", api_settings),
+        web.post("/api/settings", api_settings),
         web.get("/setup", setup), web.post("/setup", setup), web.post("/setup/mafile", setup_mafile),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),

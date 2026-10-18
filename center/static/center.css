@@ -46,3 +46,10 @@ input { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-rad
 .login { max-width: 380px; margin: 14vh auto; }
 .login input { flex: 1; }
 @media (max-width: 600px) { header { flex-wrap: wrap; } main { padding: 10px; } }
+dialog.wide { max-width: 760px; }
+dialog details { border-top: 1px solid var(--line); padding: 8px 0; }
+dialog summary { cursor: pointer; font-weight: 600; }
+dialog .lot { margin: 4px 0; flex-wrap: nowrap; }
+select, textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; }
+label.check { display: flex; gap: 8px; align-items: center; }
+label.check input { width: auto; }
