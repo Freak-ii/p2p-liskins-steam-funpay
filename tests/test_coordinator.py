@@ -325,6 +325,6 @@ def test_restock_and_key_bridge_recommendations():
         inv["mannbot"]["bridge_coming"] = 0
         res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'inventory': inv})}</facts>", {})
         recs = {r["title"]: r for r in res["recommendations"]}
-        assert "включите мост ключей" in recs["Пополнить склад ключей MannBot"]["why"]
+        assert "«Мост ключей» и покупку ключей" in recs["Пополнить склад ключей MannBot"]["why"]
         assert "Проверить приём ключей MannBot" not in recs
     asyncio.run(go())

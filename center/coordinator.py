@@ -286,9 +286,11 @@ class StubBackend:
                  f"На складе {im.get('stock')} ключей" + (f", хватит примерно на {_n(im.get('days_left'), 1)} дн."
                                                           if im.get("days_left") is not None else ".")
                  + (f" Докупите {im['restock']} ключей, чтобы хватило на {_n(im.get('target_days'), 0)} дн." if im.get("restock") else "")
-                 + (f" Ещё {im['bridge_coming']} ключей едут по мосту от LisBot." if im.get("bridge_coming") else "")
-                 + ("" if br.get("enabled") else " Ключи можно покупать за кошелёк Steam аккаунта LisBot: включите мост ключей в настройках LisBot и MannBot."))
-        if br.get("enabled") and br.get("failed"):
+                 + ((f" Ещё {im['bridge_coming']} ключей куплены с кошелька и ждут 7 дней блокировки." if br.get("same_account")
+                     else f" Ещё {im['bridge_coming']} ключей едут по мосту от LisBot.") if im.get("bridge_coming") else "")
+                 + ("" if br.get("enabled") else " Ключи можно покупать за кошелёк Steam: включите в настройках LisBot "
+                    "«Мост ключей» и покупку ключей на ТП Steam."))
+        if br.get("enabled") and br.get("failed") and not br.get("same_account"):
             reco("Проверить приём ключей MannBot",
                  f"MannBot не принял {br['failed']} ключей из моста (обмены отклонены или истекли), они вернулись к LisBot. "
                  "Проверьте, что в MannBot в security.accept_gifts_from указан SteamID аккаунта LisBot и MannBot запущен.")
