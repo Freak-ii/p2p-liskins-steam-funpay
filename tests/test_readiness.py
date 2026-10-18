@@ -194,3 +194,15 @@ def test_key_bridge_on_shared_account(tmp_path):
                                                   "tradeUrl": "https://steamcommunity.com/tradeoffer/new/?partner=9&token=t"}}), encoding="utf-8")
     assert _levels(c.readiness.check())["key_bridge"] == "warn"
     c.events.close()
+
+
+def test_telegram_chat_id_is_bot_id(tmp_path):
+    c = Center(tmp_path)
+    c.workers["lisbot"].save_secrets({**LIS, "TELEGRAM_CHAT_ID": "111"})    # вставили id бота из токена
+    _mann(c, "other")
+    r = c.readiness.check()
+    item = next(i for i in r["items"] if i["key"] == "tg_chat_id")
+    assert not r["ready"] and item["level"] == "fail" and "LisBot" in item["detail"] and "@userinfobot" in item["detail"]
+    c.workers["lisbot"].save_secrets({**LIS, "TELEGRAM_CHAT_ID": "5"})
+    assert "tg_chat_id" not in _levels(c.readiness.check())
+    c.events.close()

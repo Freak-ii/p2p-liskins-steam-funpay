@@ -121,7 +121,10 @@
     <label>identity_secret (из maFile)</label><input name="STEAM_IDENTITY_SECRET" autocomplete="off">
     <label>Трейд-ссылка Steam</label><input name="STEAM_TRADE_URL" autocomplete="off">
     <label>Telegram: токен бота (необязательно)</label><input name="TELEGRAM_BOT_TOKEN" autocomplete="off">
-    <label>Telegram: chat id</label><input name="TELEGRAM_CHAT_ID" autocomplete="off">
+    <label>Telegram: chat id — ваш id, его пришлёт @userinfobot (не id бота)</label><input name="TELEGRAM_CHAT_ID" autocomplete="off">
+    <p class="muted small" style="margin:4px 0 0">Перед проверкой откройте своего бота в Telegram и нажмите Start. У MannBot должен быть другой бот.</p>
+    <div class="row" style="margin-top:6px"><button class="btn" type="button" onclick="lisTgTest()">Проверить Telegram</button></div>
+    <div class="small" id="lisTgRes"></div>
     <div class="row" style="margin-top:14px">
       <button class="btn primary" value="save">Сохранить и перезапустить</button>
       <button class="btn" value="cancel" formnovalidate>Отмена</button>
@@ -222,8 +225,16 @@ function switchLog(name) { logBot = name; logAfter = 0; $('#log').textContent = 
 async function openLis() {
   const s = await api('/api/lisbot/secrets');
   for (const el of $('#lisForm').elements) if (el.name) el.value = s[el.name] ?? '';
+  $('#lisTgRes').textContent = '';
   $('#pwHint').textContent = s.STEAM_PASSWORD_SET ? '(сохранён — оставьте пустым, чтобы не менять)' : '';
   $('#lisDlg').showModal();
+}
+async function lisTgTest() {
+  const f = $('#lisForm').elements;
+  const out = $('#lisTgRes');
+  out.style.color = ''; out.textContent = 'Проверяю…';
+  const r = await api('/api/lisbot/telegram-test', { TELEGRAM_BOT_TOKEN: f.TELEGRAM_BOT_TOKEN.value, TELEGRAM_CHAT_ID: f.TELEGRAM_CHAT_ID.value });
+  out.style.color = r.ok ? 'var(--ok)' : 'var(--bad)'; out.textContent = r.message || r.error || '';
 }
 $('#lisDlg').addEventListener('close', async () => {
   if ($('#lisDlg').returnValue !== 'save') return;

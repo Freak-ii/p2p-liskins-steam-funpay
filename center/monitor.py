@@ -30,6 +30,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
+from center import tgcheck
 from center.analytics import HOLD_BUCKETS, item_type
 from center.workers import BACKOFF, CRASHED, DISABLED, RUNNING, STATE_TEXT
 
@@ -961,11 +962,17 @@ def routes(center) -> list:
         return web.json_response(m.settings())
 
     async def test(request: web.Request):
+        token, ids, src = m.telegram_target()
+        if not token:
+            return web.json_response({"ok": False, "message": "Telegram не настроен: укажите токен и chat id"})
+        problems = tgcheck.static_problems(token, ids)
+        if problems:
+            return web.json_response({"ok": False, "message": "Telegram: " + "; ".join(problems)})
         status_ = await m.notify("monitor:test", "info", "<b>Центр перепродажи</b>\nПроверка уведомлений: всё работает.",
                                  force=True)
-        msg = {"sent": "Тестовое уведомление отправлено", "no_channel": "Telegram не настроен: укажите токен и chat id"}
-        return web.json_response({"ok": status_ == "sent", "message": msg.get(status_, "Telegram не принял сообщение, "
-                                                                                          "подробности в журнале центра")})
+        if status_ == "sent":
+            return web.json_response({"ok": True, "message": f"Тестовое уведомление отправлено (бот: {src})"})
+        return web.json_response(await tgcheck.check(token, ids, "Центр"))  # не дошло — выясняем почему
 
     async def report(request: web.Request):
         period = request.query.get("period")

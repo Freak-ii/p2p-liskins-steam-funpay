@@ -10,6 +10,7 @@ import re
 
 from aiohttp import web
 
+from center import tgcheck
 from center.config import check_config
 
 STEAM64_BASE = 76561197960265728
@@ -164,6 +165,15 @@ class Readiness:
             add("tg_separate", "fail", "Один Telegram-бот у нескольких: " + "; ".join(" и ".join(w) for w in clash),
                 "Два процесса не могут читать команды одного бота: команды и кнопки будут теряться. Создайте отдельного "
                 "бота в @BotFather для каждого.", "Подключения ботов и «Настройки уведомлений»")
+        mtg = ((mcfg.get("notifications") or {}).get("telegram") or {}) if isinstance(mcfg, dict) else {}
+        chats = {"LisBot": (tokens["LisBot"], lis.get("TELEGRAM_CHAT_ID", "")),
+                 "MannBot": (tokens["MannBot"], mtg.get("admin_chat_ids") or []),
+                 "центр": (center_token, str((mon.cfg.get("telegram") or {}).get("chat_id") or ""))}
+        wrong = [f"{who}: {p}" for who, (t, ids) in chats.items() if t and tgcheck.split_ids(ids)
+                 for p in tgcheck.static_problems(t, ids)]
+        if wrong:
+            add("tg_chat_id", "fail", "Telegram настроен с ошибкой, бот будет молчать", "; ".join(wrong) + ".",
+                "Подключения ботов и «Настройки уведомлений» (там же кнопка проверки)")
         token, ids, src = mon.telegram_target()
         add("tg_center", "ok" if token else "warn",
             f"Уведомления центра в Telegram: {src}" if token else "Уведомления центра в Telegram не настроены",

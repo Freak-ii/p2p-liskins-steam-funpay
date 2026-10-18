@@ -14,6 +14,7 @@ from aiohttp import web
 from center.app import Center
 from center.bots import LIS_SECRET_KEYS, LisBotWorker, MannBotWorker, parse_mafile
 from center.crm import CrmError
+from center import tgcheck
 from center.backup import routes as backup_routes
 from center.coordinator import routes as coordinator_routes
 from center.inventory import routes as inventory_routes
@@ -142,6 +143,14 @@ def make_app(center: Center) -> web.Application:
                 msg += ". " + await w.restart("новые подключения")
             return web.json_response({"ok": True, "message": msg})
         return web.json_response(w.masked_secrets())
+
+    async def lis_telegram_test(request: web.Request):
+        """Проверка Telegram LisBot: значения из формы, а пустые поля — из сохранённых подключений."""
+        data = await request.json()
+        saved = center.workers["lisbot"].secrets()
+        token = str(data.get("TELEGRAM_BOT_TOKEN") or saved.get("TELEGRAM_BOT_TOKEN") or "")
+        chats = str(data.get("TELEGRAM_CHAT_ID") or saved.get("TELEGRAM_CHAT_ID") or "")
+        return web.json_response(await tgcheck.check(token, chats, "LisBot"))
 
     async def mann_settings(request: web.Request):
         w: MannBotWorker = center.workers["mannbot"]  # type: ignore[assignment]
@@ -325,6 +334,7 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/workers/{name}/logs", worker_logs), web.get("/open/{name}", open_panel),
         web.get("/api/alerts", alerts), web.get("/api/events", events),
         web.get("/api/lisbot/secrets", lis_secrets), web.post("/api/lisbot/secrets", lis_secrets),
+        web.post("/api/lisbot/telegram-test", lis_telegram_test),
         web.get("/api/mannbot/settings", mann_settings), web.post("/api/mannbot/settings", mann_settings),
         web.post("/api/quit", quit_center),
         web.get("/api/analytics/pnl", an_pnl), web.get("/api/analytics/daily", an_daily),
