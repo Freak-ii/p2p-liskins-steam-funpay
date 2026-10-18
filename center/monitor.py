@@ -21,8 +21,10 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import shutil
 import time
 from collections import defaultdict
+from pathlib import Path
 
 import aiohttp
 from aiohttp import web
@@ -57,7 +59,7 @@ CREATE TABLE IF NOT EXISTS monitor_kv (k TEXT PRIMARY KEY, v TEXT);
 NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.unhealthy", "worker.missing_deps",
                 "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
                 "backup.failed", "backup.restored", "inventory.low_stock",
-                "inventory.low_balance"}
+                "inventory.low_balance", "monitor.low_disk"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
 
@@ -421,6 +423,54 @@ class Monitor:
             self.db.execute("DELETE FROM health WHERE ts < ?", (now - float(self.cfg.get("history_days") or 30) * 86400,))
             self.db.commit()
         self.kv_set("last_alive", now)
+        try:
+            await asyncio.to_thread(self.check_disk)
+        except Exception:  # noqa: BLE001
+            log.exception("проверка места на диске")
+
+    # ------------------------------------------------------------------ место на диске
+    def disk(self) -> dict:
+        """Свободное место там, где лежат базы ботов и центра, и в папке резервных копий (если она отдельно)."""
+        cfg = self.cfg.get("disk") or {}
+        warn = float(cfg.get("warn_gb", 2) or 0)
+        paths = [("данные центра", Path(self.center.home))]
+        b = getattr(self.center, "backup", None)
+        if b is not None:
+            paths.append(("резервные копии", b.dir))
+        out, seen = [], set()
+        for label, p in paths:
+            q = p
+            while not q.exists() and q != q.parent:      # папки копий ещё нет — меряем диск, где она появится
+                q = q.parent
+            try:
+                u = shutil.disk_usage(q)
+                key = q.stat().st_dev                    # тот же диск — не повторяем
+            except OSError:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            free = u.free / (1 << 30)
+            out.append({"label": label, "path": str(p), "free_gb": round(free, 2), "total_gb": round(u.total / (1 << 30), 1),
+                        "free_pct": round(u.free / u.total * 100, 1) if u.total else None, "low": bool(warn and free < warn)})
+        return {"warn_gb": warn, "disks": out, "low": any(d["low"] for d in out)}
+
+    def check_disk(self) -> str | None:
+        """Мало места — базы ботов перестанут записываться. Событие в журнал не чаще раза в сутки."""
+        d = self.disk()
+        low = [x for x in d["disks"] if x["low"]]
+        if not low:
+            return None
+        today = time.strftime("%Y-%m-%d", time.localtime(self.clock()))
+        if self.kv_get("low_disk_date") == today:
+            return None
+        self.kv_set("low_disk_date", today)
+        crit = any(x["free_gb"] < min(0.5, d["warn_gb"] / 2) for x in low)
+        msg = ("Мало места на диске: " + "; ".join(f"{x['label']} — свободно {x['free_gb']:.1f} ГБ из {x['total_gb']:.0f}"
+                                                  for x in low)
+               + ". Когда место кончится, боты не смогут записывать сделки. Освободите место или перенесите резервные копии.")
+        self.events.add("center", "critical" if crit else "warn", "monitor.low_disk", msg)
+        return msg
 
     async def _track_responsive(self, name: str, w, ok: bool | None) -> None:
         if ok is False:
@@ -554,6 +604,12 @@ class Monitor:
             crit = self.db.execute("SELECT COUNT(*) FROM events WHERE ts >= ? AND level='critical'", (since,)).fetchone()[0]
             sent = self.db.execute("SELECT COUNT(*) FROM notifications WHERE ts >= ? AND status != 'duplicate'",
                                    (since,)).fetchone()[0]
+        try:
+            low = [x for x in self.disk()["disks"] if x["low"]]
+        except Exception:  # noqa: BLE001
+            low = []
+        if low:
+            lines += ["", "⚠ Мало места: " + "; ".join(f"{html.escape(x['label'])} {x['free_gb']:.1f} ГБ" for x in low)]
         inv = getattr(self.center, "inventory", None)
         if inv:
             try:
@@ -695,6 +751,7 @@ class Monitor:
             "quiet_now": in_quiet_hours(self.cfg.get("quiet_hours") or "", self.clock()), "held": len(self._held),
             "daily_report": {"enabled": bool(dr.get("enabled", True)), "time": dr.get("time") or "09:00",
                              "last": self.kv_get("daily_report_date")},
+            "disk": self.disk(),
         }
 
 
