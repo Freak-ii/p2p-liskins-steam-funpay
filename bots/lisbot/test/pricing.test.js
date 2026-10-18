@@ -76,8 +76,10 @@ test('оценка: ликвидный стабильный предмет пр�
 test('оценка: неликвид, падающий тренд и волатильность отсекаются', () => {
   assert.equal(computeValuation({ name: 'X', history: history({ perDay: 4 }), book: null, fx: 90, cfg, holdDays: 9 }).ok, false);
   assert.match(computeValuation({ name: 'X', history: history({ drift: -0.3 }), book: null, fx: 90, cfg, holdDays: 9 }).reason, /тренд/);
-  const wild = history({}).map((h, i) => ({ ...h, price: h.price * (Math.floor(i / 8) % 2 ? 1.6 : 0.6) }));
-  assert.match(computeValuation({ name: 'X', history: wild, book: null, fx: 90, cfg, holdDays: 9 }).reason, /волатильность/);
+  // время фиксировано: от часа запуска зависит, какие «скачки» попадут в окно, и тест падал около 10:00 UTC
+  const now = Date.UTC(2026, 0, 1);
+  const wild = history({ now }).map((h, i) => ({ ...h, price: h.price * (Math.floor(i / 8) % 2 ? 1.6 : 0.6) }));
+  assert.match(computeValuation({ name: 'X', history: wild, book: null, fx: 90, cfg, holdDays: 9, now }).reason, /волатильность/);
 });
 
 const val = (over = {}) => ({ ok: true, ts: Date.now(), netUsd: 10, dailyVolume: 200, fx: 90, ...over });

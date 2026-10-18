@@ -7,10 +7,12 @@ const AWAITING = ['bought', 'trade_sent', 'locked_on_lis'];
 
 /**
  * Обработка обменов Steam.
- * Принимаем ТОЛЬКО офферы, где:
- *   - мы ничего не отдаём (itemsToGive пуст),
- *   - каждый получаемый предмет соответствует купленному и ещё не полученному предмету из CRM.
- * Офферы с запросом наших предметов отклоняются. Любой исходящий оффер (мы их не создаём) =
+ * Принимаем ТОЛЬКО офферы, где мы ничего не отдаём (itemsToGive пуст), и при этом:
+ *   - каждый получаемый предмет соответствует купленному и ещё не полученному предмету из CRM, или
+ *   - включено правило risk.acceptFreeOffers (по умолчанию да): LIS показывает только номер заказа,
+ *     а не продавца, поэтому принимаем «бесплатный» оффер от любого отправителя; совпавшие с покупками
+ *     предметы учитываем в CRM, остальные просто попадают в инвентарь.
+ * Офферы с запросом наших предметов отклоняются всегда. Любой исходящий оффер (мы их не создаём) =
  * признак компрометации (API-key scam) -> критическая остановка и отмена оффера.
  */
 export class TradeHandler {
@@ -31,7 +33,7 @@ export class TradeHandler {
   }
 
   /** Сопоставить получаемые предметы с ожидаемыми покупками (мультимножество по названию). */
-  matchOffer(offer) {
+  matchOffer(offer, { partial = false } = {}) {
     const expected = this.db.itemsByStatus(...AWAITING).filter((i) => !i.received_at);
     const pool = new Map();
     for (const it of expected) {
@@ -41,7 +43,7 @@ export class TradeHandler {
     const matched = [];
     for (const item of offer.itemsToReceive) {
       const list = pool.get(item.market_hash_name);
-      if (!list?.length) return null;
+      if (!list?.length) { if (partial) continue; return null; }
       // если LIS сообщил id оффера — предпочитаем точное совпадение
       const idx = Math.max(0, list.findIndex((x) => x.trade_offer_id === String(offer.id)));
       matched.push({ crm: list.splice(idx, 1)[0], econ: item });
@@ -65,13 +67,15 @@ export class TradeHandler {
       return;
     }
 
-    const matched = this.matchOffer(offer);
+    const free = this.cfg.risk?.acceptFreeOffers !== false && offer.itemsToReceive.length > 0;
+    const matched = this.matchOffer(offer, { partial: free });
+    const extra = matched ? offer.itemsToReceive.length - matched.length : 0;
     if (!matched) {
       // не помечаем как обработанный: если покупка «найдётся» позже (сетевая ошибка), аудит примет оффер
       this.processing.delete(offer.id);
       if (this.warned.has(offer.id)) return;
       this.warned.add(offer.id);
-      this.guard.warn('OFFER_UNKNOWN', `Неожиданный входящий оффер ${offer.id} от ${partner} (${offer.itemsToReceive.map((i) => i.market_hash_name).join(', ')}) — не совпадает с покупками, оставлен без ответа.`);
+      this.guard.warn('OFFER_UNKNOWN', `Неожиданный входящий оффер ${offer.id} от ${partner} (${offer.itemsToReceive.map((i) => i.market_hash_name).join(', ')}) — не совпадает с покупками, оставлен без ответа (правило «принимать обмены, где от нас ничего не требуется» выключено).`);
       return;
     }
     if (!this.guard.canAcceptTrades) { this.log.warn(`Оффер ${offer.id} ожидает: бот остановлен`); this.processing.delete(offer.id); return; }
@@ -79,17 +83,24 @@ export class TradeHandler {
     await sleep(randInt(4000, 15000)); // не мгновенно — как живой человек
     try {
       const status = await new Promise((res, rej) => offer.accept(true, (err, st) => (err ? rej(err) : res(st))));
-      this.log.info(`Оффер ${offer.id} принят (${status}), предметов: ${matched.length}`);
+      this.log.info(`Оффер ${offer.id} принят (${status}), предметов: ${offer.itemsToReceive.length}, из них по покупкам: ${matched.length}`);
       this.db.touchCounterparty(partner, 'offers_accepted');
-      this.db.touchCounterparty(partner, 'items_received', matched.length);
+      this.db.touchCounterparty(partner, 'items_received', offer.itemsToReceive.length);
+      if (extra) {
+        const names = offer.itemsToReceive.filter((i) => !matched.some((m) => m.econ === i)).map((i) => i.market_hash_name);
+        this.db.event('trade.free_accepted', { offerId: offer.id, partner, items: names });
+        this.notify.send('info', `🎁 Принят обмен ${offer.id} от ${partner}, от нас ничего не требовалось: ${names.map(esc).join(', ')}\nЭтих предметов нет среди покупок — бот их не продаёт, решите вручную.`);
+      }
       const protUntil = Date.now() + this.cfg.steam.tradeProtectionDays * DAY + this.cfg.steam.tradeProtectionBufferMin * 60_000;
       for (const m of matched) {
         this.db.setItemStatus(m.crm.id, 'protected', { trade_offer_id: String(offer.id), partner_steamid: partner, received_at: Date.now(), tradable_after: protUntil }, { offerId: offer.id });
       }
       this.guard.recordSuccess('steam-accept');
       if (status === 'pending') this.guard.warn('ACCEPT_NEEDS_CONF', `Оффер ${offer.id} требует подтверждения — проверьте мобильный аутентификатор`);
-      this.notify.send('info', `📥 Принят трейд от LIS: ${matched.map((m) => esc(m.crm.name)).join(', ')}\nTrade Protection до ${new Date(protUntil).toLocaleString('ru-RU', { timeZone: this.cfg.timezone })}`);
-      await this.assignAssetIds(offer, matched);
+      if (matched.length) {
+        this.notify.send('info', `📥 Принят трейд от LIS: ${matched.map((m) => esc(m.crm.name)).join(', ')}\nTrade Protection до ${new Date(protUntil).toLocaleString('ru-RU', { timeZone: this.cfg.timezone })}`);
+        await this.assignAssetIds(offer, matched);
+      }
     } catch (e) {
       this.processing.delete(offer.id);
       this.guard.recordError('steam-accept', e);
