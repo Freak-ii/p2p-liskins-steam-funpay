@@ -289,6 +289,11 @@ class StubBackend:
         if rd.get("problems"):
             reco("Доделать настройку перед боевым режимом", "Не готово: " + "; ".join(rd["problems"][:4])
                  + (f" и ещё {len(rd['problems']) - 4}" if len(rd["problems"]) > 4 else "") + ". Подробности — карточка под ботами или /ready.")
+        types = f.get("lis_types_30d") if isinstance(f.get("lis_types_30d"), list) else []
+        for t in [t for t in types if (t.get("sold") or 0) >= 5 and t.get("roi") is not None and t["roi"] < 0][:2]:
+            reco(f"Пересмотреть закупку LisBot: {t['type'].lower()}",
+                 f"За 30 дней продано {t['sold']} шт, итог {_n(t['profit'], 2)} $ (ROI {_n(t['roi'], 1)}%). Уберите эти предметы "
+                 "из закупки или поднимите для них минимальный ROI (аналитика → LisBot · предметы).")
         cu = f.get("customers") or {}
         if (cu.get("counts") or {}).get("sleeping"):
             names = ", ".join(x["username"] or str(x["funpay_id"]) for x in cu.get("sleeping_top", [])[:3])
@@ -842,6 +847,10 @@ class Coordinator:
                                     "warnings": [i["title"] for i in r["items"] if i["level"] == "warn"]}
             except Exception as e:  # noqa: BLE001
                 out["readiness"] = {"error": str(e)}
+        try:
+            out["lis_types_30d"] = (await asyncio.to_thread(c.analytics.lisbot_details, 30))["by_type"]
+        except Exception as e:  # noqa: BLE001
+            out["lis_types_30d"] = {"error": str(e)}
         try:
             out["customers"] = await asyncio.to_thread(c.crm.segments_brief, self.clock())
         except Exception as e:  # noqa: BLE001

@@ -282,3 +282,15 @@ def test_stuck_orders_and_buy_stall_only_notify(tmp_path):
         assert "lis_buy_stall" not in {a["code"] for a in c.coordinator.detect()}   # на паузе — это нормально
         c.events.close()
     asyncio.run(go())
+
+
+def test_losing_item_type_recommendation():
+    async def go():
+        f = {"bots": [], "lis_types_30d": [{"type": "Ножи", "sold": 6, "profit": -12.5, "roi": -2.1, "names": 2, "bought": 6},
+                                           {"type": "Винтовки", "sold": 9, "profit": 4.0, "roi": 3.0, "names": 3, "bought": 9},
+                                           {"type": "Наклейки", "sold": 2, "profit": -1.0, "roi": -5.0, "names": 1, "bought": 2}]}
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps(f)}</facts>", {})
+        titles = [r["title"] for r in res["recommendations"]]
+        assert "Пересмотреть закупку LisBot: ножи" in titles
+        assert not any("винтовки" in t or "наклейки" in t for t in titles)     # в плюсе / мало продаж
+    asyncio.run(go())
