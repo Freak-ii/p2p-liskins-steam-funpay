@@ -20,6 +20,7 @@ import aiohttp
 import yaml
 
 from center.config import BOTS_DIR
+from center.vault import SecretStore, SecretStoreError
 from center.workers import MISSING_DEPS, NOT_CONFIGURED, STOPPED, Worker
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=8)
@@ -36,11 +37,13 @@ def _read_only(path: Path) -> sqlite3.Connection | None:
 class BotWorker(Worker):
     """Общее для ботов с веб-панелью на своём порту."""
 
-    def __init__(self, home: Path, events, *, port: int, restart: dict | None = None, executable: str = ""):
+    def __init__(self, home: Path, events, *, port: int, restart: dict | None = None, executable: str = "",
+                 vault: SecretStore | None = None):
         super().__init__(home, events, restart=restart)
         self.port = int(port)
         self.executable = executable
         self.home.mkdir(parents=True, exist_ok=True)
+        self.vault = vault or SecretStore(self.home.parent)
 
     @property
     def base_url(self) -> str:
@@ -81,6 +84,17 @@ class BotWorker(Worker):
 
 
 # ====================================================================== MannBot
+# Секретные поля config.yaml MannBot (как SECRET_FIELDS в mannbot/app/supervisor.py, кроме токена панели:
+# он нужен центру для входа и бесполезен вне этого компьютера)
+MANN_SECRET_FIELDS = [("funpay", "golden_key"), ("steam", "password"), ("steam", "shared_secret"),
+                      ("steam", "identity_secret"), ("steam", "login_secure_cookie"), ("steam", "api_key"),
+                      ("notifications.telegram", "bot_token")]
+
+
+def mann_secret_env(section: str, key: str) -> str:
+    return "CENTER_MB_" + f"{section}_{key}".replace(".", "_").upper()
+
+
 class MannBotWorker(BotWorker):
     """MannBot (Python): запускается своим лаунчером в режиме приложения, без браузера."""
 
@@ -114,11 +128,60 @@ class MannBotWorker(BotWorker):
         return self.src
 
     def env(self) -> dict[str, str]:
-        return {"PYTHONPATH": str(self.src) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+        env = {"PYTHONPATH": str(self.src) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+        for (section, key), value in self.stored_secrets().items():
+            env[mann_secret_env(section, key)] = value
+        return env
 
     @property
     def _cfg_path(self) -> Path:
         return self.home / ("demo" if self.demo else "") / "config.yaml"
+
+    def stored_secrets(self) -> dict[tuple[str, str], str]:
+        return {(sec, key): v for sec, key in MANN_SECRET_FIELDS
+                if (v := self.vault.get(f"mannbot.{sec}.{key}"))}
+
+    def prepare(self) -> None:
+        super().prepare()
+        self.migrate_secrets()
+
+    def migrate_secrets(self) -> int:
+        """Секреты из config.yaml MannBot → зашифрованное хранилище центра; в файле остаются ссылки ${...},
+        которые MannBot сам подставляет из переменных окружения (их задаёт центр при запуске).
+        Вызывается перед каждым запуском: если секрет ввели в панели самого MannBot, он тоже уедет в хранилище."""
+        path = self._cfg_path
+        if not path.exists():
+            return 0
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            return 0
+        moved = {}
+        for sec, key in MANN_SECRET_FIELDS:
+            node = raw
+            for part in sec.split("."):
+                node = node.get(part) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                continue
+            v = node.get(key)
+            ref = "${" + mann_secret_env(sec, key) + "}"
+            if isinstance(v, str) and v and v != ref:
+                moved[f"mannbot.{sec}.{key}"] = v
+                node[key] = ref
+        if moved:
+            self.vault.update(moved)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text("# Настройки MannBot (секреты — в зашифрованном хранилище центра)\n" +
+                           yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            os.replace(tmp, path)
+            self.events.add(self.name, "info", "secrets.migrated",
+                            f"Секреты MannBot перенесены в зашифрованное хранилище: {len(moved)}")
+        return len(moved)
+
+    async def soft_stop(self) -> bool:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
+            async with s.post(f"{self.base_url}/control", data={"action": "quit"}, allow_redirects=False) as r:
+                return r.status == 200
 
     def token(self) -> str:
         try:
@@ -213,7 +276,7 @@ def write_env_file(path: Path, values: dict[str, str]) -> None:
 class LisBotWorker(BotWorker):
     """LisBot (Node.js): ядро бота src/index.js без Electron-оболочки.
 
-    Секреты лежат в <home>/secrets.env и передаются боту переменными окружения, настройки стратегии —
+    Секреты лежат в зашифрованном хранилище центра (center/vault.py, раньше — <home>/secrets.env) и передаются боту переменными окружения, настройки стратегии —
     в <home>/config.json (их же меняет вкладка «Настройки» панели LisBot), база и логи — в <home>/data.
     """
 
@@ -239,27 +302,42 @@ class LisBotWorker(BotWorker):
         return self.executable or shutil.which("node")
 
     def check_deps(self) -> str | None:
+        try:
+            self.secrets()
+        except SecretStoreError as e:
+            return f"ключи не расшифрованы: {e}"
         if not self.node():
             return "не найден Node.js 20+ (https://nodejs.org)"
         if not (self.src / "node_modules" / "better-sqlite3").is_dir():
             return "не установлены зависимости LisBot: нажмите «Установить зависимости» или выполните npm ci в bots/lisbot"
         return None
 
+    def _migrate_plain(self) -> None:
+        """Старый secrets.env открытым текстом → зашифрованное хранилище центра, файл удаляется."""
+        if not self.secrets_path.exists():
+            return
+        plain = read_env_file(self.secrets_path)
+        self.vault.update({f"lisbot.{k}": v for k, v in plain.items() if v})
+        self.secrets_path.unlink()
+        self.events.add(self.name, "info", "secrets.migrated", "Ключи LisBot перенесены из secrets.env в зашифрованное хранилище")
+
     def secrets(self) -> dict[str, str]:
-        s = read_env_file(self.secrets_path)
+        self._migrate_plain()
+        s = self.vault.prefix("lisbot")
         if len(s.get("DASHBOARD_TOKEN", "")) < 16:
             s["DASHBOARD_TOKEN"] = secrets.token_hex(24)
-            write_env_file(self.secrets_path, s)
+            self.vault.set("lisbot.DASHBOARD_TOKEN", s["DASHBOARD_TOKEN"])
         return s
 
     def save_secrets(self, values: dict[str, str]) -> None:
         s = self.secrets()
+        upd = {}
         for k in LIS_SECRET_KEYS:
             v = values.get(k)
             if v is None or (k == "STEAM_PASSWORD" and v == ""):
                 continue                                        # пустой пароль = «не менять»
-            s[k] = str(v).strip()
-        write_env_file(self.secrets_path, s)
+            upd[f"lisbot.{k}"] = str(v).strip()
+        self.vault.update(upd)
 
     def masked_secrets(self) -> dict:
         s = self.secrets()
@@ -305,13 +383,21 @@ class LisBotWorker(BotWorker):
         return None
 
     def token(self) -> str:
-        return read_env_file(self.secrets_path).get("DASHBOARD_TOKEN", "")
+        try:
+            return self.secrets()["DASHBOARD_TOKEN"]
+        except SecretStoreError:
+            return ""
 
     def panel_url(self) -> str:
         return f"{self.base_url}/#token={self.token()}"
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.token()}"}
+
+    async def soft_stop(self) -> bool:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=self._headers()) as s:
+            async with s.post(f"{self.base_url}/api/shutdown", json={}) as r:
+                return r.status == 200
 
     async def health(self) -> bool:
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=self._headers()) as s:

@@ -12,6 +12,7 @@ from pathlib import Path
 from center.bots import BotWorker, LisBotWorker, MannBotWorker
 from center.config import CenterConfig
 from center.events import EventStore
+from center.vault import SecretStore
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
 
 log = logging.getLogger("center")
@@ -23,13 +24,14 @@ class Center:
         self.cfg = CenterConfig(self.home)
         self.events = EventStore(self.home / "center.sqlite3")
         self.demo = demo
+        self.vault = SecretStore(self.home)       # зашифрованные ключи ботов и центра (DPAPI / Fernet)
         restart = self.cfg["restart"]
         wm, wl = self.cfg.worker("mannbot"), self.cfg.worker("lisbot")
         self.workers: dict[str, BotWorker] = {
             "lisbot": LisBotWorker(self.home / "lisbot", self.events, port=wl.get("port", 8802), restart=restart,
-                                   executable=wl.get("node") or ""),
+                                   executable=wl.get("node") or "", vault=self.vault),
             "mannbot": MannBotWorker(self.home / "mannbot", self.events, port=wm.get("port", 8801), restart=restart,
-                                     executable=wm.get("python") or "", demo=demo),
+                                     executable=wm.get("python") or "", demo=demo, vault=self.vault),
         }
         self.summaries: dict[str, dict | None] = {n: None for n in self.workers}
         self.summary_at: dict[str, float] = {}

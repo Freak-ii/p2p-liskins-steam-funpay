@@ -104,6 +104,12 @@ export function startDashboard({ cfg, db, guard, bot, log }) {
       if (b.restart && bot.hooks?.onRestartRequest) setTimeout(() => bot.hooks.onRestartRequest('настройки изменены'), 300);
       return { ok: true, restarting: !!(b.restart && bot.hooks?.onRestartRequest) };
     },
+    // Мягкая остановка по команде центра: на Windows сигналов нет, а TerminateProcess не даёт дописать базу
+    'POST /api/shutdown': () => {
+      if (!bot.hooks?.onShutdownRequest) return err(409, { error: 'остановка через API недоступна в этом режиме' });
+      setTimeout(() => bot.hooks.onShutdownRequest('команда центра'), 200);
+      return { ok: true };
+    },
     'GET /api/meta': () => ({ appMode: !!bot.hooks?.appMode, version: bot.hooks?.version || null, dataDir: cfg.dataDir }),
     'GET /api/export/items.csv': () => {
       const rows = db.db.prepare('SELECT * FROM items WHERE dry_run=0 ORDER BY id').all();

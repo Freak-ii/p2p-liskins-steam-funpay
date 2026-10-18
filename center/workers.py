@@ -16,6 +16,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+from center import winutil
 from center.events import EventStore
 
 log = logging.getLogger("center.workers")
@@ -65,6 +66,7 @@ class Worker:
         self.seq = 0
         self._run_seq = 0
         self._want_running = False
+        self.soft_stopped = False        # последняя остановка прошла через команду боту, а не kill
         self._supervise_task: asyncio.Task | None = None
         self._readers: list[asyncio.Task] = []
         self._log_path: Path | None = self.home.parent / "logs" / f"{self.name}.log"
@@ -94,6 +96,11 @@ class Worker:
     async def health(self) -> bool:
         """Отвечает ли бот (HTTP-пинг). По умолчанию — живой процесс считается здоровым."""
         return self.proc is not None and self.proc.returncode is None
+
+    async def soft_stop(self) -> bool:
+        """Попросить бота завершиться самому (через его API), чтобы он дописал базу и закрыл сессии.
+        Вернуть True, если команда принята. По умолчанию мягкой остановки нет."""
+        return False
 
     # ------------------------------------------------------------------ управление
     def info(self) -> dict:
@@ -180,26 +187,47 @@ class Worker:
             *cmd, cwd=str(self.cwd()), env=env, stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **kwargs)
         self.pid = self.proc.pid
+        winutil.bind_child(self.pid)                   # Windows: бот завершится вместе с центром, даже при аварии
         self.started_at = time.time()
         self._readers = [asyncio.create_task(self._read(self.proc.stdout, "out")),
                          asyncio.create_task(self._read(self.proc.stderr, "err"))]
 
     async def _terminate(self, timeout: float) -> None:
+        """Мягкая остановка: команда боту через его API и ожидание выхода. Если не вышло — SIGTERM
+        (на Linux бот сам корректно завершается по сигналу), и только потом принудительно.
+        На Windows terminate() = TerminateProcess без шанса что-то сохранить, поэтому там
+        мягкая команда — единственный способ остановить бота аккуратно."""
         p = self.proc
         if not p or p.returncode is not None:
             return
+        asked = False
         try:
-            p.terminate()
-            await asyncio.wait_for(p.wait(), timeout)
-        except asyncio.TimeoutError:
-            self._append("процесс не завершился сам — принудительная остановка", "center")
-            p.kill()
-            await p.wait()
+            asked = bool(await asyncio.wait_for(self.soft_stop(), 5))
+        except Exception as e:  # noqa: BLE001 — бот занят или уже не отвечает
+            self._append(f"мягкая остановка не удалась: {e or type(e).__name__}", "center")
+        if asked:
+            self._append("мягкая остановка: команда отправлена боту", "center")
+            try:
+                await asyncio.wait_for(p.wait(), timeout)
+            except asyncio.TimeoutError:
+                self._append(f"бот не завершился за {int(timeout)} с после команды", "center")
+        try:
+            if p.returncode is None and sys.platform != "win32":
+                p.terminate()
+                try:
+                    await asyncio.wait_for(p.wait(), timeout if not asked else 5)
+                except asyncio.TimeoutError:
+                    pass
+            if p.returncode is None:
+                self._append("процесс не завершился сам — принудительная остановка", "center")
+                p.kill()
+                await p.wait()
         except ProcessLookupError:
             pass
         for t in self._readers:
             t.cancel()
         self.last_exit = p.returncode
+        self.soft_stopped = asked and p.returncode is not None
 
     async def _wait_healthy(self, timeout: float = 60) -> bool:
         deadline = time.time() + timeout

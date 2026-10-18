@@ -18,7 +18,8 @@ def test_lisbot_secrets_and_config(tmp_path):
     tok = w.token()
     assert len(tok) >= 16                                        # токен панели создаётся автоматически
     w.save_secrets({"LIS_API_KEY": "k2", "STEAM_PASSWORD": ""})  # пустой пароль не затирает сохранённый
-    s = read_env_file(w.secrets_path)
+    s = w.secrets()
+    assert not w.secrets_path.exists() and b"k2" not in (tmp_path / "secrets.dat").read_bytes()
     assert s["LIS_API_KEY"] == "k2" and s["STEAM_PASSWORD"] == "pw" and s["DASHBOARD_TOKEN"] == tok
     m = w.masked_secrets()
     assert m["STEAM_PASSWORD"] == "" and m["STEAM_PASSWORD_SET"] is True

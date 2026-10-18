@@ -248,6 +248,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   }
   const bot = new Bot(cfg);
   const shutdown = async (sig) => { bot.log.info(`Получен ${sig}, завершаю…`); await bot.stop().catch(() => {}); process.exit(0); };
+  bot.hooks.onShutdownRequest = async (why) => { bot.log.info(`Остановка: ${why}`); await bot.stop(why).catch(() => {}); process.exit(0); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   process.on('unhandledRejection', (e) => bot.log.error(`unhandledRejection: ${errMsg(e)}`));
