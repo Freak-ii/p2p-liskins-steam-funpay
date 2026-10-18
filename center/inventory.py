@@ -56,6 +56,13 @@ class Inventory:
         rows = _rows(a.lis_db, f"SELECT id, name, status, mode, buy_price_usd, expected_net_usd, created_at, received_at, "
                      f"list_receive_cents, relists FROM items WHERE dry_run=0 AND status IN ({','.join('?' * len(LIS_HELD))}) "
                      f"ORDER BY created_at", LIS_HELD)
+        # сколько дней обычно проходит от покупки до продажи (за 90 дней): по предмету, если продаж 2+, иначе по всем
+        holds: dict[str, list[float]] = {}
+        for h in _rows(a.lis_db, "SELECT name, created_at, sold_at FROM items WHERE dry_run=0 AND status='sold' "
+                       "AND sold_at>=? AND created_at>0", ((now - 90 * DAY) * 1000,)):
+            holds.setdefault(h["name"], []).append((h["sold_at"] - h["created_at"]) / 1000 / DAY)
+        everyone = sorted(d for v in holds.values() for d in v)
+        overall = everyone[len(everyone) // 2] if len(everyone) >= 3 else None
         items = []
         for r in rows:
             v = vals.get(r["name"])
@@ -77,8 +84,12 @@ class Inventory:
                           "value_source": "рынок" if fresh else "прогноз при покупке" if value is not None else "нет оценки",
                           "trend": _r(v["trend"] * 100, 1) if fresh and v["trend"] is not None else None,
                           "list_usd": _r(r["list_receive_cents"] / 100) if r["list_receive_cents"] else None,
-                          "days": _r(days, 1), "relists": r["relists"] or 0, "flags": flags})
+                          "days": _r(days, 1), "relists": r["relists"] or 0, "flags": flags,
+                          "sell_in": self._sell_in(holds.get(r["name"]), overall, days)})
         valued = [i for i in items if i["value"] is not None]
+        soon = [i for i in items if i["sell_in"] is not None and i["sell_in"] <= 7]
+        forecast = {"n7": len(soon), "value7": _r(sum(i["value"] or i["cost"] for i in soon)),
+                    "typical_days": _r(overall, 1)}
         buckets = []
         for lo, hi, label in AGE_BUCKETS:
             sel = [i for i in items if i["days"] >= lo and (hi is None or i["days"] < hi)]
@@ -92,7 +103,14 @@ class Inventory:
                 "unvalued": len(items) - len(valued), "flagged": sum(1 for i in items if i["flags"]),
                 "losing": sum(1 for i in items if "в минусе" in i["flags"]),
                 "old": sum(1 for i in items if "долго лежит" in i["flags"]), "old_days": old_days,
-                "buckets": buckets, "items": items}
+                "buckets": buckets, "forecast": forecast, "items": items}
+
+    @staticmethod
+    def _sell_in(own: list[float] | None, overall: float | None, held: float) -> float | None:
+        """Через сколько дней предмет, вероятно, продастся: обычный срок продажи минус уже прошедшие дни.
+        Если обычный срок уже прошёл — ждём продажу в ближайшие сутки-двое (0); истории нет — None."""
+        typical = sorted(own)[len(own) // 2] if own and len(own) >= 2 else overall
+        return None if typical is None else _r(max(0.0, typical - held), 1)
 
     # ------------------------------------------------------------------ MannBot
     def mannbot(self) -> dict:
@@ -133,7 +151,7 @@ class Inventory:
     def brief(self) -> dict:
         """Коротко для координатора и ежедневного отчёта."""
         lis, mann = self.lisbot(), self.mannbot()
-        return {"lisbot": {k: lis[k] for k in ("n", "cost", "value", "pnl", "losing", "old", "old_days")}
+        return {"lisbot": {k: lis[k] for k in ("n", "cost", "value", "pnl", "losing", "old", "old_days", "forecast")}
                 | {"flagged_items": [{k: i[k] for k in ("name", "days", "cost", "value", "pnl", "flags")}
                                      for i in lis["items"] if i["flags"]][:8]},
                 "mannbot": {k: mann[k] for k in ("stock", "per_day", "days_left", "level")}}
@@ -149,6 +167,9 @@ class Inventory:
             if lis["losing"] or lis["old"]:
                 line += f" · в минусе {lis['losing']}, лежат дольше {lis['old_days']:.0f} дн: {lis['old']}"
             out.append(line)
+            f = lis.get("forecast") or {}
+            if f.get("n7"):
+                out.append(f"Ожидается продаж LisBot за 7 дней: {f['n7']} шт примерно на ${f['value7']:.2f}")
         if mann["stock"] is not None:
             line = f"Склад MannBot: {mann['stock']} ключей"
             if mann["days_left"] is not None:

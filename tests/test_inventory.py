@@ -142,3 +142,23 @@ def test_market_drop_rule(tmp_path):
     assert an["tool"] is None and "AWP -10%" in an["reason"] and "−$5.00" in an["reason"]
     assert "Old" not in an["reason"]                                               # устаревшая оценка не считается
     c.events.close()
+
+
+def test_sell_time_forecast(tmp_path):
+    seed(tmp_path)
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    for name, hold, ago in (("AK", 3, 5), ("AK", 5, 20), ("X", 10, 30), ("Y", 12, 40)):   # AK продаётся за 3–5 дн
+        con.execute("INSERT INTO items(name, status, dry_run, buy_price_usd, created_at, sold_at, updated_at) VALUES(?,?,?,?,?,?,?)",
+                    (name, "sold", 0, 1.0, ms(NOW - (ago + hold) * DAY), ms(NOW - ago * DAY), ms(NOW)))
+    con.commit()
+    con.close()
+    c = Center(tmp_path)
+    inv = c.inventory.lisbot()
+    by = {i["name"]: i for i in inv["items"]}
+    assert by["AK"]["sell_in"] == 3.0                        # медиана AK 5 дн, лежит 2 дн
+    assert by["Old"]["sell_in"] == 5.0                       # своей истории нет — общая медиана 10 дн, лежит 5
+    assert by["AWP"]["sell_in"] == 0.0                       # уже дольше обычного
+    f = inv["forecast"]
+    assert f["typical_days"] == 10.0 and f["n7"] == 4        # AK, Old, AWP и Howl (через 6 дн)
+    assert any("Ожидается продаж LisBot за 7 дней" in x for x in c.inventory.report_lines())
+    c.events.close()

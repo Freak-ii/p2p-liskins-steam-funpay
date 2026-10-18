@@ -10,10 +10,11 @@ async function invLoad() {
   const ages = l.buckets.map((b) => `<div><b>${b.n}</b><span>${esc(b.label)} · ${money(b.cost, 'USD')}</span></div>`).join('');
   const list = invAll ? l.items : l.items.slice(0, 8);
   const rows = list.map((i) => `<tr><td>${esc(i.name)}${i.flags.map((f) => ` <span class="tag" style="${f === 'в минусе' ? 'color:var(--bad)' : ''}">${esc(f)}</span>`).join('')}</td>
-    <td>${esc(i.status_text)}</td><td>${i.days.toLocaleString('ru-RU')} дн</td><td>${money(i.cost, 'USD')}</td>
+    <td>${esc(i.status_text)}</td><td>${i.days.toLocaleString('ru-RU')} дн</td>
+    <td class="muted">${i.sell_in == null ? '—' : i.sell_in < 1 ? 'скоро' : `≈${Math.round(i.sell_in)} дн`}</td><td>${money(i.cost, 'USD')}</td>
     <td title="${esc(i.value_source)}${i.trend != null ? ` · тренд ${i.trend}%` : ''}">${money(i.value, 'USD')}${i.value_source === 'рынок' ? '' : ' <span class="muted">*</span>'}</td>
     <td>${signed(i.pnl, 'USD')} <span class="muted small">${pct(i.pnl_pct)}</span></td></tr>`).join('')
-    || '<tr><td colspan="6" class="muted">Склад пуст: все купленные предметы проданы</td></tr>';
+    || '<tr><td colspan="7" class="muted">Склад пуст: все купленные предметы проданы</td></tr>';
   const more = l.items.length > 8 ? `<button class="btn small" onclick="invAll=!invAll;invLoad()">${invAll ? 'Свернуть' : `Показать все (${l.items.length})`}</button>` : '';
   const [cls, txt] = INV_LEVEL[m.level] || INV_LEVEL.unknown;
   $('#invBody').innerHTML = `
@@ -22,11 +23,12 @@ async function invLoad() {
       <div><b>${money(t.value)}</b><span>стоит по рынку</span></div>
       <div><b>${signed(t.pnl)}</b><span>бумажная прибыль LisBot</span></div>
       <div><b>${l.flagged}</b><span>требуют решения</span></div>
+      <div><b>${money(AN.cur === 'RUB' && r.rate ? l.forecast.value7 * r.rate : l.forecast.value7, AN.cur === 'RUB' && r.rate ? 'RUB' : 'USD')}</b><span>ожидается продаж за 7 дн (${l.forecast.n7} шт)</span></div>
     </div>
     <div class="grid">
       <div><h3>LisBot · ${l.n} шт</h3>
         <div class="kpi mon-kpi">${ages}</div>
-        <div class="tablewrap"><table><thead><tr><th>Предмет</th><th>Где</th><th>Лежит</th><th>Куплен</th><th>По рынку</th><th>Итог</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="tablewrap"><table><thead><tr><th>Предмет</th><th>Где</th><th>Лежит</th><th title="По обычному сроку продажи этого предмета (или всех) за 90 дней">Продастся</th><th>Куплен</th><th>По рынку</th><th>Итог</th></tr></thead><tbody>${rows}</tbody></table></div>
         <div class="row small muted" style="margin-top:6px"><span>«По рынку» — сколько бот получит после комиссии Steam по последней оценке цены; * — оценки нет, взят прогноз при покупке. «Долго лежит» — дольше ${l.old_days.toLocaleString('ru-RU')} дн.</span><span class="spacer" style="flex:1"></span>${more}</div>
       </div>
       <div><h3>MannBot · ключи</h3>
