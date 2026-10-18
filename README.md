@@ -37,7 +37,7 @@
 * **Linux / macOS / VPS без Docker:** `./center.sh` (на сервере: `./center.sh --no-browser --host 0.0.0.0`).
 * Вручную: `pip install -r requirements.txt`, `cd bots/lisbot && npm ci --omit=dev`, затем `python -m center`.
 
-Посмотреть без аккаунтов: `python -m center --demo`. MannBot запустится с эмуляцией FunPay и Steam и демо-заказами, LisBot будет ждать настройки.
+Посмотреть без аккаунтов: `python -m center --demo`. MannBot запустится с эмуляцией FunPay и Steam и демо-заказами, LisBot будет ждать настройки, а его демо-история сделок за месяц (база в формате LisBot) наполнит аналитику, CRM, RTBA и бэктест. Демо-данные пересоздаются при каждом запуске и лежат отдельно, в `center-data/demo`.
 
 ### Первая настройка
 

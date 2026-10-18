@@ -38,6 +38,9 @@ class Center:
             "mannbot": MannBotWorker(self.home / "mannbot", self.events, port=wm.get("port", 8801), restart=restart,
                                      executable=wm.get("python") or "", demo=demo, vault=self.vault),
         }
+        if demo:                                    # LisBot без ключей не стартует: показываем его историю сделок
+            from center.demo import seed_lisbot
+            seed_lisbot(self.workers["lisbot"].data_dir)
         self.summaries: dict[str, dict | None] = {n: None for n in self.workers}
         self.summary_at: dict[str, float] = {}
         self.quit_event = asyncio.Event()

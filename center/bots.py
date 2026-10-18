@@ -21,7 +21,7 @@ import yaml
 
 from center.config import BOTS_DIR
 from center.vault import SecretStore, SecretStoreError
-from center.workers import MISSING_DEPS, NOT_CONFIGURED, STOPPED, Worker
+from center.workers import CRASHED, MISSING_DEPS, NOT_CONFIGURED, STOPPED, Worker
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=8)
 
@@ -37,10 +37,13 @@ def _read_only(path: Path) -> sqlite3.Connection | None:
 class BotWorker(Worker):
     """Общее для ботов с веб-панелью на своём порту."""
 
+    reserved_ports: set[int] = set()     # порты всех ботов центра: запасной порт не должен совпасть с чужим
+
     def __init__(self, home: Path, events, *, port: int, restart: dict | None = None, executable: str = "",
                  vault: SecretStore | None = None):
         super().__init__(home, events, restart=restart)
         self.port = int(port)
+        BotWorker.reserved_ports.add(self.port)
         self.executable = executable
         self.home.mkdir(parents=True, exist_ok=True)
         self.vault = vault or SecretStore(self.home.parent)
@@ -54,6 +57,8 @@ class BotWorker(Worker):
     def prepare(self) -> None:
         # если порт занят чужой программой — берём следующий свободный, чтобы бот и проверки смотрели в одно место
         for p in range(self.port, self.port + 50):
+            if p != self.port and p in BotWorker.reserved_ports:
+                continue
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 try:
                     s.bind(("127.0.0.1", p))
@@ -61,6 +66,7 @@ class BotWorker(Worker):
                     continue
             if p != self.port:
                 self._append(f"порт {self.port} занят, бот запускается на {p}", "center")
+                BotWorker.reserved_ports.add(p)
                 self.port = p
             return
 
@@ -167,6 +173,14 @@ class MannBotWorker(BotWorker):
         for (section, key), value in self.stored_secrets().items():
             env[mann_secret_env(section, key)] = value
         return env
+
+    def classify_exit(self, code: int | None, tail: str) -> tuple[str, str] | None:
+        if "уже запущен на порту" in tail:
+            return CRASHED, (f"на порту {self.port} уже работает другой экземпляр MannBot (остался от прошлого запуска?): "
+                             "закройте его или смените workers.mannbot.port в center.yaml")
+        if "занят другой программой" in tail:
+            return CRASHED, f"порт {self.port} занят другой программой: смените workers.mannbot.port в center.yaml"
+        return None
 
     @property
     def _cfg_path(self) -> Path:
@@ -286,12 +300,16 @@ class MannBotWorker(BotWorker):
                     return None
                 d = await r.json()
         sm = d.get("summary") or {}
+        ai = d.get("ai") or {}
+        kpi = {"Заказов за 24 ч": sm.get("orders"), "Выдано": sm.get("delivered"),
+               "Выручка за 24 ч, ₽": sm.get("revenue"), "Прибыль за 24 ч, ₽": sm.get("profit"),
+               "Активных заказов": sm.get("active"), "Ключей на складе": sm.get("stock")}
+        if ai.get("active"):                       # ИИ-агент FunPay: черновики ответов покупателям ждут продавца
+            kpi["Черновиков ИИ ждут"] = ai.get("pending")
         return {
             "bot_state": d.get("state"), "paused": d.get("paused"), "dry_run": d.get("dry_run"),
             "configured": d.get("configured"), "error": d.get("error"), "demo": d.get("demo"),
-            "kpi": {"Заказов за 24 ч": sm.get("orders"), "Выдано": sm.get("delivered"),
-                    "Выручка за 24 ч, ₽": sm.get("revenue"), "Прибыль за 24 ч, ₽": sm.get("profit"),
-                    "Активных заказов": sm.get("active"), "Ключей на складе": sm.get("stock")},
+            "ai": ai or None, "kpi": kpi,
         }
 
     async def control(self, action: str) -> str:
@@ -301,6 +319,8 @@ class MannBotWorker(BotWorker):
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60), cookies=self._cookies()) as s:
             async with s.post(f"{self.base_url}/control", data={"action": form}, allow_redirects=False) as r:
                 loc = r.headers.get("Location", "")
+        if r.status not in (302, 303) or loc.startswith("/login"):    # нет входа или ошибка: команда не выполнена
+            raise RuntimeError(f"MannBot не принял команду (HTTP {r.status}{', нужен вход' if 'login' in loc else ''})")
         m = re.search(r"msg=([^&]+)", loc)
         return unquote_plus(m.group(1)) if m else "команда отправлена"
 
@@ -467,6 +487,8 @@ class LisBotWorker(BotWorker):
         if code == 1 and "Ошибки конфигурации" in tail:
             problems = [ln.strip(" -") for ln in tail.splitlines() if ln.strip().startswith("- ")]
             return NOT_CONFIGURED, "; ".join(problems) or "не заполнены настройки"
+        if "EADDRINUSE" in tail:
+            return CRASHED, f"порт {self.port} занят другой программой: смените workers.lisbot.port в center.yaml"
         if "Cannot find module" in tail or "ERR_MODULE_NOT_FOUND" in tail or "NODE_MODULE_VERSION" in tail:
             return MISSING_DEPS, "зависимости LisBot не установлены или собраны под другую версию Node: npm ci в bots/lisbot"
         return None
@@ -522,7 +544,9 @@ class LisBotWorker(BotWorker):
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=self._headers()) as s:
             async with s.post(f"{self.base_url}/api/control", json={"action": cmd}) as r:
                 d = await r.json(content_type=None)
-        return "готово" if d.get("ok") else str(d.get("error") or "ошибка")
+        if r.status != 200 or not d.get("ok"):          # координатор и панель должны видеть отказ, а не «готово»
+            raise RuntimeError(f"LisBot отказал: {d.get('error') or f'HTTP {r.status}'}")
+        return "готово"
 
     def alerts(self, limit: int = 50) -> list[dict]:
         con = _read_only(self.data_dir / "bot.sqlite")

@@ -244,6 +244,8 @@ class Monitor:
     def _on_event(self, ev: dict) -> None:
         if not (ev["kind"] in NOTIFY_KINDS or ev["level"] == "critical"):
             return
+        if ev["kind"].startswith("coordinator."):      # координатор шлёт свои уведомления сам — без дубля
+            return
         title = self.center.workers[ev["source"]].title if ev["source"] in self.center.workers else "Центр"
         item = (f"{ev['source']}:{ev['kind']}", ev["level"], f"<b>{html.escape(title)}</b>\n{html.escape(ev['message'])}")
         if self._loop is None or self._queue is None:

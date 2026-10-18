@@ -90,6 +90,8 @@ def make_app(center: Center) -> web.Application:
                 return web.json_response({"ok": False, "message": f"{w.title} не запущен"}, status=409)
             try:
                 msg = await w.control(action)
+            except RuntimeError as e:                    # бот ответил отказом
+                return web.json_response({"ok": False, "message": str(e)}, status=502)
             except Exception as e:  # noqa: BLE001
                 return web.json_response({"ok": False, "message": f"бот не ответил: {e}"}, status=502)
             asyncio.get_running_loop().call_later(1, lambda: asyncio.ensure_future(center.refresh(w.name)))
