@@ -169,7 +169,10 @@ class Inventory:
         bought, sent, delivered = num("bought"), num("sent"), num("delivered")
         offers = [o for o in (st.get("ownOffers") or {}).values() if isinstance(o, dict)]
         in_offers = sum(len(o.get("assetIds") or []) for o in offers if o.get("open"))
-        failed = sum(len(o.get("assetIds") or []) for o in offers if not o.get("open") and o.get("finalState") not in (None, "Accepted"))
+        # не принятые MannBot за последние 3 дня (старые неудачи уже переотправлены, о них не напоминаем)
+        recent = (self.clock() - 3 * DAY) * 1000
+        failed = sum(len(o.get("assetIds") or []) for o in offers
+                     if not o.get("open") and o.get("finalState") not in (None, "Accepted") and (o.get("ts") or 0) >= recent)
         # отправленные, но не принятые (отклонены, истекли) ключи вернулись к LisBot и уйдут снова
         waiting = max(0, bought - delivered - in_offers)
         enabled = bool(bc.get("enabled"))

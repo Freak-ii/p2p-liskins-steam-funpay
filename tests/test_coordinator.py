@@ -310,3 +310,21 @@ def test_raise_min_roi_recommendation():
         res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'lis_roi_cut_30d': cut})}</facts>", {})
         assert not any(r["title"].startswith("Поднять минимальный ROI") for r in res["recommendations"])
     asyncio.run(go())
+
+
+def test_restock_and_key_bridge_recommendations():
+    async def go():
+        inv = {"mannbot": {"level": "low", "stock": 2, "days_left": 1.0, "restock": 5, "target_days": 14, "bridge_coming": 3},
+               "bridge": {"enabled": True, "failed": 2}}
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'inventory': inv})}</facts>", {})
+        recs = {r["title"]: r for r in res["recommendations"]}
+        why = recs["Пополнить склад ключей MannBot"]["why"]
+        assert "Докупите 5 ключей" in why and "Ещё 3 ключей едут по мосту" in why and "включите мост" not in why
+        assert "accept_gifts_from" in recs["Проверить приём ключей MannBot"]["why"]
+        inv["bridge"] = {"enabled": False, "failed": 0}
+        inv["mannbot"]["bridge_coming"] = 0
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'inventory': inv})}</facts>", {})
+        recs = {r["title"]: r for r in res["recommendations"]}
+        assert "включите мост ключей" in recs["Пополнить склад ключей MannBot"]["why"]
+        assert "Проверить приём ключей MannBot" not in recs
+    asyncio.run(go())

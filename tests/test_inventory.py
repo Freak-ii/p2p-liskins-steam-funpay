@@ -175,7 +175,8 @@ def test_key_bridge_state_and_restock(tmp_path):
     state = {"buyOrder": {"id": "1"}, "totals": {"bought": 6, "spentCents": 90000, "sent": 5, "delivered": 2},
              "ownOffers": {"A": {"assetIds": ["1", "2"], "open": False, "finalState": "Accepted"},
                            "B": {"assetIds": ["3"], "open": True},
-                           "C": {"assetIds": ["4", "5"], "open": False, "finalState": "Declined"}}}
+                           "C": {"assetIds": ["4", "5"], "open": False, "finalState": "Declined", "ts": ms(NOW - 3600)},
+                           "D": {"assetIds": ["6"], "open": False, "finalState": "Expired", "ts": ms(NOW - 5 * DAY)}}}
     con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
     con.execute("INSERT INTO kv VALUES('keybridge', ?, 0)", (json.dumps(state),))
     con.commit()

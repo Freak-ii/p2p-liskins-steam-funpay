@@ -274,7 +274,7 @@ class StubBackend:
         for w in (p7.get("warnings") or [])[:2]:
             reco("Проверить настройки MannBot", w)
         inv = f.get("inventory") or {}
-        il, im = inv.get("lisbot") or {}, inv.get("mannbot") or {}
+        il, im, br = inv.get("lisbot") or {}, inv.get("mannbot") or {}, inv.get("bridge") or {}
         if il.get("n"):
             hi.append(f"Склад LisBot: {il['n']} шт на ${_n(il.get('cost'), 2)}, по рынку {_n(il.get('pnl'), 2)} $")
         if il.get("losing") or il.get("old"):
@@ -285,7 +285,13 @@ class StubBackend:
             reco("Пополнить склад ключей MannBot",
                  f"На складе {im.get('stock')} ключей" + (f", хватит примерно на {_n(im.get('days_left'), 1)} дн."
                                                           if im.get("days_left") is not None else ".")
-                 + (f" Докупите {im['restock']} ключей, чтобы хватило на {_n(im.get('target_days'), 0)} дн." if im.get("restock") else ""))
+                 + (f" Докупите {im['restock']} ключей, чтобы хватило на {_n(im.get('target_days'), 0)} дн." if im.get("restock") else "")
+                 + (f" Ещё {im['bridge_coming']} ключей едут по мосту от LisBot." if im.get("bridge_coming") else "")
+                 + ("" if br.get("enabled") else " Ключи можно покупать за кошелёк Steam аккаунта LisBot: включите мост ключей в настройках LisBot и MannBot."))
+        if br.get("enabled") and br.get("failed"):
+            reco("Проверить приём ключей MannBot",
+                 f"MannBot не принял {br['failed']} ключей из моста (обмены отклонены или истекли), они вернулись к LisBot. "
+                 "Проверьте, что в MannBot в security.accept_gifts_from указан SteamID аккаунта LisBot и MannBot запущен.")
         rd = f.get("readiness") or {}
         if rd.get("problems"):
             reco("Доделать настройку перед боевым режимом", "Не готово: " + "; ".join(rd["problems"][:4])
