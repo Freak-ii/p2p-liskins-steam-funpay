@@ -92,6 +92,7 @@ def test_cohorts(tmp_path):
     assert d["rows"][-1]["new"] == 1 and d["rows"][-1]["retention"] == []
     assert d["rows"][-2]["new"] == 0 and d["rows"][-2]["retention"] == [None]
     assert sum(r["new"] for r in rows.values()) == 3
+    assert d["repeat_gaps"] >= 1 and d["repeat_gap_days"] is not None            # повтор «a» через ~30 дней (+ заказы seed_crm)
 
 
 def test_customers_csv_export(tmp_path):

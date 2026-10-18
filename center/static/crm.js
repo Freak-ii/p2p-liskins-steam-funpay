@@ -31,6 +31,9 @@ async function crmCohorts() {
   try { d = await api('/api/crm/cohorts?months=6'); } catch { return; }
   const n = d.months - 1;
   const cell = (v) => v == null ? '<td class="muted">·</td>' : `<td style="background:color-mix(in srgb, var(--ok) ${Math.round(Math.min(100, v) * 0.6)}%, transparent)">${v.toLocaleString('ru-RU')}%</td>`;
+  $('#crmCohGap').innerHTML = d.repeat_gap_days != null
+    ? `Покупатели FunPay возвращаются в среднем (медиана) через <b>${d.repeat_gap_days.toLocaleString('ru-RU')} дн</b> после прошлой покупки (по ${d.repeat_gaps} повторам). Писать уснувшим имеет смысл, когда прошло заметно больше.`
+    : 'Повторных покупок пока нет.';
   $('#crmCohTable').innerHTML = `<thead><tr><th>Когорта</th><th>Новых</th>${Array.from({ length: n }, (_, i) => `<th>Через ${i + 1} мес</th>`).join('')}
     <th>Вернулись</th><th>Принёс</th></tr></thead><tbody>
     ${d.rows.slice().reverse().map((r) => { const [y, m] = r.month.split('-'); return `<tr><td>${MONTHS[+m - 1]} ${y}</td><td>${r.new}</td>

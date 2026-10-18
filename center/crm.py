@@ -13,7 +13,7 @@ import time
 
 import aiohttp
 
-from center.analytics import _cached, _r, _rows
+from center.analytics import _cached, _median, _r, _rows
 from center.workers import RUNNING
 
 log = logging.getLogger("center.crm")
@@ -371,10 +371,13 @@ class Crm:
         mi = lambda ts: (lambda t: t.tm_year * 12 + t.tm_mon - 1)(time.localtime(ts))  # noqa: E731
         _, orders, _ = self._customer_rows()
         groups: dict[int, list[tuple[set[int], float]]] = {}
+        gaps: list[float] = []                      # дни между соседними покупками одного покупателя
         for os_ in orders.values():
             done = [o for o in os_ if o["delivered_at"] and o["status"] != "refunded"]
             if not done:
                 continue
+            ts = sorted(o["created_at"] for o in done)
+            gaps += [(b - a) / DAY for a, b in zip(ts, ts[1:]) if b - a >= 3600]   # дозаказ в тот же час — не возврат
             first = mi(min(o["created_at"] for o in done))
             if first <= cur - months:
                 continue
@@ -388,7 +391,7 @@ class Crm:
             rows.append({"month": f"{m // 12}-{m % 12 + 1:02d}", "new": n, "retention": ret,
                          "repeat": _r(sum(1 for ms, _ in g if len(ms) > 1) / n * 100, 1) if n else None,
                          "ltv": _r(sum(sp for _, sp in g) / n) if n else None})
-        return {"months": months, "rows": rows}
+        return {"months": months, "rows": rows, "repeat_gap_days": _r(_median(gaps), 1), "repeat_gaps": len(gaps)}
 
     def customer_brief(self, funpay_id: int) -> dict | None:
         custs, orders, owners = self._customer_rows()
