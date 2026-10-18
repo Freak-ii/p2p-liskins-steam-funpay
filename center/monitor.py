@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
 import shutil
 import time
 from collections import defaultdict
@@ -59,9 +60,19 @@ CREATE TABLE IF NOT EXISTS monitor_kv (k TEXT PRIMARY KEY, v TEXT);
 NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.unhealthy", "worker.missing_deps",
                 "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
                 "backup.failed", "backup.restored", "inventory.low_stock",
-                "inventory.low_balance", "monitor.low_disk", "monitor.auto_restart", "center.config"}
+                "inventory.low_balance", "monitor.low_disk", "monitor.auto_restart", "center.config",
+                "monitor.error_spike"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
+# строки вывода ботов, которые считаются ошибками: уровни логгеров LisBot и MannBot, трейсбеки Python и Node
+ERROR_LINE = re.compile(r"\b(ERROR|CRIT|CRITICAL|FATAL)\b|Traceback \(most recent call last\)|Unhandled(Promise)?Rejection")
+_NOISE = re.compile(r"^\S*\d{4}-\d\d-\d\d[T ][\d:.,Z]+\s*|\d+")
+
+
+def error_signature(text: str) -> str:
+    """Ошибка без времени и чисел: одинаковые ошибки с разными id и суммами считаются одной."""
+    s = _NOISE.sub(lambda m: "" if m.start() == 0 and not m.group(0).isdigit() else "#", text.strip())
+    return re.sub(r"\s+", " ", s)[:160]
 
 
 def parse_hhmm(s: str) -> int | None:
@@ -427,6 +438,48 @@ class Monitor:
             await asyncio.to_thread(self.check_disk)
         except Exception:  # noqa: BLE001
             log.exception("проверка места на диске")
+        try:
+            self.check_errors()
+        except Exception:  # noqa: BLE001
+            log.exception("проверка ошибок в выводе ботов")
+
+    # ------------------------------------------------------------------ всплеск ошибок в выводе ботов
+    def errors(self, hours: float = 1) -> dict:
+        """Ошибки в выводе каждого бота за последние hours часов и самые частые из них."""
+        since = self.clock() - hours * 3600
+        out = {}
+        for name, w in self.center.workers.items():
+            by: dict[str, list] = {}
+            for ln in list(getattr(w, "lines", ())):
+                if ln["ts"] >= since and ln.get("stream") != "center" and ERROR_LINE.search(ln["text"]):
+                    by.setdefault(error_signature(ln["text"]), []).append(ln["text"])
+            top = sorted(by.items(), key=lambda kv: -len(kv[1]))[:3]
+            out[name] = {"n": sum(len(v) for v in by.values()),
+                         "top": [{"n": len(v), "text": v[-1][:300]} for _, v in top]}
+        return out
+
+    def check_errors(self) -> list[str]:
+        """Бот работает, но сыплет ошибками (нет сети, сменился API площадки, кончился лимит запросов) —
+        это видно раньше, чем пропадут сделки. Не чаще раза в 6 часов на бота."""
+        cfg = self.cfg.get("errors") or {}
+        limit = int(cfg.get("per_hour", 20) or 0)
+        if not limit:
+            return []
+        sent = []
+        for name, e in self.errors(1).items():
+            if e["n"] < limit:
+                continue
+            last = float(self.kv_get(f"error_spike:{name}") or 0)
+            if self.clock() - last < 6 * 3600:
+                continue
+            self.kv_set(f"error_spike:{name}", self.clock())
+            w = self.center.workers[name]
+            top = e["top"][0]
+            msg = (f"{w.title}: {e['n']} ошибок в выводе за последний час. Чаще всего ({top['n']} раз): «{top['text']}». "
+                   "Бот работает, но что-то идёт не так: посмотрите «Журнал работы ботов» в панели.")
+            self.events.add(name, "warn", "monitor.error_spike", msg)
+            sent.append(msg)
+        return sent
 
     # ------------------------------------------------------------------ место на диске
     def disk(self) -> dict:
@@ -826,6 +879,7 @@ class Monitor:
             "daily_report": {"enabled": bool(dr.get("enabled", True)), "time": dr.get("time") or "09:00",
                              "last": self.kv_get("daily_report_date")},
             "disk": self.disk(),
+            "errors": {k: v["n"] for k, v in self.errors(1).items()},
         }
 
 

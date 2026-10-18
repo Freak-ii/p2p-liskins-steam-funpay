@@ -83,12 +83,13 @@ async function refreshMonitor() {
     : st.heartbeat.ok ? `<span class="lv-ok">✓ сторожевой пинг</span> <span class="muted">${fmtTs(st.heartbeat.at)}</span>` : `<span class="lv-critical">✗ сторожевой пинг: ${esc(st.heartbeat.info)}</span>`;
   const quiet = st.quiet_hours ? `тихие часы ${esc(st.quiet_hours)}${st.quiet_now ? ` (сейчас, отложено ${st.held})` : ''}` : 'без тихих часов';
   const disk = (st.disk?.disks || []).map((x) => `<span class="${x.low ? 'lv-warn' : 'muted'}" title="${esc(x.path)}">${x.low ? '⚠ ' : ''}${esc(x.label)}: свободно ${x.free_gb.toLocaleString('ru-RU')} ГБ</span>`).join(' · ');
+  const errs = Object.entries(st.errors || {}).filter(([, n]) => n).map(([b, n]) => `<span class="lv-warn">${esc(BOT_T[b] || b)}: ${n} ошибок за час</span>`).join(' · ');
   const rep = st.daily_report.enabled ? `отчёт в ${esc(st.daily_report.time)}` : 'отчёт выключен';
   const tabs = [[24, '24 ч'], [168, '7 дней'], [720, '30 дней']].map(([h, t]) => `<button class="btn ${h === monHours ? 'on' : ''}" onclick="monHours=${h};refreshMonitor()">${t}</button>`).join('');
   const notes = st.notifications.map((x) => `<tr><td>${fmtTs(x.ts)}</td><td class="lv-${esc(x.level)}">${esc(NOTE_STATUS[x.status] || x.status)}</td><td>${esc(stripTags(x.text)).replace(/\n/g, ' · ')}</td></tr>`).join('')
     || '<tr><td colspan="3" class="muted">Уведомлений пока не было</td></tr>';
   $('#monitor').innerHTML = `
-    <div class="card"><div class="row small">${tg} · ${hb} · <span class="muted">${quiet} · ${rep}</span>${disk ? ` · ${disk}` : ''}
+    <div class="card"><div class="row small">${tg} · ${hb} · <span class="muted">${quiet} · ${rep}</span>${disk ? ` · ${disk}` : ''}${errs ? ` · ${errs}` : ''}
       <span class="spacer" style="flex:1"></span>
       <button class="btn" onclick="openMonSettings()">Настройки уведомлений</button>
       <button class="btn" onclick="monTest()">Проверить</button>
