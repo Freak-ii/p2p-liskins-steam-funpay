@@ -50,12 +50,15 @@ class Inventory:
     def cfg(self) -> dict:
         return self.center.cfg.data.get("inventory") or {}
 
-    def _lis_sell_cfg(self) -> dict:
+    @staticmethod
+    def _lis_example() -> dict:
         try:
-            base = json.loads((BOTS_DIR / "lisbot" / "config.example.json").read_text(encoding="utf-8")).get("sell") or {}
+            return json.loads((BOTS_DIR / "lisbot" / "config.example.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            base = {}
-        return {**base, **(self.center.analytics.lis_config().get("sell") or {})}
+            return {}
+
+    def _lis_sell_cfg(self) -> dict:
+        return {**(self._lis_example().get("sell") or {}), **(self.center.analytics.lis_config().get("sell") or {})}
 
     # ------------------------------------------------------------------ LisBot
     def lisbot(self) -> dict:
@@ -181,7 +184,8 @@ class Inventory:
         rub = [d for d in a.mann_deals(self.clock() - 30 * DAY) if d["currency"] == "RUB" and d["qty"]]
         keys = sum(d["qty"] for d in rub)
         net_key = (sum(d["revenue"] - d["fee"] for d in rub) / keys) if keys else None
-        cur = (cfg.get("steam") if isinstance(cfg.get("steam"), dict) else {}).get("walletCurrencyCode") or ""
+        cur = ((cfg.get("steam") if isinstance(cfg.get("steam"), dict) else {}).get("walletCurrencyCode")
+               or (self._lis_example().get("steam") or {}).get("walletCurrencyCode") or "")
         avg = t["spentCents"] / 100 / bought if bought and t.get("spentCents") else None
         price = avg or (float(buy["maxKeyPrice"]) if isinstance(buy.get("maxKeyPrice"), (int, float)) and buy["maxKeyPrice"] > 0 else None)
         per_wallet = net_key / price if net_key and price and cur == "RUB" else None

@@ -37,6 +37,8 @@ def test_demo_center_shows_lisbot_history(tmp_path):
         stale = inv["items"][0]
         assert stale["name"].startswith("Desert Eagle") and stale["value_source"] == "рынок"
         assert set(stale["flags"]) == {"долго лежит", "в минусе", "лимит перевыставлений"}
+        br = c.inventory.bridge()                        # история моста ключей для «Склада» (сам мост выключен)
+        assert (br["bought"], br["delivered"], br["in_offers"], br["enabled"]) == (18, 12, 3, False)
         assert c.coordinator.detect() == []            # демо-история не вызывает аномалий и автопаузы
         assert c.workers["lisbot"].alerts(5)
         c.events.close()

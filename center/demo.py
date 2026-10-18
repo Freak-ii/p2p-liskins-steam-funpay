@@ -102,7 +102,12 @@ def seed_lisbot(data_dir: Path, now: float | None = None) -> bool:
         _item(con, ms, "M4A1-S | Printstream (Minimal Wear)", "rtba", "sold", 148.0, 163.5, now - 9 * DAY,
               now - DAY, 165.0, PARTNERS[1], dry=True)       # тестовая (dry-run) — CRM прячет её по умолчанию
         for key, value in (("center.demo", 1), ("fx", {"rate": 92.4, "ts": ms(now - 1800)}),
-                           ("balance.last", {"balance": 1840.25, "ts": ms(now - 600)})):
+                           ("balance.last", {"balance": 1840.25, "ts": ms(now - 600)}),
+                           # мост ключей: история для блока «Мост ключей» в «Складе» (сам мост в демо выключен)
+                           ("keybridge", {"buyOrder": None, "bought": {}, "totals": {"bought": 18, "spentCents": 270000, "sent": 15, "delivered": 12},
+                                          "ownOffers": {"demo-1": {"partner": "", "assetIds": ["1", "2", "3"], "ts": ms(now - 2 * 3600), "open": True},
+                                                        "demo-0": {"partner": "", "assetIds": [str(i) for i in range(4, 16)],
+                                                                   "ts": ms(now - 3 * DAY), "open": False, "finalState": "Accepted"}}})):
             con.execute("INSERT INTO kv(key, value, updated_at) VALUES(?,?,?)", (key, json.dumps(value), ms(now)))
         for ago, level, code, msg in ((5 * 3600, "warn", "LISTING_SLOW", "Лот AK-47 | Redline висит на ТП дольше 36 ч"),
                                       (26 * 3600, "info", "BALANCE_TOPUP", "Баланс LIS пополнен на 500 $")):
