@@ -122,7 +122,8 @@ class Readiness:
                 elif mann_id and to != mann_id:
                     bad.append(f"трейд-ссылка моста ведёт на SteamID {to}, а у MannBot SteamID {mann_id}")
                 if not gifts:
-                    bad.append("MannBot не принимает ключи: security.accept_gifts_from пуст")
+                    bad.append("MannBot не принимает ключи: security.accept_gifts_from пуст"
+                               + (f" (впишите SteamID64 аккаунта LisBot: {lis_id})" if lis_id else ""))
                 elif lis_id and lis_id not in gifts:
                     bad.append(f"в security.accept_gifts_from у MannBot нет SteamID аккаунта LisBot ({lis_id})")
             if bad:
