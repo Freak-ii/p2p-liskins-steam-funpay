@@ -60,6 +60,8 @@ class BotWorker(Worker):
             if p != self.port and p in BotWorker.reserved_ports:
                 continue
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: иначе bind иногда проходит на занятый порт
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
                 try:
                     s.bind(("127.0.0.1", p))
                 except OSError:

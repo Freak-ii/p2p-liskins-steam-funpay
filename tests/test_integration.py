@@ -107,6 +107,7 @@ def test_fallback_port_skips_other_bots(tmp_path):
     ev = EventStore(tmp_path / "e.sqlite3")
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
+        busy.listen()                                    # порт по-настоящему занят, как сервером другой программы
         p = busy.getsockname()[1]
         w = MannBotWorker(tmp_path / "mannbot", ev, port=p)
         BotWorker.reserved_ports.add(p + 1)              # следующий порт принадлежит другому боту центра
