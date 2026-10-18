@@ -45,7 +45,7 @@ def seed(home, *, cost_per_key=150.0):
 
     mann = home / "mannbot"
     (mann / "data").mkdir(parents=True)
-    (mann / "config.yaml").write_text(yaml.safe_dump({"rtba": {"cost_per_key": cost_per_key, "funpay_fee_pct": 10}}))
+    (mann / "config.yaml").write_text(yaml.safe_dump({"rtba": {"cost_per_key": cost_per_key, "funpay_fee_pct": 10}}), encoding="utf-8")
     con = sqlite3.connect(mann / "data" / "mannbot.sqlite3")
     con.executescript("""
         CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);

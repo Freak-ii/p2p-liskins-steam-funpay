@@ -23,9 +23,9 @@ def test_lisbot_secrets_and_config(tmp_path):
     assert s["LIS_API_KEY"] == "lis-key-2" and s["STEAM_PASSWORD"] == "pw" and s["DASHBOARD_TOKEN"] == tok
     m = w.masked_secrets()
     assert m["STEAM_PASSWORD"] == "" and m["STEAM_PASSWORD_SET"] is True
-    w.config_path.write_text(json.dumps({"strategy": {"minRoi": 0.1}}))
+    w.config_path.write_text(json.dumps({"strategy": {"minRoi": 0.1}}), encoding="utf-8")
     w.prepare()
-    cfg = json.loads(w.config_path.read_text())
+    cfg = json.loads(w.config_path.read_text(encoding="utf-8"))
     assert cfg["strategy"]["minRoi"] == 0.1                       # настройки, сохранённые панелью бота, не теряются
     assert cfg["dataDir"] == str(w.data_dir) and cfg["dashboard"]["port"] == w.port
     assert cfg["telegram"]["enabled"] is False

@@ -57,9 +57,9 @@ def seed_rtba(home):
                     "applied) VALUES(?,?,?,?,?,?,?,?,?)", (ts, "1", lead + 5, lead - 0.5, lead, 2, 1, "лидер рынка", i % 6 == 0))
     con.commit()
     con.close()
-    cfg = yaml.safe_load((home / "mannbot" / "config.yaml").read_text())
+    cfg = yaml.safe_load((home / "mannbot" / "config.yaml").read_text(encoding="utf-8"))
     cfg["funpay"] = {"lots": [{"offer_id": 1, "node_id": 1808}]}
-    (home / "mannbot" / "config.yaml").write_text(yaml.safe_dump(cfg))
+    (home / "mannbot" / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
 
 def test_status_from_bot_databases(tmp_path):
@@ -94,19 +94,19 @@ def test_budget_plan_is_only_applied_by_command(tmp_path):
         assert rows["lisbot.min_roi"]["current"] == 0.08 and rows["mannbot.min_margin_pct"]["current"] == 5.0
         assert rows["mannbot.strategy"]["planned"] == "median"
         assert not (tmp_path / "lisbot" / "config.json").exists()                  # план сам ничего не меняет
-        assert yaml.safe_load((tmp_path / "mannbot" / "config.yaml").read_text())["rtba"].get("min_margin_pct") is None
+        assert yaml.safe_load((tmp_path / "mannbot" / "config.yaml").read_text(encoding="utf-8"))["rtba"].get("min_margin_pct") is None
 
         res = await center.rtba.apply()
         assert res["ok"], res
-        lis = json.loads((tmp_path / "lisbot" / "config.json").read_text())
+        lis = json.loads((tmp_path / "lisbot" / "config.json").read_text(encoding="utf-8"))
         assert lis["strategy"] == {"maxOpenExposureUsd": 485.0, "minRoi": 0.1} and "dryRun" not in lis
-        mann = yaml.safe_load((tmp_path / "mannbot" / "config.yaml").read_text())
+        mann = yaml.safe_load((tmp_path / "mannbot" / "config.yaml").read_text(encoding="utf-8"))
         assert mann["rtba"]["min_margin_pct"] == 12 and mann["rtba"]["strategy"] == "median"
         assert "general" not in mann                                                 # dry_run не тронут
         assert not [r for r in (await center.rtba.plan())["rows"] if r["differs"]]
         # пункт можно убрать из плана
         assert not center.rtba.save_plan({"plan": {"lisbot.min_roi": None}})
-        assert "lisbot.min_roi" not in yaml.safe_load((tmp_path / "center.yaml").read_text())["budget"]["plan"]
+        assert "lisbot.min_roi" not in yaml.safe_load((tmp_path / "center.yaml").read_text(encoding="utf-8"))["budget"]["plan"]
         assert any(e["kind"] == "budget.apply" for e in center.events.recent(20))
         center.events.close()
     asyncio.run(go())
