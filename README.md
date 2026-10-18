@@ -31,8 +31,10 @@
 
 Нужны **Python 3.11+** и **Node.js 20+** (Node нужен только LisBot).
 
-* **Windows:** запустите `Center.bat`. Он сам поставит Python-пакеты и зависимости LisBot, затем откроет панель в браузере.
-* **Linux / macOS / VPS:** `./center.sh` (на сервере: `./center.sh --no-browser --host 0.0.0.0`).
+* **Windows, готовое приложение:** скачайте `Center-Windows-x64-portable.zip` (GitHub Actions → «Center Windows» → артефакт), распакуйте и запустите `Центр.vbs`. Python и Node.js уже внутри, центр работает в фоне со значком у часов (правый клик: панель, папка данных, выход). Собрать самому: `python packaging/build_center_windows.py`.
+* **Windows из исходников:** запустите `Center.bat`. Он сам поставит Python-пакеты и зависимости LisBot, затем откроет панель в браузере.
+* **VPS 24/7 в Docker:** `CENTER_SECRET_KEY=длинный-пароль docker compose up -d`, панели слушают 127.0.0.1 сервера, заходить через SSH-туннель (подробности в `docker-compose.yml`).
+* **Linux / macOS / VPS без Docker:** `./center.sh` (на сервере: `./center.sh --no-browser --host 0.0.0.0`).
 * Вручную: `pip install -r requirements.txt`, `cd bots/lisbot && npm ci --omit=dev`, затем `python -m center`.
 
 Посмотреть без аккаунтов: `python -m center --demo`. MannBot запустится с эмуляцией FunPay и Steam и демо-заказами, LisBot будет ждать настройки.
@@ -40,7 +42,7 @@
 ### Первая настройка
 
 1. **LisBot:** в карточке LisBot нажмите «Подключения» и введите ключ API LIS-SKINS, логин и пароль Steam, `shared_secret` и `identity_secret` из maFile, трейд-ссылку и, по желанию, Telegram. Параметры стратегии меняются во вкладке «Настройки» панели LisBot.
-2. **MannBot:** «Открыть панель бота» → мастер настройки (golden_key FunPay, maFile Steam, Telegram).
+2. **MannBot:** кнопка «Настройки» в карточке MannBot: лоты FunPay, golden_key, maFile Steam, Telegram, RTBA, риск-система и остальные поля панели MannBot. Новые секреты сохраняются в зашифрованном хранилище, и центр перезапускает процесс MannBot.
 3. Оба бота стартуют в **тестовом режиме** и ничего не покупают и не продают. Боевой режим включается в панели каждого бота.
 
 ### Где лежат данные
@@ -52,9 +54,14 @@ center-data/
   center.yaml        порт панели, токен входа, какие боты запускать, параметры перезапуска
   center.sqlite3     журнал событий центра, история состояния ботов, уведомления
   logs/              вывод центра и каждого бота
-  lisbot/            secrets.env (ключи), config.json (стратегия), data/ (база и логи LisBot)
-  mannbot/           config.yaml и data/ MannBot
+  secrets.dat        все ключи и пароли в зашифрованном виде (см. ниже)
+  lisbot/            config.json (стратегия), data/ (база и логи LisBot)
+  mannbot/           config.yaml (секреты в нём — ссылки ${CENTER_MB_…}) и data/ MannBot
 ```
+
+**Секреты.** Ключ LIS-SKINS, пароль и ключи Steam, golden_key FunPay, токены Telegram и ключи Claude API лежат в `secrets.dat`, а не открытым текстом. На Windows файл зашифрован DPAPI текущего пользователя (как в Electron-версии LisBot): расшифровать его может только этот пользователь на этом компьютере, при переносе на другой ПК ключи придётся ввести заново. На Linux, в Docker и на macOS используется Fernet с ключом из `CENTER_SECRET_KEY` (иначе ключ создаётся в `center-data/secret.key`). Старые `lisbot/secrets.env` и секреты в `mannbot/config.yaml` переносятся в хранилище автоматически при первом запуске; если секрет ввести в собственной панели MannBot, центр перенесёт его при следующем перезапуске бота.
+
+**Остановка ботов.** Кнопка «Выход», значок в трее, `docker stop` и закрытие окна консоли сначала просят ботов завершиться самих через их API (`POST /api/shutdown` у LisBot, «Выход» у MannBot), чтобы они дописали базы и закрыли сессии, и только если бот не успел, процесс завершается принудительно. На Windows процессы ботов привязаны к центру (Job Object): если центр упадёт, боты не останутся висеть в фоне.
 
 Чтобы перенести центр на другой компьютер или сделать резервную копию, достаточно скопировать эту папку. В `center.yaml` можно выключить бота (`workers.lisbot.enabled: false`), отключить автозапуск или поменять порты.
 
