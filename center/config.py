@@ -67,6 +67,7 @@ DEFAULTS: dict = {
         },
         "daily_report": {"enabled": True, "time": "09:00"},
         "weekly_report": {"enabled": True, "weekday": 0, "time": "09:00"},   # 0 — понедельник
+        "monthly_report": {"enabled": True, "time": "09:00"},   # 1-го числа: итоги прошлого месяца
     },
     "crm": {                         # сегменты покупателей FunPay, center/crm.py
         "sleep_days": 30,            # нет покупок дольше — «уснул» (стоит написать)

@@ -24,7 +24,7 @@ BOT_NAMES = {"lisbot": "lisbot", "lis": "lisbot", "mannbot": "mannbot", "mann": 
 PANEL_ONLY = {"set_live_mode", "withdraw"}          # деньги и боевой режим — только из панели
 HELP = ("<b>Центр перепродажи</b>\n"
         "/status — состояние ботов и тревоги\n"
-        "/report — отчёт за сутки, /week — за неделю\n"
+        "/report — отчёт за сутки, /week — за неделю, /month — итоги прошлого месяца\n"
         "/stock — склад LisBot и ключи MannBot, /goal — цель месяца\n"
         "/ready — готовность к боевому режиму\n"
         "/proposals — предложения координатора с кнопками\n"
@@ -114,6 +114,8 @@ class TelegramControl:
                       + (f", нужно {g['need_per_day']:,.0f} ₽ в день" if g["need_per_day"] else "")).replace(",", " "), None)]
         if cmd == "/ready":
             return [("\n".join(html.escape(x) for x in c.readiness.lines()), None)]
+        if cmd == "/month":
+            return [(await c.monitor.monthly_report(), None)]
         if cmd == "/week":
             return [(await c.monitor.weekly_report(), None)]
         if cmd == "/stock":

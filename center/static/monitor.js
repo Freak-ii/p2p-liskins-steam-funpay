@@ -93,7 +93,8 @@ async function refreshMonitor() {
       <button class="btn" onclick="openMonSettings()">Настройки уведомлений</button>
       <button class="btn" onclick="monTest()">Проверить</button>
       <button class="btn" onclick="openReport()">Отчёт за сутки</button>
-      <button class="btn" onclick="openReport('week')">За неделю</button></div></div>
+      <button class="btn" onclick="openReport('week')">За неделю</button>
+      <button class="btn" onclick="openReport('month')">За месяц</button></div></div>
     <div class="tabs" style="margin-top:10px">${tabs}</div>
     <div class="grid" id="monCharts">${Object.entries(monHist.bots).map(([n, b]) => botChart(n, b, monHist)).join('')}</div>
     <details class="card" style="margin-top:14px"><summary>Уведомления центра (${st.notifications.length})</summary>
@@ -107,7 +108,7 @@ let repPeriod = '';
 async function openReport(period = '') {
   repPeriod = period;
   const r = await api(`/api/monitor/report${period ? '?period=' + period : ''}`);
-  $('#repTitle').textContent = period === 'week' ? 'Отчёт центра за неделю' : 'Отчёт центра за сутки';
+  $('#repTitle').textContent = { week: 'Отчёт центра за неделю', month: 'Итоги прошлого месяца' }[period] || 'Отчёт центра за сутки';
   $('#repText').innerHTML = esc(r.text).replace(/&lt;(\/?)(b|i|code)&gt;/g, '<$1$2>');
   $('#repDlg').showModal();
 }

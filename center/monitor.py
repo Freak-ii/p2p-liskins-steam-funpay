@@ -646,9 +646,36 @@ class Monitor:
         """Неделя против прошлой: сделки, выручка, прибыль по ботам в ₽, лучшие и худшие предметы LisBot,
         аптайм за 7 дней, склад."""
         now = self.clock()
+        return await self._compare_report(
+            f"<b>📅 Неделя центра</b> · {time.strftime('%d.%m', time.localtime(now - 7 * 86400))}–"
+            f"{time.strftime('%d.%m.%Y', time.localtime(now))}",
+            now - 7 * 86400, now, now - 14 * 86400, "к прошлой", "недели", now)
+
+    @staticmethod
+    def _month_bounds(now: float) -> tuple[float, float, float]:
+        """Начало прошлого календарного месяца, начало текущего и начало позапрошлого (местное время)."""
+        lt = time.localtime(now)
+        y, m = lt.tm_year, lt.tm_mon
+        cur = time.mktime((y, m, 1, 0, 0, 0, 0, 0, -1))
+        py, pm = (y, m - 1) if m > 1 else (y - 1, 12)
+        ppy, ppm = (py, pm - 1) if pm > 1 else (py - 1, 12)
+        return time.mktime((py, pm, 1, 0, 0, 0, 0, 0, -1)), cur, time.mktime((ppy, ppm, 1, 0, 0, 0, 0, 0, -1))
+
+    async def monthly_report(self) -> str:
+        """Прошлый календарный месяц против позапрошлого и итог по цели месяца."""
+        now = self.clock()
+        start, end, prev = self._month_bounds(now)
+        months = ("январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь",
+                  "ноябрь", "декабрь")
+        lt = time.localtime(start)
+        return await self._compare_report(f"<b>🗓 Итоги месяца</b> · {months[lt.tm_mon - 1]} {lt.tm_year}",
+                                          start, end, prev, "к прошлому месяцу", "месяца", now, month=True)
+
+    async def _compare_report(self, title: str, start: float, end: float, prev_start: float, vs: str, of: str,
+                              now: float, *, month: bool = False) -> str:
         a = self.center.analytics
         rate = (await a.usd_rub())["rate"]
-        deals = a.deals(now - 14 * 86400)
+        deals = await asyncio.to_thread(a.deals, prev_start)
         rub = lambda v, d: a._conv(v, d["currency"], "RUB", rate) or 0  # noqa: E731
 
         def stats(sel):
@@ -659,37 +686,44 @@ class Monitor:
             if not prev:
                 return ""
             ch = (cur - prev) / abs(prev) * 100
-            return f" ({'+' if ch >= 0 else '−'}{abs(ch):.0f}% к прошлой)"
+            return f" ({'+' if ch >= 0 else '−'}{abs(ch):.0f}% {vs})"
 
-        week = [d for d in deals if d["sold_at"] >= now - 7 * 86400]
-        prev = [d for d in deals if d["sold_at"] < now - 7 * 86400]
-        lines = [f"<b>📅 Неделя центра</b> · {time.strftime('%d.%m', time.localtime(now - 7 * 86400))}–"
-                 f"{time.strftime('%d.%m.%Y', time.localtime(now))}"]
-        tw, tp = stats(week), stats(prev)
+        cur = [d for d in deals if start <= d["sold_at"] < end]
+        prev = [d for d in deals if prev_start <= d["sold_at"] < start]
+        lines = [title]
+        tw, tp = stats(cur), stats(prev)
         lines.append(f"Сделок {tw['n']}{delta(tw['n'], tp['n'])} · выручка {_num(round(tw['rev']))} ₽"
                      f"{delta(tw['rev'], tp['rev'])}")
         lines.append(f"<b>Прибыль {_num(round(tw['profit']))} ₽</b>{delta(tw['profit'], tp['profit'])}")
         for name, w in self.center.workers.items():
-            bw, bp = stats([d for d in week if d["bot"] == name]), stats([d for d in prev if d["bot"] == name])
+            bw, bp = stats([d for d in cur if d["bot"] == name]), stats([d for d in prev if d["bot"] == name])
             lines.append(f"• {html.escape(w.title)}: сделок {bw['n']}, прибыль {_num(round(bw['profit']))} ₽"
                          f"{delta(bw['profit'], bp['profit'])}")
         items: dict[str, list[float]] = defaultdict(list)
-        for d in week:
+        for d in cur:
             if d["bot"] == "lisbot" and d["profit"] is not None:
                 items[d["name"]].append(d["profit"])
         ranked = sorted(((sum(v), len(v), k) for k, v in items.items()), reverse=True)
         if ranked:
-            lines += ["", "<b>LisBot, лучшие предметы недели</b>"]
+            lines += ["", f"<b>LisBot, лучшие предметы {of}</b>"]
             lines += [f"{i + 1}. {html.escape(k)} — {'+' if p >= 0 else '−'}${abs(p):.2f} за {n} шт" for i, (p, n, k) in enumerate(ranked[:3])]
             losers = [(p, n, k) for p, n, k in ranked if p < 0][-3:]
             if losers:
                 lines += ["<b>В минус</b>"] + [f"• {html.escape(k)} — −${abs(p):.2f} за {n} шт" for p, n, k in reversed(losers)]
-        g = await a.goal(now)
-        if g["goal"]:
-            lines.append(f"Цель месяца: {_num(round(g['profit']))} из {_num(round(g['goal']))} ₽ ({_pct(g['progress'] / 100)}), "
-                         f"прогноз {_num(round(g['forecast']))} ₽")
-        h = self.history(24 * 7, buckets=28)
-        lines += ["", "Аптайм за неделю: " + " · ".join(
+        target = float((self.center.cfg.data.get("analytics") or {}).get("month_goal_rub") or 0)
+        if month:
+            if target:
+                ok = tw["profit"] >= target
+                lines.append(f"{'✅' if ok else '❌'} Цель месяца {_num(round(target))} ₽: "
+                             f"{'выполнена' if ok else 'не выполнена'}, {_pct(tw['profit'] / target)}")
+        else:
+            g = await a.goal(now)
+            if g["goal"]:
+                lines.append(f"Цель месяца: {_num(round(g['profit']))} из {_num(round(g['goal']))} ₽ ({_pct(g['progress'] / 100)}), "
+                             f"прогноз {_num(round(g['forecast']))} ₽")
+        days = 30 if month else 7
+        h = self.history(24 * days, buckets=30 if month else 28)
+        lines += ["", f"Аптайм за {days} дней: " + " · ".join(
             f"{html.escape(self.center.workers[n].title.split(' ·')[0])} {_pct(b['uptime'])}, падений {b['crashes']}"
             for n, b in h["bots"].items())]
         inv = getattr(self.center, "inventory", None)
@@ -705,13 +739,28 @@ class Monitor:
                 if seg:
                     lines += [""] + [html.escape(x) for x in seg]
             except Exception:  # noqa: BLE001
-                log.exception("сегменты покупателей для недельного отчёта")
+                log.exception("сегменты покупателей для отчёта")
         return "\n".join(lines)
 
     async def send_weekly_report(self) -> str:
         text = await self.weekly_report()
         self.events.add("center", "info", "monitor.weekly_report", "Недельный отчёт сформирован")
         return await self.notify("monitor:weekly_report", "info", text, force=True)
+
+    async def send_monthly_report(self) -> str:
+        text = await self.monthly_report()
+        self.events.add("center", "info", "monitor.monthly_report", "Отчёт за месяц сформирован")
+        return await self.notify("monitor:monthly_report", "info", text, force=True)
+
+    def monthly_due(self) -> bool:
+        mr = self.cfg.get("monthly_report") or {}
+        if not mr.get("enabled", True):
+            return False
+        at = parse_hhmm(mr.get("time") or "09:00")
+        lt = time.localtime(self.clock())
+        if at is None or lt.tm_mday != 1 or lt.tm_hour * 60 + lt.tm_min < at:
+            return False
+        return self.kv_get("monthly_report_month") != time.strftime("%Y-%m", lt)
 
     def weekly_due(self) -> bool:
         wr = self.cfg.get("weekly_report") or {}
@@ -750,6 +799,9 @@ class Monitor:
                 if self.weekly_due():
                     self.kv_set("weekly_report_date", time.strftime("%Y-%m-%d", time.localtime(self.clock())))
                     await self.send_weekly_report()
+                if self.monthly_due():
+                    self.kv_set("monthly_report_month", time.strftime("%Y-%m", time.localtime(self.clock())))
+                    await self.send_monthly_report()
             except Exception:  # noqa: BLE001
                 log.exception("ежедневный отчёт")
             await asyncio.sleep(30)
@@ -798,7 +850,14 @@ def routes(center) -> list:
                                                                                           "подробности в журнале центра")})
 
     async def report(request: web.Request):
-        week = request.query.get("period") == "week"
+        period = request.query.get("period")
+        if period == "month":
+            if request.method == "POST":
+                st = await m.send_monthly_report()
+                return web.json_response({"ok": st == "sent", "message": "Отчёт за месяц отправлен в Telegram" if st == "sent"
+                                          else "Отчёт сохранён в уведомлениях центра (Telegram не настроен или недоступен)"})
+            return web.json_response({"text": await m.monthly_report()})
+        week = period == "week"
         if week:
             if request.method == "POST":
                 st = await m.send_weekly_report()

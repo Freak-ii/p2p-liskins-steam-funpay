@@ -67,3 +67,37 @@ def test_month_goal_progress_and_forecast(tmp_path):
         assert "Цель месяца" in await c.monitor.weekly_report()
         c.events.close()
     asyncio.run(go())
+
+
+def test_monthly_report_and_due(tmp_path):
+    seed(tmp_path)
+    now = time.time()
+    lt = time.localtime(now)
+    y, m = (lt.tm_year, lt.tm_mon + 1) if lt.tm_mon < 12 else (lt.tm_year + 1, 1)
+    first_10 = time.mktime((y, m, 1, 10, 0, 0, 0, 0, -1))           # 1-е число следующего месяца, 10:00
+
+    if lt.tm_mday <= 2:                                              # сделки сида могли попасть в позапрошлый месяц
+        return
+
+    async def go():
+        c = Center(tmp_path)
+        c.monitor.clock = lambda: first_10
+        c.analytics.save_goal(300)
+        text = await c.monitor.monthly_report()
+        assert "Итоги месяца" in text and "Сделок 4" in text and "Прибыль 360 ₽" in text
+        assert "✅ Цель месяца 300 ₽: выполнена" in text and "Аптайм за 30 дней" in text
+        c.analytics.save_goal(1000)
+        assert "❌ Цель месяца 1 000 ₽: не выполнена" in (await c.monitor.monthly_report()).replace(" ", " ")
+        token = c.cfg.ensure_token()
+        async with TestClient(TestServer(make_app(c))) as cl:
+            await cl.get(f"/login?token={token}", allow_redirects=False)
+            r = await (await cl.get("/api/monitor/report?period=month")).json()
+            assert "Итоги месяца" in r["text"]
+        assert c.monitor.monthly_due()
+        c.monitor.kv_set("monthly_report_month", time.strftime("%Y-%m", time.localtime(first_10)))
+        assert not c.monitor.monthly_due()
+        c.monitor.clock = lambda: first_10 + 86400                   # 2-е число
+        c.monitor.kv_set("monthly_report_month", "")
+        assert not c.monitor.monthly_due()
+        c.events.close()
+    asyncio.run(go())
