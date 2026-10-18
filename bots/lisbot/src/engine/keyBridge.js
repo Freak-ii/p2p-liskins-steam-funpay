@@ -13,6 +13,8 @@ const OPEN = [EState.Active, EState.CreatedNeedsConfirmation];
  *     не больше keysPerDay в день, на кошельке остаётся walletReserve);
  *  2. ключи с ТП Steam разрешает передавать через 7 дней — тогда бот САМ создаёт исходящий оффер
  *     на трейд-ссылку MannBot (keyBridge.tradeUrl) и подтверждает только его.
+ * Один аккаунт Steam с MannBot (keyBridge.tradeUrl пуст или ведёт на этот же аккаунт): шаг 2 не нужен,
+ * купленные ключи остаются в общем инвентаре, и MannBot продаёт их, когда Steam разрешит обмен.
  * Защита не ослабляется: свой оффер = id записан ботом при отправке + получатель из настроек +
  * отдаём только записанные assetid ключей + ничего не получаем. Всё остальное по-прежнему
  * UNKNOWN_OUTGOING_TRADE / UNKNOWN_CONFIRMATION. В DRY-RUN только пишет в журнал, что сделал бы.
@@ -28,6 +30,13 @@ export class KeyBridge {
 
   get enabled() { return !!this.bc.enabled; }
 
+  /** Ключи остаются на этом аккаунте: MannBot торгует с него же (трейд-ссылки нет или она на себя). */
+  get sameAccount() {
+    if (!String(this.bc.tradeUrl || '').trim()) return true;
+    const p = this.partner;
+    return !!p && !!this.session.steamId && p.steamId === this.session.steamId;
+  }
+
   get partner() {
     const t = parseTradeUrl(this.bc.tradeUrl);
     return t ? { ...t, steamId: String(STEAMID64_BASE + BigInt(t.partner)) } : null;
@@ -38,7 +47,7 @@ export class KeyBridge {
   get stats() {
     const t = this.state.totals;
     return {
-      enabled: this.enabled, partnerSteamId: this.partner?.steamId ?? null, buyOrder: this.state.buyOrder,
+      enabled: this.enabled, sameAccount: this.sameAccount, partnerSteamId: this.sameAccount ? null : this.partner?.steamId ?? null, buyOrder: this.state.buyOrder,
       ...t, avgKeyPrice: t.bought ? t.spentCents / t.bought / 100 : null,
       openOffers: Object.entries(this.state.ownOffers).filter(([, o]) => o.open).map(([id, o]) => ({ id, keys: o.assetIds.length, ts: o.ts })),
     };
@@ -76,10 +85,9 @@ export class KeyBridge {
   async cycle() {
     if (!this.enabled || !this.session.ready || this.guard.state.halted) return;
     const p = this.partner;
-    if (!p) { this.guard.warn('KEY_BRIDGE_CONFIG', 'Мост ключей включён, но keyBridge.tradeUrl (трейд-ссылка MannBot) не задана или неверна'); return; }
-    if (p.steamId === this.session.steamId) { this.guard.warn('KEY_BRIDGE_CONFIG', 'Мост ключей: трейд-ссылка указывает на сам аккаунт LisBot. Нужна ссылка аккаунта MannBot.'); return; }
+    if (!this.sameAccount && !p) { this.guard.warn('KEY_BRIDGE_CONFIG', 'Мост ключей: keyBridge.tradeUrl (трейд-ссылка MannBot) неверна. Если MannBot на этом же аккаунте Steam, оставьте её пустой.'); return; }
     await this.expireOffers();
-    await this.transfer(p);
+    if (!this.sameAccount) await this.transfer(p);
     if (this.bc.buy?.enabled) await this.buy();
   }
 
@@ -164,7 +172,7 @@ export class KeyBridge {
         this.state.totals.bought += fresh;
         this.state.totals.spentCents += fresh * order.priceCents;
         this.db.event('keybridge.bought', { keys: fresh, priceCents: order.priceCents });
-        this.notify.send('info', `🔑 Мост ключей: куплено ${fresh} ключ(ей) по ${(order.priceCents / 100).toFixed(2)} ${esc(this.cfg.steam.walletCurrencyCode)}. Передать на MannBot можно через 7 дней.`);
+        this.notify.send('info', `🔑 Мост ключей: куплено ${fresh} ключ(ей) по ${(order.priceCents / 100).toFixed(2)} ${esc(this.cfg.steam.walletCurrencyCode)}. ${this.sameAccount ? 'MannBot начнёт продавать их через 7 дней, когда Steam разрешит обмен.' : 'Передать на MannBot можно через 7 дней.'}`);
       }
       const active = Number(st.active) === 1;
       if (active && Date.now() - order.createdAt > (b.repriceHours || 24) * HOUR) {

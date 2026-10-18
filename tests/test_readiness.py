@@ -44,6 +44,10 @@ def test_ready_and_same_steam_account(tmp_path):
     assert lv["steam_separate"] == "ok" and "tg_separate" not in lv and lv["tg_center"] == "ok"   # центр шлёт через LisBot
 
     _mann(c, "TRADER")                                                       # тот же логин, другой регистр
+    r = c.readiness.check()                                                  # режим одного аккаунта (по умолчанию)
+    assert r["ready"] and _levels(r)["steam_separate"] == "ok"
+    assert next(i for i in r["items"] if i["key"] == "steam_separate")["title"] == "LisBot и MannBot на одном аккаунте Steam"
+    c.cfg.save({"steam": {"shared_account": False}})                         # старый режим: нужен второй аккаунт
     r = c.readiness.check()
     assert not r["ready"] and _levels(r)["steam_separate"] == "fail"
     _mann(c, "other", steam_id=str(76561197960265728 + 123))                # тот же аккаунт по SteamID из трейд-ссылки
@@ -104,7 +108,8 @@ def test_live_mode_blocked_until_ready(tmp_path):
             assert "ключ API LIS-SKINS" in str(e)
         assert await c.coordinator.execute("set_live_mode", {"bot": "lisbot", "live": False}) == "сохранено"   # назад — всегда
         c.workers["lisbot"].save_secrets(LIS)
-        _mann(c, "trader")                                              # тот же аккаунт Steam — всё ещё нельзя
+        c.cfg.save({"steam": {"shared_account": False}})
+        _mann(c, "trader")                                              # тот же аккаунт без режима одного аккаунта — нельзя
         try:
             await c.coordinator.execute("set_live_mode", {"bot": "lisbot", "live": True})
             assert False
@@ -170,4 +175,22 @@ def test_key_bridge_setup(tmp_path):
     assert "сам аккаунт LisBot" in next(i for i in c.readiness.check()["items"] if i["key"] == "key_bridge")["detail"]
     cfg_path.write_text(json.dumps({"keyBridge": {"enabled": False}}), encoding="utf-8")
     assert _levels(c.readiness.check())["key_bridge"] == "info"
+    c.events.close()
+
+
+def test_key_bridge_on_shared_account(tmp_path):
+    import json
+    c = Center(tmp_path)
+    c.workers["lisbot"].save_secrets(LIS)
+    lis_id = str(76561197960265728 + 123)
+    _mann(c, "other", steam_id=lis_id)                                      # MannBot на том же аккаунте
+    cfg_path = c.workers["lisbot"].config_path
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    for url in ("", "https://steamcommunity.com/tradeoffer/new/?partner=123&token=t"):
+        cfg_path.write_text(json.dumps({"keyBridge": {"enabled": True, "tradeUrl": url}}), encoding="utf-8")
+        item = next(i for i in c.readiness.check()["items"] if i["key"] == "key_bridge")
+        assert item["level"] == "ok" and "общий инвентарь" in item["title"]          # accept_gifts_from не нужен
+    cfg_path.write_text(json.dumps({"keyBridge": {"enabled": True,
+                                                  "tradeUrl": "https://steamcommunity.com/tradeoffer/new/?partner=9&token=t"}}), encoding="utf-8")
+    assert _levels(c.readiness.check())["key_bridge"] == "warn"
     c.events.close()

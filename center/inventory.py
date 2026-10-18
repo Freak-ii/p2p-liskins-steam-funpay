@@ -22,6 +22,7 @@ from aiohttp import web
 
 from center.analytics import DAY, LIS_HELD, MANN_DONE, _kv, _r, _rows
 from center.config import BOTS_DIR
+from center.steamshare import bridge_same_account, lis_steam64
 
 log = logging.getLogger("center.inventory")
 
@@ -178,6 +179,12 @@ class Inventory:
                      if not o.get("open") and o.get("finalState") not in (None, "Accepted") and (o.get("ts") or 0) >= recent)
         # отправленные, но не принятые (отклонены, истекли) ключи вернулись к LisBot и уйдут снова
         waiting = max(0, bought - delivered - in_offers)
+        same = bridge_same_account(bc, lis_steam64(self.center))
+        if same:
+            # один аккаунт: ключи никуда не едут, ждут только 7 дней блокировки (считаем по дням покупки, с запасом)
+            days = {time.strftime("%Y-%m-%d", time.localtime(self.clock() - i * DAY)) for i in range(9)}
+            per_day = st.get("bought") if isinstance(st.get("bought"), dict) else {}
+            waiting = sum(int(v or 0) for d, v in per_day.items() if d in days)
         enabled = bool(bc.get("enabled"))
         coming = (waiting + in_offers) if enabled else in_offers
         # экономика: сколько настоящих рублей с FunPay приносит ключ за рубль кошелька Steam (продажи MannBot за 30 дней)
@@ -189,7 +196,7 @@ class Inventory:
         avg = t["spentCents"] / 100 / bought if bought and t.get("spentCents") else None
         price = avg or (float(buy["maxKeyPrice"]) if isinstance(buy.get("maxKeyPrice"), (int, float)) and buy["maxKeyPrice"] > 0 else None)
         per_wallet = net_key / price if net_key and price and cur == "RUB" else None
-        return {"enabled": enabled, "buying": enabled and bool(buy.get("enabled")), "currency": cur,
+        return {"enabled": enabled, "same_account": same, "buying": enabled and bool(buy.get("enabled")), "currency": cur,
                 "bought": bought, "spent": _r((t.get("spentCents") or 0) / 100), "avg_price": _r(avg),
                 "sell_net_per_key": _r(net_key), "per_wallet_rub": _r(per_wallet), "price_basis": "покупки" if avg else "макс. цена" if price else None,
                 "sent": sent, "delivered": delivered, "waiting": waiting, "in_offers": in_offers, "failed": failed, "coming": coming,
@@ -240,7 +247,9 @@ class Inventory:
         br = b["bridge"]
         if br["enabled"] or br["bought"]:
             line = f"Мост ключей: куплено {br['bought']}, принято MannBot {br['delivered']}"
-            if br["coming"]:
+            if br.get("same_account"):
+                line = f"Ключи с кошелька Steam: куплено {br['bought']}" + (f", ждут 7 дн блокировки: {br['waiting']}" if br["waiting"] else "")
+            elif br["coming"]:
                 line += f", в пути {br['coming']} (ждут 7 дн: {br['waiting']}, в обмене: {br['in_offers']})"
             if not br["enabled"]:
                 line += " · мост выключен"

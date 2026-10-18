@@ -22,6 +22,7 @@ from center.coordinator import Coordinator
 from center.events import EventStore
 from center.vault import SecretStore
 from center.rtba import Rtba
+from center.steamshare import SteamShare
 from center.monitor import Monitor
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
 
@@ -35,6 +36,7 @@ class Center:
         self.events = EventStore(self.home / "center.sqlite3")
         self.demo = demo
         self.vault = SecretStore(self.home)       # зашифрованные ключи ботов и центра (DPAPI / Fernet)
+        self.steamshare = SteamShare(self)        # один аккаунт Steam на оба бота: реестр исходящих обменов
         restart = self.cfg["restart"]
         wm, wl = self.cfg.worker("mannbot"), self.cfg.worker("lisbot")
         self.workers: dict[str, BotWorker] = {
@@ -43,6 +45,8 @@ class Center:
             "mannbot": MannBotWorker(self.home / "mannbot", self.events, port=wm.get("port", 8801), restart=restart,
                                      executable=wm.get("python") or "", demo=demo, vault=self.vault),
         }
+        for w in self.workers.values():             # адрес и токен реестра обменов (center/steamshare.py)
+            w.extra_env = self.steamshare.bot_env
         if demo:                                    # история сделок LisBot за месяц; дальше он торгует на эмуляции LIS/Steam
             from center.demo import seed_lisbot
             seed_lisbot(self.workers["lisbot"].data_dir)
@@ -100,6 +104,7 @@ class Center:
         await self.monitor.stop()
         self.events.add("center", "info", "center.stop", "Центр остановлен")
         self.events.close()
+        self.steamshare.close()
 
     async def refresh(self, name: str) -> None:
         w = self.workers[name]

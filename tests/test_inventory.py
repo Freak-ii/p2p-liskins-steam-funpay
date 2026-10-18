@@ -171,7 +171,8 @@ def test_key_bridge_state_and_restock(tmp_path):
     seed(tmp_path, stock=1)
     (tmp_path / "lisbot" / "config.json").write_text(json.dumps({
         "steam": {"walletCurrencyCode": "RUB"},
-        "keyBridge": {"enabled": True, "buy": {"enabled": True, "maxKeyPrice": 160, "keysPerDay": 5}}}), encoding="utf-8")
+        "keyBridge": {"enabled": True, "tradeUrl": "https://steamcommunity.com/tradeoffer/new/?partner=456&token=t",
+                      "buy": {"enabled": True, "maxKeyPrice": 160, "keysPerDay": 5}}}), encoding="utf-8")
     state = {"buyOrder": {"id": "1"}, "totals": {"bought": 6, "spentCents": 90000, "sent": 5, "delivered": 2},
              "ownOffers": {"A": {"assetIds": ["1", "2"], "open": False, "finalState": "Accepted"},
                            "B": {"assetIds": ["3"], "open": True},
@@ -204,4 +205,23 @@ def test_key_bridge_off_by_default(tmp_path):
     b = c.inventory.bridge()
     assert not b["enabled"] and b["bought"] == 0 and b["coming"] == 0
     assert not any("Мост ключей" in x for x in c.inventory.report_lines())
+    c.events.close()
+
+
+def test_key_bridge_on_shared_steam_account(tmp_path):
+    import time as _t
+    seed(tmp_path, stock=1)
+    (tmp_path / "lisbot" / "config.json").write_text(json.dumps({
+        "keyBridge": {"enabled": True, "tradeUrl": "", "buy": {"enabled": True, "maxKeyPrice": 160}}}), encoding="utf-8")
+    day = lambda ago: _t.strftime("%Y-%m-%d", _t.localtime(_t.time() - ago * DAY))  # noqa: E731
+    state = {"totals": {"bought": 9, "spentCents": 135000}, "bought": {day(1): 2, day(5): 3, day(20): 4}, "ownOffers": {}}
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    con.execute("INSERT INTO kv VALUES('keybridge', ?, 0)", (json.dumps(state),))
+    con.commit()
+    con.close()
+    c = Center(tmp_path)
+    c.inventory.clock = _t.time
+    b = c.inventory.bridge()
+    assert b["same_account"] and b["waiting"] == 5 and b["coming"] == 5      # ключи старше 7 дней уже на складе MannBot
+    assert any(x.startswith("Ключи с кошелька Steam: куплено 9, ждут 7 дн блокировки: 5") for x in c.inventory.report_lines())
     c.events.close()

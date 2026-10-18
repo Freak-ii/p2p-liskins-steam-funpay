@@ -98,10 +98,16 @@ class Readiness:
         lis_name, mann_name = (lis.get("STEAM_ACCOUNT_NAME") or "").strip().lower(), g("steam", "username").lower()
         lis_id, mann_id = _partner_steam64(lis.get("STEAM_TRADE_URL", "")), g("steam", "steam_id")
         same = (lis_name and lis_name == mann_name) or (lis_id and lis_id == mann_id)
-        if same:
+        shared = self.center.steamshare.shared
+        if same and not shared:
             add("steam_separate", "fail", "LisBot и MannBot на одном аккаунте Steam",
-                "LisBot считает чужие исходящие обмены взломом: отменит выдачу ключей MannBot и остановится. "
-                "Нужен отдельный аккаунт Steam для каждого бота.", "Подключения обоих ботов")
+                "В center.yaml выключен режим одного аккаунта (steam.shared_account: false), поэтому LisBot считает "
+                "обмены MannBot чужими: отменит выдачу ключей и остановится. Включите steam.shared_account "
+                "или дайте ботам разные аккаунты.", "center.yaml → steam.shared_account")
+        elif same:
+            add("steam_separate", "ok", "LisBot и MannBot на одном аккаунте Steam",
+                "MannBot записывает свои обмены в центр, LisBot пропускает только их. Остальные чужие обмены "
+                "по-прежнему останавливают LisBot.")
         elif (lis_name or lis_id) and (mann_name or mann_id):
             add("steam_separate", "ok", "LisBot и MannBot на разных аккаунтах Steam")
 
@@ -110,13 +116,21 @@ class Readiness:
         sec_m = mcfg.get("security") if isinstance(mcfg.get("security"), dict) else {}
         gifts = sec_m.get("accept_gifts_from") or []
         gifts = {str(x).strip() for x in (gifts if isinstance(gifts, list) else [gifts]) if str(x).strip()}
-        if kb.get("enabled") or gifts:
+        to = _partner_steam64(kb.get("tradeUrl", ""))
+        if kb.get("enabled") and same and (not str(kb.get("tradeUrl") or "").strip() or to == lis_id):
+            add("key_bridge", "ok", "Ключи с кошелька Steam: LisBot покупает их в общий инвентарь",
+                "MannBot продаёт их сам, когда пройдут 7 дней блокировки обмена.")
+        elif kb.get("enabled") and same:
+            add("key_bridge", "warn", "Мост ключей отправляет ключи на другой аккаунт",
+                f"Оба бота на одном аккаунте, а трейд-ссылка моста ведёт на SteamID {to}. Очистите её, "
+                "чтобы ключи оставались в общем инвентаре.", "LisBot: «Открыть панель бота» → «Настройки» → «Мост ключей»")
+        elif kb.get("enabled") or gifts:
             where = "LisBot: «Открыть панель бота» → «Настройки» → «Мост ключей»; MannBot: «Настройки» → «Безопасность»"
-            to = _partner_steam64(kb.get("tradeUrl", ""))
             bad = []
             if kb.get("enabled"):
                 if not to:
-                    bad.append("в LisBot не задана трейд-ссылка аккаунта MannBot (keyBridge.tradeUrl)")
+                    bad.append("в LisBot не задана трейд-ссылка аккаунта MannBot (keyBridge.tradeUrl): "
+                               "купленные ключи останутся на аккаунте LisBot")
                 elif to == lis_id:
                     bad.append("трейд-ссылка моста ведёт на сам аккаунт LisBot, нужна ссылка MannBot")
                 elif mann_id and to != mann_id:

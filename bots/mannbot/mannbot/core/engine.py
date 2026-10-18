@@ -18,6 +18,7 @@ from mannbot.funpay.client import FunPayAuthError, FunPayError
 from mannbot.funpay.parsers import classify_system
 from mannbot.notify.notifier import Notifier
 from mannbot.steam.client import SteamAuthError, SteamError
+from mannbot.steam.shared import CenterShare, ShareUnavailable
 from mannbot.steam.tradelink import TradeLinkError, find_trade_url, looks_like_wrong_link, parse_trade_url
 
 log = logging.getLogger("engine")
@@ -46,6 +47,7 @@ class Engine:
         self.last_ok: dict[str, float] = {}
         self.stock_cache: dict[str, Any] = {"total": None, "ts": 0}
         self.ai = AIAgent(cfg, db, notifier, sender=self.say_text)
+        self.share = CenterShare.from_env()      # реестр обменов центра: один аккаунт Steam с LisBot
 
     # ================================================================== helpers
     @property
@@ -516,13 +518,19 @@ class Engine:
         self.db.reserve_assets(oid, assets)
         message = self.cfg.steam.offer_message.format(order_id=oid, qty=need)
         try:
+            share_id = None
+            if not getattr(self.steam, "dry_run", False):
+                try:   # один аккаунт с LisBot: сначала записываем обмен в центр (mannbot/steam/shared.py)
+                    share_id = await self.share.intent(oid, link.steam_id64, self.cfg.steam.appid, assets)
+                except ShareUnavailable as e:
+                    raise SteamError(str(e), "center_share") from e
             sent = await self.steam.send_offer(link, assets, message)
         except SteamError as e:
             self.db.release_assets(oid)
             self.db.add_event(oid, "send_failed", code=e.code, error=str(e))
             if e.code in BUYER_DATA_ERRORS:
                 await self.bad_data(o, e.code, str(e))
-            elif e.code in ("rate_limit", "network", "timeout", "server", "too_many_offers"):
+            elif e.code in ("rate_limit", "network", "timeout", "server", "too_many_offers", "center_share"):
                 fails = int(self.db.kv_get(f"send_fail:{oid}", 0)) + 1
                 self.db.kv_set(f"send_fail:{oid}", fails)
                 if fails >= 5:
@@ -537,6 +545,7 @@ class Engine:
             return
         self.db.record_offer(sent.offer_id, oid, int(T.NEEDS_CONFIRMATION if sent.needs_confirmation else T.ACTIVE),
                              assets)
+        await self.share.bind(share_id, sent.offer_id)
         self._set(oid, event="offer_created", offer_id=sent.offer_id)
         if sent.needs_confirmation:
             ok = await self.steam.confirm_offer(sent.offer_id)

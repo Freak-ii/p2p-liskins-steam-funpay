@@ -20,6 +20,7 @@ from center.inventory import routes as inventory_routes
 from center.readiness import routes as readiness_routes
 from center.updates import routes as update_routes
 from center.monitor import routes as monitor_routes
+from center.steamshare import routes as steamshare_routes
 
 STATIC = Path(__file__).resolve().parent / "static"
 COOKIE = "center_token"
@@ -35,7 +36,8 @@ def make_app(center: Center) -> web.Application:
 
     @web.middleware
     async def auth(request: web.Request, handler):
-        if request.path in ("/login", "/api/ping") or request.path.startswith("/static/"):
+        if request.path in ("/login", "/api/ping") or request.path.startswith(("/static/", "/api/steam-share/")):
+            # /api/steam-share/ — запросы ботов со своим токеном (center/steamshare.py)
             return await handler(request)
         if not authed(request):
             if request.path.startswith("/api/"):
@@ -343,6 +345,7 @@ def make_app(center: Center) -> web.Application:
     app.add_routes(inventory_routes(center))
     app.add_routes(readiness_routes(center))
     app.add_routes(update_routes(center))
+    app.add_routes(steamshare_routes(center))
     app.router.add_static("/static/", STATIC)
     return app
 

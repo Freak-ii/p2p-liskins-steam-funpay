@@ -166,6 +166,32 @@ test('мост ключей: настройки проверяют трейд-с
   cfg.configFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lsb-kbc-')), 'config.json');
   assert.ok(saveSettings(cfg, { 'keyBridge.tradeUrl': 'не ссылка' }).length);
   assert.deepEqual(saveSettings(cfg, { 'keyBridge.tradeUrl': MANN_URL, 'keyBridge.enabled': true }), []);
-  cfg.secrets = {}; cfg.keyBridge.tradeUrl = '';
+  cfg.secrets = {}; cfg.keyBridge.tradeUrl = 'не ссылка';
   assert.ok(validateConfig(cfg).some((e) => e.startsWith('keyBridge.tradeUrl')));
+  // пустая ссылка — MannBot на этом же аккаунте, это не ошибка
+  cfg.keyBridge.tradeUrl = '';
+  assert.ok(!validateConfig(cfg).some((e) => e.startsWith('keyBridge.tradeUrl')));
+  assert.deepEqual(saveSettings(cfg, { 'keyBridge.tradeUrl': '' }), []);
+});
+
+test('мост ключей на одном аккаунте с MannBot: только покупка, ключи остаются в инвентаре', async () => {
+  for (const setup of [(e) => { e.cfg.keyBridge.tradeUrl = ''; }, (e) => { e.session.steamId = MANN_ID; }]) {
+    const env = makeEnv({ buy: true });
+    setup(env);
+    env.steam.inv = [key(1), key(2)];
+    assert.equal(env.bridge.sameAccount, true);
+    await env.bridge.cycle();
+    assert.equal(env.steam.offers.size, 0);                 // никаких исходящих обменов
+    assert.equal(env.market.orders.length, 1);              // а ордер на ключи стоит
+    assert.equal(env.bridge.stats.partnerSteamId, null);
+    assert.ok(!env.guard.state.halted);
+    env.market.purchased = 2;
+    await env.bridge.cycle();
+    assert.ok(env.sent.some((m) => /MannBot начнёт продавать их через 7 дней/.test(m.text)));
+  }
+  const env = makeEnv();
+  env.cfg.keyBridge.tradeUrl = 'https://example.com/x';
+  assert.equal(env.bridge.sameAccount, false);
+  await env.bridge.cycle();
+  assert.equal(env.steam.offers.size, 0);
 });

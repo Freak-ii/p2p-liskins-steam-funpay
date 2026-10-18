@@ -145,3 +145,70 @@ def test_bridge_gift_accepted_only_from_lisbot_with_keys_only():
     assert db.kv_get("gift_done:501") == "accepted" and db.kv_get("gift_done:503") == "skipped"
     assert any("Мост ключей: принято 3" in t for _, t in notifier.sent)
     assert any("не только ключи" in t for _, t in notifier.sent)
+
+
+class _Share:
+    def __init__(self, fail=False):
+        self.fail, self.calls = fail, []
+
+    async def intent(self, order_id, partner, appid, asset_ids):
+        from mannbot.steam.shared import ShareUnavailable
+        self.calls.append(("intent", order_id, partner, appid, list(asset_ids)))
+        if self.fail:
+            raise ShareUnavailable("центр недоступен")
+        return 7
+
+    async def bind(self, intent_id, offer_id):
+        self.calls.append(("bind", intent_id, offer_id))
+
+
+def _pay_and_link(engine, fp, buyer=31):
+    async def go():
+        engine.cfg.deal.message_rate_limit_seconds = 0
+        await engine.funpay_poll()
+        oid = fp.buyer_pays("Ann", buyer, 1)
+        await engine.funpay_poll()
+        fp.buyer_says(buyer, trade_url(900 + buyer))
+        await engine.funpay_poll()
+        await engine.deliver(oid)
+        return oid
+    return go
+
+
+def test_shared_account_registers_offer_in_center_before_sending():
+    db, notifier, fp, steam, engine, analytics = make()
+    engine.share = _Share()
+    sent_before = set(steam.offers)
+    oid = asyncio.run(_pay_and_link(engine, fp)())
+    o = db.get_order(oid)
+    assert o["status"] == S.OFFER_SENT.value
+    kind, ref, partner, appid, assets = engine.share.calls[0]
+    assert kind == "intent" and ref == oid and partner == str(931 + 76561197960265728) and appid == 440
+    new = [k for k in steam.offers if k not in sent_before]
+    assert len(new) == 1 and steam.offers[new[0]]["assets"] == assets
+    assert engine.share.calls[1] == ("bind", 7, new[0])
+
+
+def test_shared_account_does_not_send_when_center_is_down():
+    db, notifier, fp, steam, engine, analytics = make()
+    engine.share = _Share(fail=True)
+    sent_before = set(steam.offers)
+    oid = asyncio.run(_pay_and_link(engine, fp)())
+    o = db.get_order(oid)
+    assert set(steam.offers) == sent_before                     # обмен не отправлен
+    assert o["status"] != S.MANUAL.value and not o["offer_id"]  # повтор позже, ключи не заняты
+    assert not db.reserved_asset_ids()
+
+
+def test_center_share_raises_only_on_shared_account():
+    from mannbot.steam.shared import CenterShare, ShareUnavailable
+    down = "http://127.0.0.1:9/api/steam-share"
+    two = CenterShare(down, "t" * 40, shared=False)
+    assert asyncio.run(two.intent("1", "76561197960266728", 440, ["1"])) is None
+    one = CenterShare(down, "t" * 40, shared=True)
+    try:
+        asyncio.run(one.intent("1", "76561197960266728", 440, ["1"]))
+        raise AssertionError("должно быть исключение")
+    except ShareUnavailable:
+        pass
+    assert asyncio.run(CenterShare().intent("1", "76561197960266728", 440, ["1"])) is None

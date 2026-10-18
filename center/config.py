@@ -85,6 +85,10 @@ DEFAULTS: dict = {
         "winback_text": "Здравствуйте, {name}! Давно вас не было. Ключи Mann Co. Supply Crate Key снова в наличии "
                         "и выдаются автоматически за пару минут после оплаты. Будем рады новому заказу 🙂",
     },
+    "steam": {                       # center/steamshare.py
+        "shared_account": True,      # LisBot и MannBot на одном аккаунте Steam: MannBot записывает свои обмены в центр,
+                                     # LisBot не считает их взломом. False — у ботов разные аккаунты (старый режим)
+    },
     "inventory": {                   # center/inventory.py
         "lis_old_days": 0,           # предмет LisBot «долго лежит» после стольких дней; 0 — как sell.maxHoldDaysAlert LisBot
         "mann_days_warn": 3,         # ключей MannBot меньше чем на столько дней продаж — уведомление
