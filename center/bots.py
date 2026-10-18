@@ -76,6 +76,18 @@ class BotWorker(Worker):
 
     actions: dict[str, str] = {}
 
+    def _session(self, **kw) -> aiohttp.ClientSession:
+        return aiohttp.ClientSession(timeout=kw.pop("timeout", HTTP_TIMEOUT), **kw)
+
+    async def api(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
+        """JSON-запрос к API бота с его авторизацией: (код ответа, тело)."""
+        async with self._session() as s:
+            async with s.request(method, f"{self.base_url}{path}", json=body, allow_redirects=False) as r:
+                try:
+                    return r.status, await r.json(content_type=None)
+                except ValueError:
+                    return r.status, {"error": f"HTTP {r.status}"}
+
     def info(self) -> dict:
         return {**super().info(), "port": self.port, "actions": self.actions}
 
@@ -137,6 +149,9 @@ class MannBotWorker(BotWorker):
 
     def _cookies(self) -> dict:
         return {"mb_token": self.token()}
+
+    def _session(self, **kw) -> aiohttp.ClientSession:
+        return super()._session(cookies=self._cookies(), **kw)
 
     async def summary(self) -> dict | None:
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
@@ -312,6 +327,9 @@ class LisBotWorker(BotWorker):
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.token()}"}
+
+    def _session(self, **kw) -> aiohttp.ClientSession:
+        return super()._session(headers=self._headers(), **kw)
 
     async def health(self) -> bool:
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=self._headers()) as s:

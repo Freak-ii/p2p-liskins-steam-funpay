@@ -14,6 +14,7 @@ import { Seller } from '../src/engine/seller.js';
 import { BalanceWatcher } from '../src/engine/balanceWatcher.js';
 import { Valuator } from '../src/engine/pricing.js';
 import { summary, daily, perItem, textReport } from '../src/analytics.js';
+import { rtbaReport } from '../src/web/server.js';
 
 const DAY = 86400_000;
 const baseCfg = JSON.parse(fs.readFileSync(new URL('../config.example.json', import.meta.url)));
@@ -258,6 +259,14 @@ test('серия ошибок → остановка; RTBA покупает мг
   // дорогой лот вне коридора — не покупаем
   await buyer.onRealtimeListing({ id: '51', name: NAME, price: 47, unlockAt: null }, { receivedAt: Date.now() });
   assert.equal(state.buyBodies.length, 1);
+  // журнал решений RTBA для центра: покупка и отказ с причиной
+  assert.deepEqual(buyer.rtbaLog.map((r) => r.outcome), ['buy', 'skip']);
+  assert.ok(buyer.rtbaLog[0].latencyMs >= 0 && /куплено/.test(buyer.rtbaLog[0].reason));
+  const rep = rtbaReport(db, cfg, { buyer, ws: null }, 7);
+  assert.equal(rep.recent[0].id, '51');
+  assert.equal(rep.buys.length, 1);
+  assert.equal(rep.latency.n, 1);
+  assert.equal(rep.settings['strategy.minRoi'], cfg.strategy.minRoi);
 });
 
 test('dry-run: ничего не покупает по-настоящему', async () => {

@@ -13,6 +13,7 @@ from center.analytics import Analytics
 from center.bots import BotWorker, LisBotWorker, MannBotWorker
 from center.config import CenterConfig
 from center.events import EventStore
+from center.rtba import Rtba
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
 
 log = logging.getLogger("center")
@@ -38,6 +39,7 @@ class Center:
         self._poll_task: asyncio.Task | None = None
         self.started_at = time.time()
         self.analytics = Analytics(self)
+        self.rtba = Rtba(self)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))

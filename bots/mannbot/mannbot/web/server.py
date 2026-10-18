@@ -5,6 +5,7 @@ import asyncio
 import datetime as dt
 import hmac
 import json
+import time
 from pathlib import Path
 
 import jinja2
@@ -15,9 +16,15 @@ from mannbot.analytics.analytics import fmt_dur
 from mannbot.app import schema
 from mannbot.app.supervisor import parse_mafile
 from mannbot.core import messages as M
+from mannbot.core.rtba import price_floor
 from mannbot.core.models import OrderStatus as S, TradeOfferState
 from mannbot.web import charts
 
+# правила RTBA, которые центр может менять через /api/rtba/config (ключ -> тип)
+RTBA_EDITABLE = {"enabled": "bool", "strategy": "strategy", "target_position": "int", "undercut_abs": "float",
+                 "undercut_pct": "float", "cost_per_key": "float", "min_margin_pct": "float", "floor_price": "float",
+                 "ceiling_price": "float", "funpay_fee_pct": "float", "min_change": "float",
+                 "max_updates_per_hour": "int", "scarcity_premium_pct": "float", "raise_gap_pct": "float"}
 TPL_DIR = Path(__file__).parent / "templates"
 STATUS_COLORS = {"new": "gray", "awaiting_link": "blue", "pending_approval": "amber", "ready_to_send": "blue",
                  "offer_sent": "blue", "escrow": "amber", "delivered": "green", "completed": "green",
@@ -214,6 +221,63 @@ def make_app(sup, log_handler=None) -> web.Application:
     async def api_status(request: web.Request):
         return web.json_response({**sup.status(), "summary": sup.analytics.summary(1)})
 
+    # ------------------------------------------------------------------ RTBA для центра (JSON)
+    async def api_rtba(request: web.Request):
+        db, rt = sup.db, sup.engine.rtba
+        snap = db.one("SELECT * FROM competitor_snapshots ORDER BY id DESC LIMIT 1")
+        hist = db.q("SELECT * FROM price_history ORDER BY id DESC LIMIT ?", (int(request.query.get("limit", 100)),))
+        since = time.time() - 86400
+        return web.json_response({
+            "config": {k: sup.cfg.rtba.get(k) for k in RTBA_EDITABLE} | {"enabled": bool(sup.cfg.rtba.enabled)},
+            "markup": rt.markup, "floor": price_floor(sup.cfg.rtba), "updates_last_hour": len(rt.updates),
+            "state": sup.state, "restart_required": sup.restart_required, "dry_run": bool(sup.cfg.general.dry_run),
+            "stock": db.kv_get("last_stock"), "lots": [l.get("offer_id") for l in sup.cfg.funpay.lots or []],
+            "history": [dict(r) for r in hist],
+            "day": dict(db.one("SELECT COUNT(*) checks, COALESCE(SUM(applied),0) applied FROM price_history WHERE ts>=?",
+                               (since,)) or {}),
+            "competitors": json.loads(snap["data"]) if snap else [], "competitors_ts": snap["ts"] if snap else None,
+        })
+
+    async def api_rtba_config(request: web.Request):
+        """Изменение правил RTBA из центра. Работающему боту правила применяются сразу, без перезапуска."""
+        try:
+            data = await request.json()
+        except ValueError:
+            return web.json_response({"ok": False, "error": "нужен JSON"}, status=400)
+        clean, errors = {}, []
+        for k, v in (data.get("changes") or {}).items():
+            kind = RTBA_EDITABLE.get(k)
+            if kind is None:
+                errors.append(f"{k}: нельзя менять")
+            elif kind == "strategy":
+                if v not in ("top1", "topN", "median"):
+                    errors.append(f"{k}: top1, topN или median")
+                else:
+                    clean[k] = v
+            elif kind == "bool":
+                clean[k] = bool(v)
+            else:
+                try:
+                    num = int(v) if kind == "int" else float(v)
+                except (TypeError, ValueError):
+                    errors.append(f"{k}: не число")
+                    continue
+                if num < 0 or (k.endswith("_pct") and num > 100):
+                    errors.append(f"{k}: вне допустимого диапазона")
+                else:
+                    clean[k] = num
+        if errors:
+            return web.json_response({"ok": False, "error": "; ".join(errors)}, status=400)
+        if not clean:
+            return web.json_response({"ok": True, "applied": {}})
+        running = sup.state == "running"
+        sup.save({"rtba": clean}, rebuild=not running)
+        if running:
+            sup.engine.rtba.cfg.update(clean)      # тот же объект читают RTBAEngine и аналитика бота
+        db_note = ", ".join(f"{k}={v}" for k, v in clean.items())
+        sup.db.add_event("-", "rtba_config", source="center", changes=db_note)
+        return web.json_response({"ok": True, "applied": clean, "live": running})
+
     # ------------------------------------------------------------------ мастер настройки
     async def setup(request: web.Request):
         cfg = sup.cfg
@@ -345,7 +409,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing), web.get("/alerts", alerts),
         web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
-        web.get("/api/summary", api_status),
+        web.get("/api/summary", api_status), web.get("/api/rtba", api_rtba), web.post("/api/rtba/config", api_rtba_config),
         web.get("/setup", setup), web.post("/setup", setup), web.post("/setup/mafile", setup_mafile),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),
