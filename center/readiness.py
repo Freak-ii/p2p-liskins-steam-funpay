@@ -105,6 +105,35 @@ class Readiness:
         elif (lis_name or lis_id) and (mann_name or mann_id):
             add("steam_separate", "ok", "LisBot и MannBot на разных аккаунтах Steam")
 
+        # ---- мост ключей: трейд-ссылка в LisBot ведёт на MannBot, MannBot принимает ключи от LisBot
+        kb = lcfg.get("keyBridge") if isinstance(lcfg.get("keyBridge"), dict) else {}
+        sec_m = mcfg.get("security") if isinstance(mcfg.get("security"), dict) else {}
+        gifts = sec_m.get("accept_gifts_from") or []
+        gifts = {str(x).strip() for x in (gifts if isinstance(gifts, list) else [gifts]) if str(x).strip()}
+        if kb.get("enabled") or gifts:
+            where = "Настройки LisBot → «Мост ключей» и security.accept_gifts_from у MannBot"
+            to = _partner_steam64(kb.get("tradeUrl", ""))
+            bad = []
+            if kb.get("enabled"):
+                if not to:
+                    bad.append("в LisBot не задана трейд-ссылка аккаунта MannBot (keyBridge.tradeUrl)")
+                elif to == lis_id:
+                    bad.append("трейд-ссылка моста ведёт на сам аккаунт LisBot, нужна ссылка MannBot")
+                elif mann_id and to != mann_id:
+                    bad.append(f"трейд-ссылка моста ведёт на SteamID {to}, а у MannBot SteamID {mann_id}")
+                if not gifts:
+                    bad.append("MannBot не принимает ключи: security.accept_gifts_from пуст")
+                elif lis_id and lis_id not in gifts:
+                    bad.append(f"в security.accept_gifts_from у MannBot нет SteamID аккаунта LisBot ({lis_id})")
+            if bad:
+                text = "; ".join(bad)
+                add("key_bridge", "warn", "Мост ключей настроен не до конца", text[:1].upper() + text[1:] + ".", where)
+            elif not kb.get("enabled"):
+                add("key_bridge", "info", "Мост ключей выключен в LisBot",
+                    "MannBot готов принимать ключи от LisBot, но LisBot их не отправляет.", where)
+            else:
+                add("key_bridge", "ok", "Мост ключей настроен: LisBot отправляет ключи на аккаунт MannBot")
+
         # ---- Telegram: у каждого свой бот
         tokens = {"LisBot": lis.get("TELEGRAM_BOT_TOKEN", ""), "MannBot": g("notifications.telegram", "bot_token")}
         mon = self.center.monitor

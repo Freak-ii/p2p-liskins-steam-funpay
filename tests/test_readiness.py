@@ -142,3 +142,32 @@ def test_center_yaml_typos_and_broken_file(tmp_path):
     c2 = Center(tmp_path)
     assert _levels(c2.readiness.check())["center_yaml"] == "fail"
     c2.events.close()
+
+
+def test_key_bridge_setup(tmp_path):
+    import json
+    c = Center(tmp_path)
+    c.workers["lisbot"].save_secrets(LIS)
+    lis_id, mann_id = str(76561197960265728 + 123), str(76561197960265728 + 456)
+    _mann(c, "other", steam_id=mann_id)
+    assert "key_bridge" not in _levels(c.readiness.check())                # мост не трогали — пункта нет
+
+    cfg_path = c.workers["lisbot"].config_path
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    url = lambda n: f"https://steamcommunity.com/tradeoffer/new/?partner={n}&token=t"  # noqa: E731
+    cfg_path.write_text(json.dumps({"keyBridge": {"enabled": True, "tradeUrl": url(789)}}), encoding="utf-8")
+    r = c.readiness.check()
+    item = next(i for i in r["items"] if i["key"] == "key_bridge")
+    assert item["level"] == "warn" and r["ready"]                           # не мешает боевому режиму
+    assert mann_id in item["detail"] and "accept_gifts_from пуст" in item["detail"]
+
+    mcfg = yaml.safe_load(c.workers["mannbot"]._cfg_path.read_text(encoding="utf-8"))
+    mcfg["security"] = {"accept_gifts_from": [int(lis_id)]}
+    c.workers["mannbot"]._cfg_path.write_text(yaml.safe_dump(mcfg), encoding="utf-8")
+    cfg_path.write_text(json.dumps({"keyBridge": {"enabled": True, "tradeUrl": url(456)}}), encoding="utf-8")
+    assert _levels(c.readiness.check())["key_bridge"] == "ok"
+    cfg_path.write_text(json.dumps({"keyBridge": {"enabled": True, "tradeUrl": url(123)}}), encoding="utf-8")
+    assert "сам аккаунт LisBot" in next(i for i in c.readiness.check()["items"] if i["key"] == "key_bridge")["detail"]
+    cfg_path.write_text(json.dumps({"keyBridge": {"enabled": False}}), encoding="utf-8")
+    assert _levels(c.readiness.check())["key_bridge"] == "info"
+    c.events.close()
