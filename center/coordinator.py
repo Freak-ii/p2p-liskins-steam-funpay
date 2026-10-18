@@ -692,7 +692,39 @@ class Coordinator:
                         "title": f"LisBot: «{r['name']}» в минусе",
                         "reason": f"«{r['name']}»: {r['n']} продаж за {days:.0f} дн, итог −${-r['p']:.2f}. "
                                   "Предлагаю перестать его закупать (уже купленное продаётся как обычно)."})
-        # 5. бот упал окончательно — центр перестал его перезапускать
+        # 5. заказы MannBot застряли: покупатель оплатил, а ключи не выдаются (портит рейтинг на FunPay)
+        stuck_h, appr_h = float(a.get("mann_stuck_hours") or 2), float(a.get("mann_approval_hours") or 1)
+        stuck = _rows(self._mann_db(), "SELECT order_id, buyer_username, status, created_at, "
+                      "COALESCE(offer_sent_at, paid_at, created_at) t FROM orders WHERE "
+                      "(status IN ('ready_to_send','offer_sent','manual') AND COALESCE(offer_sent_at, paid_at, created_at)<?) "
+                      "OR (status='pending_approval' AND created_at<?) ORDER BY created_at",
+                      (now - stuck_h * 3600, now - appr_h * 3600))
+        if stuck:
+            st_text = {"ready_to_send": "готовим обмен", "offer_sent": "трейд не принят", "manual": "ждёт вас",
+                       "pending_approval": "ждёт вашей проверки"}
+            lst = ", ".join(f"{r['order_id']} ({r['buyer_username'] or '?'}, {st_text.get(r['status'], r['status'])}, "
+                            f"{(now - r['t']) / 3600:.0f} ч)" for r in stuck[:5])
+            out.append({"code": "mann_stuck", "auto": False, "tool": None, "args": {},
+                        "title": f"MannBot: {len(stuck)} заказ(ов) застряли",
+                        "reason": f"Оплаченные заказы без выдачи ключей: {lst}"
+                                  + (f" и ещё {len(stuck) - 5}" if len(stuck) > 5 else "")
+                                  + ". Проверьте их в панели MannBot, иначе покупатели оставят плохой отзыв."})
+        # 6. LisBot в боевом режиме перестал закупать, хотя обычно покупает каждый день
+        s = self.center.summaries.get("lisbot") or {}
+        w = self.center.workers.get("lisbot")
+        stall_h = float(a.get("lis_stall_hours") or 24)
+        if (stall_h and w is not None and w.state == RUNNING and s and s.get("dry_run") is False and not s.get("demo")
+                and not self._buy_paused()):
+            week = [r["created_at"] for r in rows if r["created_at"] >= (now - 7 * 86400) * 1000]
+            last = max((r["created_at"] for r in rows), default=None)
+            per_day = len(week) / 7
+            if per_day >= 1 and last is not None and now - last / 1000 > stall_h * 3600:
+                out.append({"code": "lis_buy_stall", "auto": False, "tool": None, "args": {},
+                            "title": "LisBot перестал закупать",
+                            "reason": f"Последняя покупка {(now - last / 1000) / 3600:.0f} ч назад, а за неделю обычно "
+                                      f"{per_day:.1f} в день. Проверьте баланс LIS-SKINS, лимиты, подключение к LIS "
+                                      "и журнал LisBot."})
+        # 7. бот упал окончательно — центр перестал его перезапускать
         for name, w in self.center.workers.items():
             if w.state == CRASHED:
                 out.append({"code": f"{name}_crashed", "auto": False, "tool": "restart_bot", "args": {"bot": name},
@@ -712,8 +744,12 @@ class Coordinator:
             if now - last < cooldown:
                 continue
             self.kv_set(f"anomaly:{an['code']}", now)
-            self._add("anomaly", "info", an["title"], tool=an["tool"], args=an["args"], reason=an["reason"],
+            self._add("anomaly", "info", an["title"], tool=an["tool"] or "none", args=an["args"], reason=an["reason"],
                       source=f"rule:{an['code']}")
+            if an["tool"] is None:                       # действовать нечем — только сообщить
+                await self._notify(f"coord:anomaly:{an['code']}", "warn",
+                                   f"<b>🤖 Координатор: {html.escape(an['title'])}</b>\n{html.escape(an['reason'])}")
+                continue
             if an["tool"] == "pause_buying" and self._buy_paused():
                 await self._notify(f"coord:anomaly:{an['code']}", "warn",
                                    f"<b>🤖 Координатор: {html.escape(an['title'])}</b>\n{html.escape(an['reason'])}\n"

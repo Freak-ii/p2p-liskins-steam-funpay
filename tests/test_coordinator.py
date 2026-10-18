@@ -240,3 +240,42 @@ def test_stub_briefing_and_api(tmp_path):
         await client.close()
         c.events.close()
     asyncio.run(go())
+
+
+def test_stuck_orders_and_buy_stall_only_notify(tmp_path):
+    seed(tmp_path)
+    con = sqlite3.connect(tmp_path / "mannbot" / "data" / "mannbot.sqlite3")
+    con.execute("INSERT INTO orders(order_id,buyer_username,status,created_at,paid_at,offer_sent_at,price,keys_qty,quantity,currency) "
+                "VALUES('S1','slow','offer_sent',?,?,?,200,1,1,'₽')", (NOW - 4 * 3600, NOW - 4 * 3600, NOW - 3 * 3600))
+    con.execute("INSERT INTO orders(order_id,buyer_username,status,created_at,price,keys_qty,quantity,currency) "
+                "VALUES('S2','check','pending_approval',?,200,1,1,'₽')", (NOW - 2 * 3600,))
+    con.execute("INSERT INTO orders(order_id,buyer_username,status,created_at,offer_sent_at,price,keys_qty,quantity,currency) "
+                "VALUES('S3','fresh','offer_sent',?,?,200,1,1,'₽')", (NOW - 1800, NOW - 1800))
+    con.commit()
+    con.close()
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    for i in range(10):                                     # 10 покупок за неделю, последняя — 30 ч назад
+        t = int((NOW - 30 * 3600 - i * 12 * 3600) * 1000)
+        con.execute("INSERT INTO items(name,mode,status,dry_run,buy_price_usd,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                    ("Old", "rtba", "listed", 0, 1.0, t, t))
+    con.commit()
+    con.close()
+
+    async def go():
+        c, sent, calls = _center(tmp_path)
+        assert "lis_buy_stall" not in {a["code"] for a in c.coordinator.detect()}   # режим неизвестен — молчим
+        c.summaries["lisbot"] = {"dry_run": False}
+        found = {a["code"]: a for a in await c.coordinator.check()}
+        assert {"mann_stuck", "lis_buy_stall"} <= set(found)
+        assert "S1" in found["mann_stuck"]["reason"] and "S2" in found["mann_stuck"]["reason"]
+        assert "S3" not in found["mann_stuck"]["reason"] and found["mann_stuck"]["title"].startswith("MannBot: 2")
+        assert "30 ч назад" in found["lis_buy_stall"]["reason"]
+        assert calls == [] and not c.coordinator.decisions(kind="proposal", status="proposed")   # ничего не делает сам
+        assert any("застряли" in t for t in sent) and any("перестал закупать" in t for t in sent)
+        n = len(sent)
+        await c.coordinator.check()
+        assert len(sent) == n                               # повтор не раньше cooldown
+        c.summaries["lisbot"] = {"dry_run": False, "paused": True}
+        assert "lis_buy_stall" not in {a["code"] for a in c.coordinator.detect()}   # на паузе — это нормально
+        c.events.close()
+    asyncio.run(go())

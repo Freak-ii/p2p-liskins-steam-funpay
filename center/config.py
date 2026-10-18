@@ -107,6 +107,9 @@ DEFAULTS: dict = {
             "item_loss_sales": 3,    # предмет LisBot продан столько раз за item_loss_days…
             "item_loss_days": 30,
             "item_loss_min_usd": 3,  # …с общим убытком не меньше — предложить выключить его закупку
+            "mann_stuck_hours": 2,   # оплаченный заказ MannBot без выдачи дольше — сообщить
+            "mann_approval_hours": 1,     # заказ ждёт вашей проверки дольше — сообщить
+            "lis_stall_hours": 24,   # LisBot в боевом режиме не покупал дольше (а обычно 1+ в день) — сообщить; 0 — нет
             "cooldown_hours": 6,     # одна и та же аномалия не чаще
         },
     },
