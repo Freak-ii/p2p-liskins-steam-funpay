@@ -349,8 +349,9 @@ class Analytics:
         start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         nxt = (start + dt.timedelta(days=32)).replace(day=1)
         rate = (await self.usd_rub())["rate"]
+        deals = await asyncio.to_thread(self.deals, start.timestamp())
         profit = sum(self._conv(d["profit"], d["currency"], "RUB", rate) or 0
-                     for d in self.deals(start.timestamp()) if d["profit"] is not None and d["sold_at"] <= now)
+                     for d in deals if d["profit"] is not None and d["sold_at"] <= now)
         elapsed = max(1 / 24, (now - start.timestamp()) / DAY)
         days = (nxt - start).days
         forecast = profit / elapsed * days
