@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     tags: ["center-v*"]
-    branches: ["claude/center-platform-*", "claude/center-optimize-*"]
+    branches: ["claude/center-platform-*", "claude/center-optimize-*", "claude/center-next-wave-*"]
   pull_request:
     paths: ["center/**", "packaging/**", "bots/**", "requirements.txt", ".github/workflows/center-windows.yml"]
 jobs:
