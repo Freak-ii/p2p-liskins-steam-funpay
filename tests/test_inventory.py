@@ -186,6 +186,11 @@ def test_key_bridge_state_and_restock(tmp_path):
     assert b["enabled"] and b["buying"] and b["buy_order"] and b["currency"] == "RUB"
     assert (b["bought"], b["delivered"], b["in_offers"], b["failed"]) == (6, 2, 1, 2)
     assert b["waiting"] == 3 and b["coming"] == 4 and b["avg_price"] == 150.0 and b["spent"] == 900.0
+    assert b["per_wallet_rub"] is None                                      # нет продаж MannBot — нет оценки
+    c.analytics.mann_deals = lambda since=0: [{"currency": "RUB", "qty": 2, "revenue": 400.0, "fee": 40.0},
+                                              {"currency": "USD", "qty": 1, "revenue": 3.0, "fee": 0.0}]
+    b = c.inventory.bridge()
+    assert b["sell_net_per_key"] == 180.0 and b["per_wallet_rub"] == 1.2 and b["price_basis"] == "покупки"
     m = c.inventory.mannbot()
     assert m["bridge_coming"] == 4 and m["restock"] == 3                 # 7/13 × 14 − 1 на складе − 4 в пути
     assert "ещё 4 едут по мосту ключей" in c.inventory.check()

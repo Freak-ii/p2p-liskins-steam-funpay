@@ -177,8 +177,17 @@ class Inventory:
         waiting = max(0, bought - delivered - in_offers)
         enabled = bool(bc.get("enabled"))
         coming = (waiting + in_offers) if enabled else in_offers
-        return {"enabled": enabled, "buying": enabled and bool(buy.get("enabled")), "currency": (cfg.get("steam") if isinstance(cfg.get("steam"), dict) else {}).get("walletCurrencyCode") or "",
-                "bought": bought, "spent": _r((t.get("spentCents") or 0) / 100), "avg_price": _r(t["spentCents"] / 100 / bought) if bought and t.get("spentCents") else None,
+        # экономика: сколько настоящих рублей с FunPay приносит ключ за рубль кошелька Steam (продажи MannBot за 30 дней)
+        rub = [d for d in a.mann_deals(self.clock() - 30 * DAY) if d["currency"] == "RUB" and d["qty"]]
+        keys = sum(d["qty"] for d in rub)
+        net_key = (sum(d["revenue"] - d["fee"] for d in rub) / keys) if keys else None
+        cur = (cfg.get("steam") if isinstance(cfg.get("steam"), dict) else {}).get("walletCurrencyCode") or ""
+        avg = t["spentCents"] / 100 / bought if bought and t.get("spentCents") else None
+        price = avg or (float(buy["maxKeyPrice"]) if isinstance(buy.get("maxKeyPrice"), (int, float)) and buy["maxKeyPrice"] > 0 else None)
+        per_wallet = net_key / price if net_key and price and cur == "RUB" else None
+        return {"enabled": enabled, "buying": enabled and bool(buy.get("enabled")), "currency": cur,
+                "bought": bought, "spent": _r((t.get("spentCents") or 0) / 100), "avg_price": _r(avg),
+                "sell_net_per_key": _r(net_key), "per_wallet_rub": _r(per_wallet), "price_basis": "покупки" if avg else "макс. цена" if price else None,
                 "sent": sent, "delivered": delivered, "waiting": waiting, "in_offers": in_offers, "failed": failed, "coming": coming,
                 "buy_order": bool(st.get("buyOrder")), "max_price": buy.get("maxKeyPrice"), "per_day": buy.get("keysPerDay")}
 

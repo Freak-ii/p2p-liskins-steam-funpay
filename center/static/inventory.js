@@ -55,7 +55,7 @@ function invBridge(b) {
       <div><b>${b.in_offers}</b><span>в обмене на MannBot</span></div>
       <div><b>${b.delivered}</b><span>принято MannBot</span></div>
     </div>
-    <div class="muted small">${b.buying ? `Закупка включена: до ${b.per_day ?? '—'} ключей в день, не дороже ${b.max_price ?? '—'} ${cur}${b.buy_order ? ', ордер на ТП стоит' : ''}.` : 'Закупка за кошелёк выключена, мост только передаёт ключи, которые уже есть у LisBot.'}${b.spent ? ` Потрачено с кошелька ${b.spent.toLocaleString('ru-RU')} ${cur}.` : ''}</div>`;
+    <div class="muted small">${b.buying ? `Закупка включена: до ${b.per_day ?? '—'} ключей в день, не дороже ${b.max_price ?? '—'} ${cur}${b.buy_order ? ', ордер на ТП стоит' : ''}.` : 'Закупка за кошелёк выключена, мост только передаёт ключи, которые уже есть у LisBot.'}${b.spent ? ` Потрачено с кошелька ${b.spent.toLocaleString('ru-RU')} ${cur}.` : ''}${b.per_wallet_rub ? ` Ключ продаётся на FunPay за ≈${money(b.sell_net_per_key, 'RUB')} после комиссии: <b>${b.per_wallet_rub.toLocaleString('ru-RU')} ₽ с FunPay за 1 ₽ кошелька</b> (по ${esc(b.price_basis)}, продажи за 30 дн).` : ''}</div>`;
 }
 
 // Цель прибыли на месяц: прогресс и прогноз по темпу (/api/analytics/goal)
