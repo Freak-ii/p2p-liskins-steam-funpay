@@ -376,7 +376,7 @@ class Rtba:
                                          "delivered_at>=? AND status<>'refunded' ORDER BY delivered_at", (since,))]
         hist = [dict(r) for r in _rows(db, "SELECT ts, new_price, old_price, position, applied FROM price_history "
                                        "WHERE ts>=? ORDER BY ts", (since,))]
-        base_raw = self.an.mann_config()
+        base_raw = self.an.mann_effective_config()
         own = {str(l.get("offer_id")) for l in (_get(base_raw, "funpay.lots") or []) if l.get("offer_id")}
         stock = int(_kv(db, "last_stock") or 0)
         start = next((h["old_price"] for h in hist if h["old_price"]), None)

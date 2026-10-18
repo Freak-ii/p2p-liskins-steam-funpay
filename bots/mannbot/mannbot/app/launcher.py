@@ -18,7 +18,9 @@ log = logging.getLogger("app")
 APP_NAME = "MannBot"
 
 DEMO_OVERRIDES = {
-    "general": {"demo": True, "dry_run": False, "database": ":memory:", "log_file": ""},
+    # демо-база — файл (а не :memory:), чтобы центр видел демо-заказы в аналитике, CRM и RTBA;
+    # пересоздаётся при каждом запуске демо
+    "general": {"demo": True, "dry_run": False, "database": "data/mannbot.sqlite3", "log_file": ""},
     "funpay": {"lots": [{"offer_id": 1, "node_id": 1808, "game_id": 435, "keys_per_unit": 1}]},
     "risk": {"manual_review_score": 40},
     "rtba": {"enabled": True, "cost_per_key": 150, "competitor_min_amount": 2, "ceiling_price": 260},
@@ -79,6 +81,9 @@ def _is_mannbot(host: str, port: int) -> bool:
 async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo: bool, autostart: bool | None,
                   mem: MemoryLogHandler) -> None:
     from mannbot.web.server import start_web
+    if demo:
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            (home / "data" / f"mannbot.sqlite3{suffix}").unlink(missing_ok=True)
     sup = Supervisor(home, demo=demo, overrides=DEMO_OVERRIDES if demo else None)
     token = sup.ensure_token()
     if demo:
@@ -148,6 +153,8 @@ def main(argv: list[str] | None = None) -> None:
                 webbrowser.open(f"http://{probe_host}:{port}/login?token={token}")
             print(f"{APP_NAME} уже запущен на порту {port}")
             return
+        if args.port:          # порт задан явно (так запускает центр): соседний порт может быть занят другим ботом
+            sys.exit(f"Порт {port} занят другой программой")
         for p in range(port + 1, port + 50):
             if _port_free(host, p):
                 port = p

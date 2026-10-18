@@ -79,6 +79,7 @@ class Analytics:
         self.center = center
         self._rate: dict = {}            # {"rate", "source", "ts"} последнего внешнего курса
         self._rate_lock = asyncio.Lock()
+        self._rate_fail_at = 0.0        # когда ЦБ последний раз не ответил: повтор не раньше чем через 10 мин
 
     # ------------------------------------------------------------------ источники
     @property
@@ -105,6 +106,20 @@ class Analytics:
         except (OSError, yaml.YAMLError):
             return {}
 
+    def mann_effective_config(self) -> dict:
+        """Настройки, с которыми MannBot работает на самом деле (только для чтения: записывать — mann_config).
+        В демо лаунчер MannBot накладывает DEMO_OVERRIDES (лоты, себестоимость ключа) поверх config.yaml."""
+        raw = self.mann_config()
+        if not self.center.demo:
+            return raw
+        try:
+            from center.rtba import _merge, mannbot_modules  # noqa: PLC0415
+            mannbot_modules()                                       # bots/mannbot в sys.path
+            from mannbot.app.launcher import DEMO_OVERRIDES  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            return raw
+        return _merge(raw, DEMO_OVERRIDES)
+
     # ------------------------------------------------------------------ курс USD→RUB
     async def usd_rub(self) -> dict:
         """Курс в порядке приоритета: center.yaml analytics.usd_rub → курс LisBot (FxService, если кошелёк
@@ -118,7 +133,8 @@ class Analytics:
             if isinstance(fx, dict) and (fx.get("rate") or 0) > 1:
                 return {"rate": float(fx["rate"]), "source": "LisBot (Steam)", "ts": (fx.get("ts") or 0) / 1000}
         async with self._rate_lock:
-            if not self._rate or time.time() - self._rate["ts"] > 6 * 3600:
+            failed_recently = time.time() - self._rate_fail_at < 600
+            if (not self._rate or time.time() - self._rate["ts"] > 6 * 3600) and not failed_recently:
                 try:
                     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as s:
                         async with s.get(CBR_URL) as r:
@@ -126,8 +142,9 @@ class Analytics:
                     self._rate = {"rate": float(d["Valute"]["USD"]["Value"]), "source": "ЦБ РФ", "ts": time.time()}
                 except Exception as e:  # noqa: BLE001 — нет сети: берём запасной курс
                     log.debug("курс ЦБ: %s", e)
-                    if not self._rate:
-                        return {"rate": float(self.cfg.get("fallback_usd_rub") or 95), "source": "запасной (center.yaml)"}
+                    self._rate_fail_at = time.time()    # без сети не ждём таймаут на каждом запросе панели
+            if not self._rate:
+                return {"rate": float(self.cfg.get("fallback_usd_rub") or 95), "source": "запасной (center.yaml)"}
         return dict(self._rate)
 
     # ------------------------------------------------------------------ сделки
@@ -148,7 +165,7 @@ class Analytics:
         return out
 
     def mann_costs(self) -> tuple[float, float]:
-        rt = self.mann_config().get("rtba") or {}
+        rt = self.mann_effective_config().get("rtba") or {}
         return float(rt.get("cost_per_key") or 0), float(rt.get("funpay_fee_pct") or 0) / 100
 
     def mann_deals(self, since: float = 0) -> list[dict]:

@@ -129,3 +129,4 @@ select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; ba
 .co-answer { white-space: pre-wrap; margin: 10px 0 4px; }
 .co-s-done { color: var(--ok); } .co-s-failed { color: var(--bad); } .co-s-proposed, .co-s-manual { color: var(--warn); }
 .co-s-rejected, .co-s-expired { color: var(--muted); }
+#alerts td:nth-child(4), #events td:nth-child(3) { overflow-wrap: anywhere; min-width: 12em; }
