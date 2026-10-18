@@ -122,6 +122,7 @@ def _day(ts: float) -> str:
 MANN_FAIL = {"out_of_stock": "нет ключей на складе", "too_many_keys": "слишком много ключей в заказе",
              "confirm_failed": "обмен не подтвердился в Steam", "offer_mismatch": "обмен не совпал с заказом",
              "refund": "возврат", "rate_limit": "Steam ограничил запросы", "network": "нет связи со Steam"}
+HOLD_BUCKETS = ((0, 8, "до 8 дн"), (8, 10, "8–10 дн"), (10, 14, "10–14 дн"), (14, 21, "14–21 дн"), (21, None, "21+ дн"))
 MANN_STATUS_RU = {"refunded": "возврат", "blocked": "заблокирован", "manual": "вручную"}
 
 WEAPON_TYPES = (
@@ -435,7 +436,16 @@ class Analytics:
                     "expected_net_usd>0 AND sold_at>=?", (since_ms,))
         ratios = [r["sold_usd"] / r["expected_net_usd"] for r in acc if r["sold_usd"] is not None]
         mape = statistics.mean(abs(x - 1) for x in ratios) * 100 if ratios else None
-        holds = [d["hold_days"] for d in self.lis_deals(since_ms / 1000)]
+        deals = self.lis_deals(since_ms / 1000)
+        holds = [d["hold_days"] for d in deals]
+        # сколько держали предмет (от получения до продажи, вместе с 7 днями Trade Protection) и что это дало
+        by_hold = []
+        for lo, hi, label in HOLD_BUCKETS:
+            ds = [d for d in deals if d["hold_days"] is not None and d["hold_days"] >= lo and (hi is None or d["hold_days"] < hi)]
+            if ds:
+                spent, profit = sum(d["cost"] for d in ds), sum(d["profit"] for d in ds)
+                by_hold.append({"label": label, "deals": len(ds), "profit": _r(profit), "losers": sum(1 for d in ds if d["profit"] < 0),
+                                "roi": _r(profit / spent * 100, 1) if spent else None})
         by_mode = [dict(r) for r in _rows(self.lis_db, """
             SELECT COALESCE(mode,'—') mode, COUNT(*) n, SUM(status='sold') sold, COALESCE(SUM(buy_price_usd),0) spent,
                    COALESCE(SUM(CASE WHEN status='sold' THEN profit_usd END),0) profit
@@ -455,7 +465,7 @@ class Analytics:
                             "losers": sum(1 for x in kept if x[1] < 0), "roi": _r(sum(x[1] for x in kept) / spent * 100, 1) if spent else None,
                             "current": min_roi is not None and abs(t - float(min_roi)) < 1e-9})
         return {
-            "items": items, "by_mode": by_mode, "by_type": by_type, "funnel": funnel,
+            "items": items, "by_mode": by_mode, "by_type": by_type, "by_hold": by_hold, "funnel": funnel,
             "roi_cut": roi_cut if sold else [],
             "forecast": {"n": len(ratios), "fact_to_forecast": _r(statistics.mean(ratios) * 100, 1) if ratios else None,
                          "mean_abs_error": _r(mape, 1)},

@@ -99,6 +99,8 @@ def test_pnl_daily_details(tmp_path):
         assert cut[0.0]["deals"] == 3 and cut[0.0]["losers"] == 1 and cut[0.0]["profit"] == 2.0
         assert cut[0.15]["deals"] == 2 and cut[0.15]["losers"] == 0 and cut[0.15]["profit"] == 3.0 and cut[0.15]["roi"] == 15.0
 
+        assert ld["by_hold"] == [{"label": "до 8 дн", "deals": 3, "profit": 2.0, "losers": 1, "roi": 2.9}]   # 7, 7 и 4 дн
+
         md = a.mannbot_details(30)
         assert md["orders"] == 4 and md["funnel"][3]["n"] == 2 and md["confirm_rate"] == 50.0
         assert sum(md["by_hour"]) == 4 and sum(md["by_weekday"]) == 4 and len(md["by_hour"]) == 24
