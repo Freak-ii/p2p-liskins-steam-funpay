@@ -400,7 +400,7 @@ class Monitor:
         for name, w in self.center.workers.items():
             want = bool(getattr(w, "_want_running", False)) and w.state != DISABLED
             ok, latency = None, None
-            if w.proc is not None and w.proc.returncode is None and w.state == RUNNING:
+            if w.alive and w.state == RUNNING:
                 t0 = time.perf_counter()
                 try:
                     ok = bool(await asyncio.wait_for(w.health(), 10))

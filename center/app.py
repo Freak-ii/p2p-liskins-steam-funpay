@@ -34,11 +34,11 @@ class Center:
         wm, wl = self.cfg.worker("mannbot"), self.cfg.worker("lisbot")
         self.workers: dict[str, BotWorker] = {
             "lisbot": LisBotWorker(self.home / "lisbot", self.events, port=wl.get("port", 8802), restart=restart,
-                                   executable=wl.get("node") or "", vault=self.vault),
+                                   executable=wl.get("node") or "", demo=demo, vault=self.vault),
             "mannbot": MannBotWorker(self.home / "mannbot", self.events, port=wm.get("port", 8801), restart=restart,
                                      executable=wm.get("python") or "", demo=demo, vault=self.vault),
         }
-        if demo:                                    # LisBot без ключей не стартует: показываем его историю сделок
+        if demo:                                    # история сделок LisBot за месяц; дальше он торгует на эмуляции LIS/Steam
             from center.demo import seed_lisbot
             seed_lisbot(self.workers["lisbot"].data_dir)
         self.summaries: dict[str, dict | None] = {n: None for n in self.workers}

@@ -58,7 +58,7 @@ export function startDashboard({ cfg, db, guard, bot, log }) {
   };
 
   const routes = {
-    'GET /api/summary': () => ({ ...summary(db, { tz: cfg.timezone, fx: bot.fx?.rate }), guard: guard.state, dryRun: cfg.dryRun, runtime: bot.runtimeStats(), currency: cfg.steam.walletCurrencyCode }),
+    'GET /api/summary': () => ({ ...summary(db, { tz: cfg.timezone, fx: bot.fx?.rate }), guard: guard.state, dryRun: cfg.dryRun, demo: !!bot.emu, runtime: bot.runtimeStats(), currency: cfg.steam.walletCurrencyCode }),
     'GET /api/daily': (u) => daily(db, { tz: cfg.timezone, days: Number(u.searchParams.get('days')) || 30 }),
     'GET /api/per-item': () => perItem(db),
     'GET /api/items': (u) => {
@@ -136,7 +136,7 @@ export function startDashboard({ cfg, db, guard, bot, log }) {
       return { ok: true };
     },
     'GET /api/rtba': (u) => rtbaReport(db, cfg, bot, Number(u.searchParams.get('days')) || 7),
-    'GET /api/meta': () => ({ appMode: !!bot.hooks?.appMode, version: bot.hooks?.version || null, dataDir: cfg.dataDir }),
+    'GET /api/meta': () => ({ appMode: !!bot.hooks?.appMode, version: bot.hooks?.version || null, dataDir: cfg.dataDir, pid: process.pid, demo: !!bot.emu }),
     'GET /api/export/items.csv': () => {
       const rows = db.db.prepare('SELECT * FROM items WHERE dry_run=0 ORDER BY id').all();
       const cols = rows[0] ? Object.keys(rows[0]) : ['id'];
