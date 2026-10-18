@@ -587,11 +587,21 @@ class Coordinator:
                         f"Одобрено FrayZ: {d['title']} — {result}")
         return status == "done", result
 
-    async def _notify(self, key: str, level: str, text: str) -> None:
+    async def _notify(self, key: str, level: str, text: str, buttons: dict | None = None) -> None:
         try:
-            await self.center.monitor.notify(key, level, text)
+            if buttons:
+                await self.center.monitor.notify(key, level, text, buttons=buttons)
+            else:
+                await self.center.monitor.notify(key, level, text)
         except Exception:  # noqa: BLE001
             log.exception("уведомление координатора")
+
+    def _buttons(self, d: dict) -> dict | None:
+        """Кнопки одобрения в Telegram, если у центра свой Telegram-бот с командами."""
+        tg = getattr(self.center, "tg", None)
+        if tg is None or not tg.target()[0]:
+            return None
+        return tg.keyboard(d)
 
     # ------------------------------------------------------------------ сторож аномалий
     def _lis_db(self):
@@ -665,9 +675,11 @@ class Coordinator:
             d = await self.act_or_propose(an["tool"], an["args"], reason=an["reason"], source=f"rule:{an['code']}",
                                           allow_auto=an["auto"])
             if d and d["kind"] == "proposal":
+                kb = self._buttons(d)
+                where = "кнопкой ниже или в панели центра" if kb else "в панели центра → «Координатор»"
                 await self._notify(f"coord:anomaly:{an['code']}", "warn",
                                    f"<b>🤖 Координатор: {html.escape(an['title'])}</b>\n{html.escape(an['reason'])}\n"
-                                   f"Предлагаю: {html.escape(d['title'])}. Одобрить можно в панели центра → «Координатор».")
+                                   f"Предлагаю: {html.escape(d['title'])}. Одобрить можно {where}.", kb)
         self.last_check = {"at": now, "anomalies": [a["title"] for a in found]}
         return found
 
@@ -766,7 +778,9 @@ class Coordinator:
                 lines += ["", "<b>Рекомендации</b>"] + [
                     f"{i + 1}. {html.escape(r['title'])}" + (" — нужно подтверждение" if r.get("tier") == "confirm" else "")
                     for i, r in enumerate(recs) if r]
-                lines.append("<i>Одобрить или отклонить — в панели центра, раздел «Координатор».</i>")
+                lines.append("<i>Одобрить или отклонить — в панели центра, раздел «Координатор»"
+                             + (", или командой /proposals." if self._buttons({"kind": "proposal", "status": "proposed", "id": 0})
+                                else ".") + "</i>")
             await self._notify("coord:briefing", "info", "\n".join(lines))
         self.events.add("center", "info", "coordinator.briefing", "Координатор подготовил брифинг")
         return b

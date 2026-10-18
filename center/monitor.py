@@ -157,7 +157,8 @@ class Monitor:
         return {
             "telegram_enabled": bool(tg.get("enabled", True)), "telegram_token": "",
             "telegram_token_set": bool(self._token()), "telegram_chat_id": str(tg.get("chat_id") or ""),
-            "telegram_source": src, "dedup_minutes": c.get("dedup_minutes"), "quiet_hours": c.get("quiet_hours") or "",
+            "telegram_source": src, "telegram_commands": bool(tg.get("commands", True)),
+            "telegram_commands_state": getattr(getattr(self.center, "tg", None), "state", {}), "dedup_minutes": c.get("dedup_minutes"), "quiet_hours": c.get("quiet_hours") or "",
             "quiet_allow_critical": bool(c.get("quiet_allow_critical", True)),
             "bot_alert_levels": list(c.get("bot_alert_levels") or []),
             "heartbeat_url": (c.get("heartbeat") or {}).get("url") or "",
@@ -169,7 +170,8 @@ class Monitor:
         }
 
     def save_settings(self, d: dict) -> None:
-        tg: dict = {"enabled": bool(d.get("telegram_enabled", True)), "chat_id": str(d.get("telegram_chat_id") or "").strip()}
+        tg: dict = {"enabled": bool(d.get("telegram_enabled", True)), "chat_id": str(d.get("telegram_chat_id") or "").strip(),
+                    "commands": bool(d.get("telegram_commands", True))}
         vault = getattr(self.center, "vault", None)
         new_token = None
         if d.get("telegram_token"):                       # пустое поле = «не менять сохранённый токен»
@@ -270,7 +272,7 @@ class Monitor:
         with self._lock:
             return [dict(r) for r in self.db.execute("SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (limit,))]
 
-    async def send_telegram(self, text: str) -> tuple[bool, str]:
+    async def send_telegram(self, text: str, buttons: dict | None = None) -> tuple[bool, str]:
         token, ids, _ = self.telegram_target()
         if not token:
             return False, "no_channel"
@@ -278,16 +280,17 @@ class Monitor:
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
                 for chat in ids:
-                    async with s.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                                      json={"chat_id": chat, "text": text[:4000], "parse_mode": "HTML",
-                                            "disable_web_page_preview": True}) as r:
+                    payload = {"chat_id": chat, "text": text[:4000], "parse_mode": "HTML", "disable_web_page_preview": True}
+                    if buttons:
+                        payload["reply_markup"] = buttons
+                    async with s.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload) as r:
                         if r.status != 200:
                             ok_all, info = False, f"failed: HTTP {r.status} {(await r.text())[:200]}"
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
             return False, f"failed: {e}"
         return ok_all, info
 
-    async def notify(self, key: str, level: str, text: str, *, force: bool = False) -> str:
+    async def notify(self, key: str, level: str, text: str, *, force: bool = False, buttons: dict | None = None) -> str:
         """Уведомить с дедупликацией и тихими часами. Возвращает статус записи."""
         now = self.clock()
         level = level.lower()
@@ -306,7 +309,7 @@ class Monitor:
         self._last_sent[key] = now
         extra = self._suppressed.pop(key, 0)
         body = f"{ICONS.get(level, '')} {text}" + (f"\n<i>(ещё {extra} похожих скрыто)</i>" if extra else "")
-        ok, info = await self.send_telegram(body)
+        ok, info = await (self.send_telegram(body, buttons) if buttons else self.send_telegram(body))
         status = "sent" if ok else ("no_channel" if info == "no_channel" else "failed")
         if status == "failed":
             log.warning("Telegram: %s", info)
