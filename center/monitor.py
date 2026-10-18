@@ -799,6 +799,14 @@ class Monitor:
                 if self.weekly_due():
                     self.kv_set("weekly_report_date", time.strftime("%Y-%m-%d", time.localtime(self.clock())))
                     await self.send_weekly_report()
+                today = time.strftime("%Y-%m-%d", time.localtime(self.clock()))
+                if self.kv_get("events_pruned") != today:
+                    self.kv_set("events_pruned", today)
+                    days = float(self.cfg.get("events_days") or 0)
+                    if days:
+                        n = await asyncio.to_thread(self.events.prune, days, self.clock())
+                        if n:
+                            log.info("журнал центра: удалено %s записей старше %s дн", n, days)
                 if self.monthly_due():
                     self.kv_set("monthly_report_month", time.strftime("%Y-%m", time.localtime(self.clock())))
                     await self.send_monthly_report()

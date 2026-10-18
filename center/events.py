@@ -61,6 +61,18 @@ class EventStore:
         with self._lock:
             return [dict(r) for r in self.db.execute(sql, args).fetchall()]
 
+    def prune(self, days: float, now: float | None = None) -> int:
+        """Удалить события старше days дней (и решения координатора того же возраста, кроме неразобранных
+        предложений). Журнал не растёт бесконечно; копии старых событий остаются в резервных копиях."""
+        cut = (time.time() if now is None else now) - days * 86400
+        with self._lock:
+            n = self.db.execute("DELETE FROM events WHERE ts < ?", (cut,)).rowcount
+            has = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='coord_decisions'").fetchone()
+            if has:
+                n += self.db.execute("DELETE FROM coord_decisions WHERE ts < ? AND status <> 'proposed'", (cut,)).rowcount
+            self.db.commit()
+        return n
+
     def close(self) -> None:
         with self._lock:
             self.db.close()

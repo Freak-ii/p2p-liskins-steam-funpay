@@ -270,3 +270,19 @@ def test_hung_bot_is_restarted_once_an_hour(tmp_path):
         assert len(restarts) == 2
         c.events.close()
     asyncio.run(go())
+
+
+def test_events_pruned(tmp_path):
+    c = Center(tmp_path)
+    c.events.add("center", "info", "old", "старое")
+    c.events.db.execute("UPDATE events SET ts=? WHERE kind='old'", (time.time() - 200 * 86400,))
+    c.coordinator._add("anomaly", "info", "давнее", source="t")
+    pid = c.coordinator._add("proposal", "proposed", "ждёт решения", source="t")
+    c.events.db.execute("UPDATE coord_decisions SET ts=?", (time.time() - 200 * 86400,))
+    c.events.db.commit()
+    c.events.add("center", "info", "new", "свежее")
+    assert c.events.prune(180) == 2
+    kinds = [e["kind"] for e in c.events.recent(10)]
+    assert "old" not in kinds and "new" in kinds
+    assert [d["id"] for d in c.coordinator.decisions(10)] == [pid]               # неразобранное предложение остаётся
+    c.events.close()
