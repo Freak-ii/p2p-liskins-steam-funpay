@@ -270,6 +270,9 @@ def test_stuck_orders_and_buy_stall_only_notify(tmp_path):
         assert "S1" in found["mann_stuck"]["reason"] and "S2" in found["mann_stuck"]["reason"]
         assert "S3" not in found["mann_stuck"]["reason"] and found["mann_stuck"]["title"].startswith("MannBot: 2")
         assert "30 ч назад" in found["lis_buy_stall"]["reason"]
+        assert [r["order_id"] for r in c.coordinator.stuck_orders()] == ["S1", "S2"]
+        (text, _), = await c.tg.handle_command("/orders")
+        assert "S1" in text and "трейд не принят" in text and "ждёт вашей проверки" in text
         assert calls == [] and not c.coordinator.decisions(kind="proposal", status="proposed")   # ничего не делает сам
         assert any("застряли" in t for t in sent) and any("перестал закупать" in t for t in sent)
         n = len(sent)

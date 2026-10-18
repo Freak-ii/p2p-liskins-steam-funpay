@@ -653,6 +653,21 @@ class Coordinator:
     def _mann_db(self):
         return self.center.analytics.mann_db
 
+    def stuck_orders(self) -> list[dict]:
+        """Оплаченные заказы MannBot, которые ждут выдачи дольше mann_stuck_hours или вашей проверки дольше mann_approval_hours."""
+        a = self.cfg.get("anomaly") or {}
+        now = self.clock()
+        stuck_h, appr_h = float(a.get("mann_stuck_hours") or 2), float(a.get("mann_approval_hours") or 1)
+        st_text = {"ready_to_send": "готовим обмен", "offer_sent": "трейд не принят", "manual": "ждёт вас",
+                   "pending_approval": "ждёт вашей проверки"}
+        rows = _rows(self._mann_db(), "SELECT order_id, buyer_username, status, created_at, "
+                     "COALESCE(offer_sent_at, paid_at, created_at) t FROM orders WHERE "
+                     "(status IN ('ready_to_send','offer_sent','manual') AND COALESCE(offer_sent_at, paid_at, created_at)<?) "
+                     "OR (status='pending_approval' AND created_at<?) ORDER BY created_at",
+                     (now - stuck_h * 3600, now - appr_h * 3600))
+        return [{"order_id": r["order_id"], "buyer": r["buyer_username"], "status": r["status"],
+                 "status_text": st_text.get(r["status"], r["status"]), "hours": (now - r["t"]) / 3600} for r in rows]
+
     def detect(self) -> list[dict]:
         """Правила без ИИ. Каждое: code, title, reason, tool, args, auto (явная аномалия → можно действовать самому)."""
         a = self.cfg.get("anomaly") or {}
@@ -699,17 +714,9 @@ class Coordinator:
                         "reason": f"«{r['name']}»: {r['n']} продаж за {days:.0f} дн, итог −${-r['p']:.2f}. "
                                   "Предлагаю перестать его закупать (уже купленное продаётся как обычно)."})
         # 5. заказы MannBot застряли: покупатель оплатил, а ключи не выдаются (портит рейтинг на FunPay)
-        stuck_h, appr_h = float(a.get("mann_stuck_hours") or 2), float(a.get("mann_approval_hours") or 1)
-        stuck = _rows(self._mann_db(), "SELECT order_id, buyer_username, status, created_at, "
-                      "COALESCE(offer_sent_at, paid_at, created_at) t FROM orders WHERE "
-                      "(status IN ('ready_to_send','offer_sent','manual') AND COALESCE(offer_sent_at, paid_at, created_at)<?) "
-                      "OR (status='pending_approval' AND created_at<?) ORDER BY created_at",
-                      (now - stuck_h * 3600, now - appr_h * 3600))
+        stuck = self.stuck_orders()
         if stuck:
-            st_text = {"ready_to_send": "готовим обмен", "offer_sent": "трейд не принят", "manual": "ждёт вас",
-                       "pending_approval": "ждёт вашей проверки"}
-            lst = ", ".join(f"{r['order_id']} ({r['buyer_username'] or '?'}, {st_text.get(r['status'], r['status'])}, "
-                            f"{(now - r['t']) / 3600:.0f} ч)" for r in stuck[:5])
+            lst = ", ".join(f"{r['order_id']} ({r['buyer'] or '?'}, {r['status_text']}, {r['hours']:.0f} ч)" for r in stuck[:5])
             out.append({"code": "mann_stuck", "auto": False, "tool": None, "args": {},
                         "title": f"MannBot: {len(stuck)} заказ(ов) застряли",
                         "reason": f"Оплаченные заказы без выдачи ключей: {lst}"

@@ -26,7 +26,7 @@ HELP = ("<b>Центр перепродажи</b>\n"
         "/status — состояние ботов и тревоги\n"
         "/report — отчёт за сутки, /week — за неделю, /month — итоги прошлого месяца\n"
         "/stock — склад LisBot и ключи MannBot, /goal — цель месяца\n"
-        "/ready — готовность к боевому режиму\n"
+        "/ready — готовность к боевому режиму, /orders — застрявшие заказы MannBot\n"
         "/proposals — предложения координатора с кнопками\n"
         "/pause lisbot|mannbot — пауза торговли, /resume — продолжить\n"
         "/buypause, /buyresume — закупки LisBot\n"
@@ -112,6 +112,13 @@ class TelegramControl:
                          "Цель задаётся в панели: «Аналитика» → «Цель месяца».".replace(",", " "), None)]
             return [((f"🎯 {g['profit']:,.0f} из {g['goal']:,.0f} ₽ ({g['progress']}%), прогноз {g['forecast']:,.0f} ₽"
                       + (f", нужно {g['need_per_day']:,.0f} ₽ в день" if g["need_per_day"] else "")).replace(",", " "), None)]
+        if cmd == "/orders":
+            rows = c.coordinator.stuck_orders()
+            if not rows:
+                return [("Застрявших заказов MannBot нет", None)]
+            return [("<b>Заказы MannBot без выдачи</b>\n" + "\n".join(
+                f"• {html.escape(str(r['order_id']))} — {html.escape(r['buyer'] or '?')}, {r['status_text']}, {r['hours']:.0f} ч"
+                for r in rows[:20]), None)]
         if cmd == "/ready":
             return [("\n".join(html.escape(x) for x in c.readiness.lines()), None)]
         if cmd == "/month":
