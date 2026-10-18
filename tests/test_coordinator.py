@@ -294,3 +294,19 @@ def test_losing_item_type_recommendation():
         assert "Пересмотреть закупку LisBot: ножи" in titles
         assert not any("винтовки" in t or "наклейки" in t for t in titles)     # в плюсе / мало продаж
     asyncio.run(go())
+
+
+def test_raise_min_roi_recommendation():
+    async def go():
+        cut = [{"min_roi": 0.08, "deals": 20, "profit": 40.0, "losers": 5, "roi": 4.0, "current": True},
+               {"min_roi": 0.1, "deals": 16, "profit": 46.0, "losers": 1, "roi": 6.0, "current": False},
+               {"min_roi": 0.12, "deals": 10, "profit": 44.0, "losers": 0, "roi": 7.0, "current": False},
+               {"min_roi": 0.15, "deals": 19, "profit": 90.0, "losers": 0, "roi": 9.0, "current": False}]   # отсекает 1 — мало
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'lis_roi_cut_30d': cut})}</facts>", {})
+        r = next(r for r in res["recommendations"] if r["title"].startswith("Поднять минимальный ROI"))
+        assert r["title"] == "Поднять минимальный ROI LisBot до 10%" and r["tool"] == "change_strategy"
+        assert json.loads(r["args_json"]) == {"changes": {"strategy.minRoi": 0.1}} and "-6.00 $" in r["why"]
+        cut[1]["profit"] = cut[2]["profit"] = 30.0                       # выше порог — меньше прибыли: не советуем
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'lis_roi_cut_30d': cut})}</facts>", {})
+        assert not any(r["title"].startswith("Поднять минимальный ROI") for r in res["recommendations"])
+    asyncio.run(go())

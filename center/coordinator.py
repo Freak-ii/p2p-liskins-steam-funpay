@@ -295,6 +295,19 @@ class StubBackend:
             reco(f"Пересмотреть закупку LisBot: {t['type'].lower()}",
                  f"За 30 дней продано {t['sold']} шт, итог {_n(t['profit'], 2)} $ (ROI {_n(t['roi'], 1)}%). Уберите эти предметы "
                  "из закупки или поднимите для них минимальный ROI (аналитика → LisBot · предметы).")
+        cut = f.get("lis_roi_cut_30d") if isinstance(f.get("lis_roi_cut_30d"), list) else []
+        cur = next((r for r in cut if r.get("current")), None)
+        if cur and not any(r["title"].startswith("Поднять минимальный ROI LisBot") for r in recs):
+            # порог выше нынешнего, который отсёк бы 3+ сделки, в сумме убыточные: прибыль только выросла бы
+            better = [(r["profit"] - cur["profit"], r) for r in cut if r["min_roi"] > cur["min_roi"]
+                      and cur["deals"] - r["deals"] >= 3 and r["profit"] > cur["profit"]]
+            if better:
+                gain, r = max(better, key=lambda x: x[0])
+                reco(f"Поднять минимальный ROI LisBot до {_n(r['min_roi'] * 100, 0)}%",
+                     f"За 30 дней сделки с прогнозом ROI от {_n(cur['min_roi'] * 100, 0)}% до {_n(r['min_roi'] * 100, 0)}% "
+                     f"({cur['deals'] - r['deals']} шт) в сумме дали {_n(-gain, 2)} $. С порогом {_n(r['min_roi'] * 100, 0)}% "
+                     f"прибыль была бы {_n(r['profit'], 2)} $ вместо {_n(cur['profit'], 2)} $ (аналитика → «Если бы минимальный ROI был другим»).",
+                     "change_strategy", {"changes": {"strategy.minRoi": r["min_roi"]}})
         cu = f.get("customers") or {}
         if (cu.get("counts") or {}).get("sleeping"):
             names = ", ".join(x["username"] or str(x["funpay_id"]) for x in cu.get("sleeping_top", [])[:3])
@@ -849,7 +862,8 @@ class Coordinator:
             except Exception as e:  # noqa: BLE001
                 out["readiness"] = {"error": str(e)}
         try:
-            out["lis_types_30d"] = (await asyncio.to_thread(c.analytics.lisbot_details, 30))["by_type"]
+            ld = await asyncio.to_thread(c.analytics.lisbot_details, 30)
+            out["lis_types_30d"], out["lis_roi_cut_30d"] = ld["by_type"], ld.get("roi_cut") or []
         except Exception as e:  # noqa: BLE001
             out["lis_types_30d"] = {"error": str(e)}
         try:
