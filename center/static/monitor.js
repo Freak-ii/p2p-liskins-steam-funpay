@@ -91,7 +91,8 @@ async function refreshMonitor() {
       <span class="spacer" style="flex:1"></span>
       <button class="btn" onclick="openMonSettings()">Настройки уведомлений</button>
       <button class="btn" onclick="monTest()">Проверить</button>
-      <button class="btn" onclick="openReport()">Отчёт за сутки</button></div></div>
+      <button class="btn" onclick="openReport()">Отчёт за сутки</button>
+      <button class="btn" onclick="openReport('week')">За неделю</button></div></div>
     <div class="tabs" style="margin-top:10px">${tabs}</div>
     <div class="grid" id="monCharts">${Object.entries(monHist.bots).map(([n, b]) => botChart(n, b, monHist)).join('')}</div>
     <details class="card" style="margin-top:14px"><summary>Уведомления центра (${st.notifications.length})</summary>
@@ -101,13 +102,16 @@ async function refreshMonitor() {
 
 async function monTest() { flash('Отправляю…'); const r = await api('/api/monitor/test', {}); flash(r.message, !r.ok); refreshMonitor(); }
 
-async function openReport() {
-  const r = await api('/api/monitor/report');
+let repPeriod = '';
+async function openReport(period = '') {
+  repPeriod = period;
+  const r = await api(`/api/monitor/report${period ? '?period=' + period : ''}`);
+  $('#repTitle').textContent = period === 'week' ? 'Отчёт центра за неделю' : 'Отчёт центра за сутки';
   $('#repText').innerHTML = esc(r.text).replace(/&lt;(\/?)(b|i|code)&gt;/g, '<$1$2>');
   $('#repDlg').showModal();
 }
 
-const MON_FIELDS = ['telegram_enabled', 'telegram_token', 'telegram_chat_id', 'dedup_minutes', 'quiet_hours', 'quiet_allow_critical',
+const MON_FIELDS = ['telegram_enabled', 'telegram_token', 'telegram_chat_id', 'telegram_commands', 'dedup_minutes', 'quiet_hours', 'quiet_allow_critical',
   'bot_alert_levels', 'heartbeat_url', 'heartbeat_seconds', 'fail_when_bot_down', 'daily_report_enabled', 'daily_report_time'];
 async function openMonSettings() {
   const s = await api('/api/monitor/settings');
@@ -117,6 +121,8 @@ async function openMonSettings() {
     if (el.type === 'checkbox') el.checked = !!s[k]; else el.value = Array.isArray(s[k]) ? s[k].join(', ') : (s[k] ?? '');
   }
   $('#monTokHint').textContent = s.telegram_token_set ? '(сохранён — оставьте пустым, чтобы не менять)' : s.telegram_source === 'LisBot' ? '(сейчас берётся из подключений LisBot)' : '';
+  const cs = s.telegram_commands_state || {};
+  $('#monCmdHint').textContent = cs.info ? `(${cs.info})` : '';
   $('#monDlg').showModal();
 }
 
@@ -128,6 +134,8 @@ document.body.insertAdjacentHTML('beforeend', `
   <label><input type="checkbox" name="telegram_enabled" style="width:auto"> Отправлять в Telegram</label>
   <label>Токен Telegram-бота <span class="muted small" id="monTokHint"></span></label><input name="telegram_token" autocomplete="off">
   <label>Chat id (можно несколько через запятую)</label><input name="telegram_chat_id" autocomplete="off">
+  <label><input type="checkbox" name="telegram_commands" style="width:auto"> Команды и кнопки одобрения в Telegram <span class="muted small" id="monCmdHint"></span></label>
+  <p class="muted small" style="margin:2px 0 0">Работают со своим Telegram-ботом центра (не тем, что у LisBot) и только из указанных chat id: /status, /report, /stock, /proposals, /pause, /resume, /buypause, /buyresume, /backup.</p>
   <label>Не повторять одинаковое уведомление чаще, чем раз в N минут</label><input name="dedup_minutes" type="number" min="0">
   <label>Тихие часы, например 23:00-08:00 (пусто — без тихих часов)</label><input name="quiet_hours" placeholder="23:00-08:00">
   <label><input type="checkbox" name="quiet_allow_critical" style="width:auto"> Критичное приходит и в тихие часы</label>
@@ -143,7 +151,7 @@ document.body.insertAdjacentHTML('beforeend', `
   </div>
 </form></dialog>
 <dialog id="repDlg"><form method="dialog">
-  <h3>Отчёт центра за сутки</h3>
+  <h3 id="repTitle">Отчёт центра за сутки</h3>
   <pre id="repText" class="mon-report"></pre>
   <div class="row" style="margin-top:14px">
     <button class="btn primary" value="send">Отправить в Telegram</button>
@@ -160,7 +168,7 @@ $('#monDlg').addEventListener('close', async () => {
 });
 $('#repDlg').addEventListener('close', async () => {
   if ($('#repDlg').returnValue !== 'send') return;
-  const r = await api('/api/monitor/report', {});
+  const r = await api(`/api/monitor/report${repPeriod ? '?period=' + repPeriod : ''}`, {});
   flash(r.message, !r.ok); refreshMonitor();
 });
 

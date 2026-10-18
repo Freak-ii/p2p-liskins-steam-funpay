@@ -31,7 +31,12 @@ def test_demo_center_shows_lisbot_history(tmp_path):
         assert p["bots"]["lisbot"]["deals"] > 5 and p["rate"]["source"] == "LisBot (Steam)"
         deals = c.crm.deals(q="", bot="lisbot", group="", days=None, dry=False, sort="created_at", desc=True,
                             limit=100, offset=0)
-        assert deals["groups"]["open"] == 3 and deals["groups"]["done"] > 5
+        assert deals["groups"]["open"] == 4 and deals["groups"]["done"] > 5
+        inv = c.inventory.lisbot()                       # склад по настоящей схеме LisBot
+        assert inv["n"] == 4 and inv["unvalued"] == 0
+        stale = inv["items"][0]
+        assert stale["name"].startswith("Desert Eagle") and stale["value_source"] == "рынок"
+        assert set(stale["flags"]) == {"долго лежит", "в минусе", "лимит перевыставлений"}
         assert c.coordinator.detect() == []            # демо-история не вызывает аномалий и автопаузы
         assert c.workers["lisbot"].alerts(5)
         c.events.close()

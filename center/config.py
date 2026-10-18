@@ -63,6 +63,19 @@ DEFAULTS: dict = {
             "fail_when_bot_down": False,    # слать <url>/fail, пока включённый бот не работает
         },
         "daily_report": {"enabled": True, "time": "09:00"},
+        "weekly_report": {"enabled": True, "weekday": 0, "time": "09:00"},   # 0 — понедельник
+    },
+    "inventory": {                   # center/inventory.py
+        "lis_old_days": 0,           # предмет LisBot «долго лежит» после стольких дней; 0 — как sell.maxHoldDaysAlert LisBot
+        "mann_days_warn": 3,         # ключей MannBot меньше чем на столько дней продаж — уведомление
+        "mann_rate_days": 14,        # скорость продаж ключей — за столько последних дней
+        "check_seconds": 900,
+    },
+    "backup": {                      # center/backup.py
+        "enabled": True,
+        "time": "04:00",             # ежедневная копия в это время (или при первом запуске после него)
+        "keep": 14,                  # сколько копий каждого вида хранить
+        "dir": "",                   # пусто — center-data/backups; можно папку Яндекс Диска / Google Drive
     },
     "coordinator": {                 # center/coordinator.py
         "enabled": True,
@@ -82,6 +95,9 @@ DEFAULTS: dict = {
             "loss_streak": 4,        # столько продаж LisBot подряд в минус…
             "loss_streak_min_usd": 5,     # …на общую сумму не меньше — пауза закупок
             "refunds_24h": 3,        # столько возвратов MannBot за сутки — предложить паузу
+            "item_loss_sales": 3,    # предмет LisBot продан столько раз за item_loss_days…
+            "item_loss_days": 30,
+            "item_loss_min_usd": 3,  # …с общим убытком не меньше — предложить выключить его закупку
             "cooldown_hours": 6,     # одна и та же аномалия не чаще
         },
     },
