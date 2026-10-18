@@ -96,6 +96,11 @@ function anLis(d) {
       <td>${signed(i.profit, 'USD')}</td><td>${pct(i.roi)}</td><td>${i.hold_days == null ? '—' : i.hold_days + ' дн'}</td><td>${pct(i.accuracy)}</td></tr>`).join('')
       || '<tr><td colspan="7" class="muted">Сделок пока нет</td></tr>'}</tbody></table></div>
     <div class="muted small" style="margin-top:6px">Суммы в $. «Прогноз» — фактическая выручка в % от оценки при покупке.</div>
+    ${(d.by_hold || []).length > 1 ? `<h3 style="margin-top:14px">Сколько держали до продажи</h3>
+    <table class="pnl"><thead><tr><th>Удержание</th><th>Сделок</th><th>В минус</th><th>Прибыль</th><th>ROI</th></tr></thead><tbody>
+      ${d.by_hold.map((h) => `<tr><td>${esc(h.label)}</td><td>${h.deals}</td><td class="${h.losers ? 'neg' : ''}">${h.losers}</td>
+        <td>${signed(h.profit, 'USD')}</td><td>${pct(h.roi)}</td></tr>`).join('')}</tbody></table>
+    <div class="muted small" style="margin-top:6px">От получения предмета до продажи, вместе с 7 днями Trade Protection. Если долгие сделки уходят в минус, стоит раньше снижать цену или не брать медленные предметы.</div>` : ''}
     ${(d.roi_cut || []).length ? `<h3 style="margin-top:14px">Если бы минимальный ROI был другим</h3>
     <table class="pnl"><thead><tr><th>Мин. ROI</th><th>Сделок</th><th>В минус</th><th>Прибыль</th><th>ROI</th></tr></thead><tbody>
       ${d.roi_cut.map((r) => `<tr${r.current ? ' style="font-weight:600"' : ''}><td>${Math.round(r.min_roi * 100)}%${r.current ? ' · сейчас' : ''}</td><td>${r.deals}</td>
