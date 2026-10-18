@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS monitor_kv (k TEXT PRIMARY KEY, v TEXT);
 # события журнала центра, о которых сообщаем всегда (плюс любые critical)
 NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.unhealthy", "worker.missing_deps",
                 "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
-                "backup.failed", "backup.restored"}
+                "backup.failed", "backup.restored", "inventory.low_stock"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
 
@@ -550,6 +550,15 @@ class Monitor:
             crit = self.db.execute("SELECT COUNT(*) FROM events WHERE ts >= ? AND level='critical'", (since,)).fetchone()[0]
             sent = self.db.execute("SELECT COUNT(*) FROM notifications WHERE ts >= ? AND status != 'duplicate'",
                                    (since,)).fetchone()[0]
+        inv = getattr(self.center, "inventory", None)
+        if inv:
+            try:
+                stock = inv.report_lines()
+            except Exception:  # noqa: BLE001
+                stock = []
+            if stock:
+                lines.append("")
+                lines += [html.escape(x) for x in stock]
         lines.append("")
         lines.append(f"Центр работает {self._dur(now - self.center.started_at)} · критических событий {crit} · уведомлений {sent}")
         bk = getattr(getattr(self.center, "backup", None), "last", None)

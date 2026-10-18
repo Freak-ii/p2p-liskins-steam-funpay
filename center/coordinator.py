@@ -264,6 +264,18 @@ class StubBackend:
                  "change_strategy", {"changes": {"strategy.minRoi": 0.12}})
         for w in (p7.get("warnings") or [])[:2]:
             reco("Проверить настройки MannBot", w)
+        inv = f.get("inventory") or {}
+        il, im = inv.get("lisbot") or {}, inv.get("mannbot") or {}
+        if il.get("n"):
+            hi.append(f"Склад LisBot: {il['n']} шт на ${_n(il.get('cost'), 2)}, по рынку {_n(il.get('pnl'), 2)} $")
+        if il.get("losing") or il.get("old"):
+            reco("Разобрать залежавшиеся предметы LisBot",
+                 f"В минусе по рынку: {il.get('losing', 0)}, лежат дольше {_n(il.get('old_days'), 0)} дн: {il.get('old', 0)}. "
+                 "Решите, держать или снизить цену (раздел «Склад» в аналитике).")
+        if im.get("level") in ("low", "empty"):
+            reco("Пополнить склад ключей MannBot",
+                 f"На складе {im.get('stock')} ключей" + (f", хватит примерно на {_n(im.get('days_left'), 1)} дн."
+                                                          if im.get("days_left") is not None else "."))
         for a in f.get("anomalies_24h", [])[:3]:
             hi.append(f"Аномалия: {a}")
         bad = [b["title"] for b in f.get("bots", []) if b["state"] != RUNNING]
@@ -685,6 +697,10 @@ class Coordinator:
             crit = [dict(r) for r in self.db.execute(
                 "SELECT source, kind, message FROM events WHERE ts>=? AND level IN ('critical','warn') ORDER BY id DESC LIMIT 15",
                 (self.clock() - 86400,))]
+        try:
+            out["inventory"] = c.inventory.brief()
+        except Exception as e:  # noqa: BLE001
+            out["inventory"] = {"error": str(e)}
         out["events_24h"] = crit
         out["open_proposals"] = [{"id": p["id"], "title": p["title"], "tool": p["tool"], "args": p["args"]}
                                  for p in self.decisions(20, kind="proposal", status="proposed")]

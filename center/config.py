@@ -64,6 +64,12 @@ DEFAULTS: dict = {
         },
         "daily_report": {"enabled": True, "time": "09:00"},
     },
+    "inventory": {                   # center/inventory.py
+        "lis_old_days": 0,           # предмет LisBot «долго лежит» после стольких дней; 0 — как sell.maxHoldDaysAlert LisBot
+        "mann_days_warn": 3,         # ключей MannBot меньше чем на столько дней продаж — уведомление
+        "mann_rate_days": 14,        # скорость продаж ключей — за столько последних дней
+        "check_seconds": 900,
+    },
     "backup": {                      # center/backup.py
         "enabled": True,
         "time": "04:00",             # ежедневная копия в это время (или при первом запуске после него)

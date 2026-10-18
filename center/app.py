@@ -11,6 +11,7 @@ from pathlib import Path
 
 from center.analytics import Analytics
 from center.backup import Backup
+from center.inventory import Inventory
 from center.bots import BotWorker, LisBotWorker, MannBotWorker
 from center.config import CenterConfig
 from center.crm import Crm
@@ -53,6 +54,7 @@ class Center:
         self.monitor = Monitor(self)       # до записи «Центр запущен»: проверяет, не выключался ли центр аварийно
         self.coordinator = Coordinator(self)
         self.backup = Backup(self)
+        self.inventory = Inventory(self)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))
@@ -62,6 +64,7 @@ class Center:
         await self.monitor.start()
         await self.coordinator.start()
         await self.backup.start()
+        await self.inventory.start()
         for name, w in self.workers.items():
             if not self.enabled(name):
                 w._set(DISABLED, "выключен в center.yaml")
@@ -80,6 +83,7 @@ class Center:
         await asyncio.gather(*(w.stop("завершение центра", timeout=stop_timeout) for w in self.workers.values()),
                              return_exceptions=True)
         await self.backup.stop()
+        await self.inventory.stop()
         await self.coordinator.stop()
         await self.monitor.stop()
         self.events.add("center", "info", "center.stop", "Центр остановлен")
