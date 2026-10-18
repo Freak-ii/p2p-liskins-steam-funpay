@@ -112,6 +112,8 @@ function anMann(d) {
     <table><tbody>${d.funnel.map((f) => `<tr><td style="width:40%">${esc(f.stage)}</td><td style="width:15%">${f.n}</td>
       <td><div class="bar" style="width:${f.pct || 0}%" title="${pct(f.pct)}"></div></td><td style="width:12%" class="muted">${pct(f.pct)}</td></tr>`).join('')}</tbody></table>
     <div class="muted small" style="margin-top:6px">Медианы: ссылка ${dur(t.link)} · трейд ${dur(t.offer)} · принятие ${dur(t.accept)}.</div>
+    ${(d.problems || []).length ? `<h4 style="margin:12px 0 4px">Почему заказы не дошли до выдачи</h4><table><tbody>
+      ${d.problems.map((p) => `<tr><td>${esc(p.reason)}</td><td style="width:12%">${p.n}</td><td class="muted small">${Object.entries(p.statuses).map(([k, v]) => `${esc(k)} ${v}`).join(', ')}</td></tr>`).join('')}</tbody></table>` : ''}
     ${d.orders ? whenBuy(d.by_hour, d.by_weekday) : ''}`;
 }
 

@@ -118,6 +118,12 @@ def _day(ts: float) -> str:
     return dt.date.fromtimestamp(ts).isoformat()
 
 
+# коды fail_reason MannBot (core/engine.py) по-русски; остальные (ошибки Steam) показываются как есть
+MANN_FAIL = {"out_of_stock": "нет ключей на складе", "too_many_keys": "слишком много ключей в заказе",
+             "confirm_failed": "обмен не подтвердился в Steam", "offer_mismatch": "обмен не совпал с заказом",
+             "refund": "возврат", "rate_limit": "Steam ограничил запросы", "network": "нет связи со Steam"}
+MANN_STATUS_RU = {"refunded": "возврат", "blocked": "заблокирован", "manual": "вручную"}
+
 WEAPON_TYPES = (
     ("Винтовки", ("AK-47", "M4A4", "M4A1-S", "FAMAS", "Galil AR", "AUG", "SG 553")),
     ("Снайперские", ("AWP", "SSG 08", "SCAR-20", "G3SG1")),
@@ -485,7 +491,26 @@ class Analytics:
                 lt = time.localtime(r["created_at"])
                 by_hour[lt.tm_hour] += 1
                 by_wday[lt.tm_wday] += 1
+        # почему заказы не дошли до выдачи: возвраты, блокировки антифродом, ручной разбор — по причинам
+        problems: dict[str, dict] = {}
+        for r in rows:
+            if r["status"] not in ("refunded", "blocked", "manual"):
+                continue
+            keys = r.keys()
+            why = str(r["fail_reason"] or "").strip() if "fail_reason" in keys else ""
+            if not why and r["status"] == "blocked" and "risk_reasons" in keys:
+                try:
+                    reasons = json.loads(r["risk_reasons"] or "[]")
+                except ValueError:
+                    reasons = []
+                why = "антифрод: " + str(reasons[0]) if reasons else ""
+            why = MANN_FAIL.get(why, why) or "причина не записана"
+            p = problems.setdefault(why, {"reason": why, "n": 0, "statuses": {}})
+            p["n"] += 1
+            st = MANN_STATUS_RU.get(r["status"], r["status"])
+            p["statuses"][st] = p["statuses"].get(st, 0) + 1
         return {
+            "problems": sorted(problems.values(), key=lambda p: -p["n"])[:8],
             "by_hour": by_hour, "by_weekday": by_wday,
             "orders": n, "funnel": [{"stage": s, "n": v, "pct": _r(v / n * 100, 1) if n else None} for s, v in funnel],
             "statuses": statuses,

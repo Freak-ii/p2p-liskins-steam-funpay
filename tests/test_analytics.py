@@ -153,3 +153,23 @@ def test_api_and_export(tmp_path):
             assert "AWP | Asiimov" in sheet and "Прибыль, ₽" in sheet
         center.events.close()
     asyncio.run(go())
+
+
+def test_mannbot_problem_reasons(tmp_path):
+    seed(tmp_path)
+    con = sqlite3.connect(tmp_path / "mannbot" / "data" / "mannbot.sqlite3")
+    con.executescript("ALTER TABLE orders ADD COLUMN fail_reason TEXT DEFAULT ''; "
+                      "ALTER TABLE orders ADD COLUMN risk_reasons TEXT DEFAULT '[]';")
+    for oid, st, why, risk in (("P1", "manual", "out_of_stock", "[]"), ("P2", "manual", "out_of_stock", "[]"),
+                               ("P3", "blocked", "", '["Steam-аккаунт младше 30 дней"]'), ("P4", "manual", "trade_ban", "[]")):
+        con.execute("INSERT INTO orders(order_id,status,created_at,price,keys_qty,quantity,currency,fail_reason,risk_reasons) "
+                    "VALUES(?,?,?,200,1,1,'₽',?,?)", (oid, st, NOW - 3600, why, risk))
+    con.commit()
+    con.close()
+    c = Center(tmp_path)
+    probs = {p["reason"]: p for p in c.analytics.mannbot_details(30)["problems"]}
+    assert probs["нет ключей на складе"]["n"] == 2 and probs["нет ключей на складе"]["statuses"] == {"вручную": 2}
+    assert probs["антифрод: Steam-аккаунт младше 30 дней"]["n"] == 1
+    assert probs["trade_ban"]["n"] == 1 and probs["причина не записана"]["statuses"] == {"возврат": 1}   # A3 из seed
+    assert list(probs)[0] == "нет ключей на складе"
+    c.events.close()
