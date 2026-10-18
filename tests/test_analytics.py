@@ -91,6 +91,10 @@ def test_pnl_daily_details(tmp_path):
         red = next(i for i in ld["items"] if i["name"] == "AK-47 | Redline")
         assert red["sold"] == 2 and red["profit"] == 3.0 and red["roi"] == 15.0
         assert ld["forecast"]["n"] == 3 and ld["hold"]["median_days"] is not None
+        types = {t["type"]: t for t in ld["by_type"]}
+        assert red["type"] == "Винтовки" and "sold_spent" not in red
+        assert types["Винтовки"]["names"] == 2 and types["Винтовки"]["bought"] == 3 and types["Винтовки"]["profit"] == 3.0
+        assert types["Винтовки"]["roi"] == 15.0 and types["Снайперские"]["roi"] == -2.0
 
         md = a.mannbot_details(30)
         assert md["orders"] == 4 and md["funnel"][3]["n"] == 2 and md["confirm_rate"] == 50.0

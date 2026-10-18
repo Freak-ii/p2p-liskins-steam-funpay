@@ -89,6 +89,8 @@ function anLis(d) {
   $('#anLis').innerHTML = `<h3><span class="swatch" style="background:var(--s-lisbot)"></span>LisBot · предметы</h3>
     <div class="stat">${st(pct(f.fact_to_forecast), 'факт / прогноз цены')}${st(pct(f.mean_abs_error), 'ошибка прогноза')}
       ${st(d.hold.median_days == null ? '—' : d.hold.median_days + ' дн', 'медиана удержания')}${st(open, 'в работе сейчас')}</div>
+    ${(d.by_type || []).length > 1 ? `<table class="pnl" style="margin-bottom:12px"><thead><tr><th>Тип</th><th>Предметов</th><th>Куплено</th><th>Продано</th><th>Прибыль</th><th title="Прибыль к цене покупки проданных">ROI</th></tr></thead><tbody>
+      ${d.by_type.map((t) => `<tr><td>${esc(t.type)}</td><td>${t.names}</td><td>${t.bought}</td><td>${t.sold || 0}</td><td>${signed(t.profit, 'USD')}</td><td>${pct(t.roi)}</td></tr>`).join('')}</tbody></table>` : ''}
     <div class="scroll"><table class="pnl"><thead><tr><th>Предмет</th><th>Куплено</th><th>Продано</th><th>Прибыль</th><th>ROI</th><th>Удерж.</th><th>Прогноз</th></tr></thead><tbody>
     ${d.items.map((i) => `<tr><td title="${esc(i.name)}">${esc(i.name.length > 34 ? i.name.slice(0, 33) + '…' : i.name)}</td><td>${i.bought}</td><td>${i.sold || 0}</td>
       <td>${signed(i.profit, 'USD')}</td><td>${pct(i.roi)}</td><td>${i.hold_days == null ? '—' : i.hold_days + ' дн'}</td><td>${pct(i.accuracy)}</td></tr>`).join('')

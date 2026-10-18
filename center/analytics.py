@@ -118,6 +118,29 @@ def _day(ts: float) -> str:
     return dt.date.fromtimestamp(ts).isoformat()
 
 
+WEAPON_TYPES = (
+    ("Винтовки", ("AK-47", "M4A4", "M4A1-S", "FAMAS", "Galil AR", "AUG", "SG 553")),
+    ("Снайперские", ("AWP", "SSG 08", "SCAR-20", "G3SG1")),
+    ("Пистолеты", ("Glock-18", "USP-S", "P2000", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto",
+                   "Dual Berettas", "R8 Revolver")),
+    ("Пистолеты-пулемёты", ("MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon")),
+    ("Тяжёлое", ("Nova", "XM1014", "Sawed-Off", "MAG-7", "M249", "Negev")),
+)
+
+
+def item_type(name: str) -> str:
+    """Тип предмета CS2 по рыночному названию (StatTrak™ и Souvenir не мешают): для аналитики по категориям."""
+    n = (name or "").replace("StatTrak™ ", "").replace("Souvenir ", "")
+    if n.startswith("★"):
+        return "Перчатки" if "Gloves" in n or "Hand Wraps" in n else "Ножи"
+    if n.startswith("Sticker |"):
+        return "Наклейки"
+    if "|" not in n and any(k in n for k in ("Case", "Capsule", "Package")):
+        return "Кейсы и капсулы"
+    weapon = n.split(" | ")[0].strip()
+    return next((title for title, keys in WEAPON_TYPES if weapon in keys), "Другое")
+
+
 class Analytics:
     def __init__(self, center):
         self.center = center
@@ -379,15 +402,29 @@ class Analytics:
             SELECT name, COUNT(*) bought, SUM(status='sold') sold,
                    COALESCE(SUM(buy_price_usd),0) spent,
                    COALESCE(SUM(CASE WHEN status='sold' THEN profit_usd END),0) profit,
+                   COALESCE(SUM(CASE WHEN status='sold' THEN buy_price_usd END),0) sold_spent,
                    AVG(CASE WHEN status='sold' AND buy_price_usd>0 THEN profit_usd / buy_price_usd END) * 100 roi,
                    AVG(CASE WHEN status='sold' THEN (sold_at - COALESCE(received_at, created_at)) / 86400000.0 END) hold_days,
                    AVG(CASE WHEN status='sold' AND expected_net_usd>0 THEN sold_usd / expected_net_usd END) * 100 accuracy,
                    SUM(status IN ({','.join('?' * len(LIS_HELD))})) open
             FROM items WHERE dry_run=0 AND status<>'failed' AND created_at>=? GROUP BY name
             ORDER BY profit DESC""", (*LIS_HELD, since_ms))]
+        types: dict[str, dict] = {}
         for it in items:
+            t = types.setdefault(item_type(it["name"]), {"type": item_type(it["name"]), "bought": 0, "sold": 0, "spent": 0.0,
+                                                         "profit": 0.0, "sold_spent": 0.0, "names": 0})
+            t["names"] += 1
+            for k in ("bought", "sold", "spent", "profit", "sold_spent"):
+                t[k] += it[k] or 0
+            it["type"] = t["type"]
             for k in ("spent", "profit", "roi", "hold_days", "accuracy"):
                 it[k] = _r(it[k], 1 if k in ("roi", "hold_days", "accuracy") else 2)
+            del it["sold_spent"]
+        by_type = sorted(types.values(), key=lambda t: -t["profit"])
+        for t in by_type:
+            t["roi"] = _r(t["profit"] / t["sold_spent"] * 100, 1) if t["sold_spent"] else None
+            t["spent"], t["profit"] = _r(t["spent"]), _r(t["profit"])
+            del t["sold_spent"]
         acc = _rows(self.lis_db, "SELECT sold_usd, expected_net_usd FROM items WHERE dry_run=0 AND status='sold' AND "
                     "expected_net_usd>0 AND sold_at>=?", (since_ms,))
         ratios = [r["sold_usd"] / r["expected_net_usd"] for r in acc if r["sold_usd"] is not None]
@@ -400,7 +437,7 @@ class Analytics:
         funnel = {r["status"]: r["n"] for r in _rows(self.lis_db, "SELECT status, COUNT(*) n FROM items WHERE dry_run=0 "
                                                      "AND created_at>=? GROUP BY status", (since_ms,))}
         return {
-            "items": items, "by_mode": by_mode, "funnel": funnel,
+            "items": items, "by_mode": by_mode, "by_type": by_type, "funnel": funnel,
             "forecast": {"n": len(ratios), "fact_to_forecast": _r(statistics.mean(ratios) * 100, 1) if ratios else None,
                          "mean_abs_error": _r(mape, 1)},
             "hold": {"median_days": _r(_median(holds), 1), "avg_days": _r(statistics.mean([h for h in holds if h is not None]), 1)
