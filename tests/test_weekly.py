@@ -119,5 +119,6 @@ def test_weekly_report_by_item_type(tmp_path):
         text = await c.monitor.weekly_report()
         assert "По типам: Ножи +$5.00 (1 шт) · Винтовки +$3.00 (2 шт)" in text
         assert "По сроку удержания: до 8 дн +$3.00 (2 шт) · 10–14 дн +$5.00 (1 шт)" in text
+        assert "MannBot, не дошли до выдачи: причина не записана — 1 (возврат 1)" in text      # A3 из seed
         c.events.close()
     asyncio.run(go())

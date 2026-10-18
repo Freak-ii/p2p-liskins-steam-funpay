@@ -823,6 +823,14 @@ class Monitor:
                 lines.append(f"Цель месяца: {_num(round(g['profit']))} из {_num(round(g['goal']))} ₽ ({_pct(g['progress'] / 100)}), "
                              f"прогноз {_num(round(g['forecast']))} ₽")
         days = 30 if month else 7
+        try:
+            probs = (await asyncio.to_thread(a.mannbot_details, days)).get("problems") or []
+        except Exception:  # noqa: BLE001
+            log.exception("проблемные заказы MannBot для отчёта")
+            probs = []
+        if probs:
+            lines.append("MannBot, не дошли до выдачи: " + " · ".join(
+                f"{html.escape(p['reason'])} — {p['n']} ({', '.join(f'{k} {v}' for k, v in p['statuses'].items())})" for p in probs[:3]))
         h = self.history(24 * days, buckets=30 if month else 28)
         lines += ["", f"Аптайм за {days} дней: " + " · ".join(
             f"{html.escape(self.center.workers[n].title.split(' ·')[0])} {_pct(b['uptime'])}, падений {b['crashes']}"
