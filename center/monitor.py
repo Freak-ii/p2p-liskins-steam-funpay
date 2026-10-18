@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS monitor_kv (k TEXT PRIMARY KEY, v TEXT);
 NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.unhealthy", "worker.missing_deps",
                 "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
                 "backup.failed", "backup.restored", "inventory.low_stock",
-                "inventory.low_balance", "monitor.low_disk"}
+                "inventory.low_balance", "monitor.low_disk", "monitor.auto_restart"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
 
@@ -479,6 +479,20 @@ class Monitor:
                 self._reported_down.add(name)
                 self.events.add(name, "critical", "monitor.unresponsive",
                                 f"{w.title} не отвечает {self._fails[name]} проверки подряд (процесс жив)")
+            limit = int(self.cfg.get("restart_unresponsive_after") or 0)
+            if limit and self._fails[name] >= limit:
+                last = float(self.kv_get(f"auto_restart:{name}") or 0)
+                if self.clock() - last >= 3600:          # не чаще раза в час: если не помогло — решает человек
+                    self.kv_set(f"auto_restart:{name}", self.clock())
+                    self._fails[name] = 0
+                    self.events.add(name, "critical", "monitor.auto_restart",
+                                    f"{w.title} завис: не отвечает {limit} проверок подряд — центр перезапускает его")
+                    try:
+                        await w.restart("бот завис")
+                    except Exception as e:  # noqa: BLE001
+                        log.exception("перезапуск зависшего бота")
+                        self.events.add(name, "critical", "monitor.auto_restart_failed",
+                                        f"{w.title}: перезапустить не удалось: {e}")
             return
         if ok:
             self._fails[name] = 0

@@ -241,3 +241,32 @@ def test_bot_ack_calls_bot_api(tmp_path):
         await srv.close()
         c.events.close()
     asyncio.run(go())
+
+
+def test_hung_bot_is_restarted_once_an_hour(tmp_path):
+    async def go():
+        c, sent = _center(tmp_path, {"unresponsive_after": 2, "restart_unresponsive_after": 3})
+        w = c.workers["lisbot"]
+        w.proc, w.state, w._want_running = _FakeProc(), RUNNING, True
+        restarts = []
+
+        async def health():
+            return False
+
+        async def restart(reason="панель"):
+            restarts.append(reason)
+            return "перезапущен"
+        w.health, w.restart = health, restart
+        for _ in range(3):
+            await c.monitor.sample()
+        assert restarts == ["бот завис"]
+        kinds = [e["kind"] for e in c.events.recent(10)]
+        assert "monitor.auto_restart" in kinds and "monitor.unresponsive" in kinds
+        for _ in range(6):                                          # после перезапуска опять завис — второй раз за час нельзя
+            await c.monitor.sample()
+        assert restarts == ["бот завис"]
+        c.monitor.kv_set("auto_restart:lisbot", time.time() - 3700)
+        await c.monitor.sample()
+        assert len(restarts) == 2
+        c.events.close()
+    asyncio.run(go())
