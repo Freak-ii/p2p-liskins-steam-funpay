@@ -30,6 +30,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
+from center.analytics import item_type
 from center.workers import BACKOFF, CRASHED, DISABLED, RUNNING, STATE_TEXT
 
 log = logging.getLogger("center.monitor")
@@ -767,6 +768,12 @@ class Monitor:
             losers = [(p, n, k) for p, n, k in ranked if p < 0][-3:]
             if losers:
                 lines += ["<b>В минус</b>"] + [f"• {html.escape(k)} — −${abs(p):.2f} за {n} шт" for p, n, k in reversed(losers)]
+            types: dict[str, list[float]] = defaultdict(list)
+            for k, v in items.items():
+                types[item_type(k)] += v
+            if len(types) > 1:
+                tr = sorted(((sum(v), len(v), k) for k, v in types.items()), reverse=True)
+                lines.append("По типам: " + " · ".join(f"{k} {'+' if p >= 0 else '−'}${abs(p):.2f} ({n} шт)" for p, n, k in tr))
         target = float((self.center.cfg.data.get("analytics") or {}).get("month_goal_rub") or 0)
         if month:
             if target:

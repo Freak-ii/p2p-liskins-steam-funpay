@@ -101,3 +101,22 @@ def test_monthly_report_and_due(tmp_path):
         assert not c.monitor.monthly_due()
         c.events.close()
     asyncio.run(go())
+
+
+def test_weekly_report_by_item_type(tmp_path):
+    import sqlite3
+    from tests.test_analytics import DAY, NOW
+    seed(tmp_path)
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    con.execute("INSERT INTO items(name,mode,status,dry_run,buy_price_usd,expected_net_usd,received_at,sold_at,sold_usd,profit_usd,"
+                "created_at,updated_at) VALUES('★ Karambit | Doppler','rtba','sold',0,500,520,?,?,505,5,?,?)",
+                tuple(int((NOW - d * DAY) * 1000) for d in (8, 1, 9, 9)))
+    con.commit()
+    con.close()
+
+    async def go():
+        c = Center(tmp_path)
+        text = await c.monitor.weekly_report()
+        assert "По типам: Ножи +$5.00 (1 шт) · Винтовки +$3.00 (2 шт)" in text
+        c.events.close()
+    asyncio.run(go())
