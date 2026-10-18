@@ -428,7 +428,15 @@ class Analytics:
         statuses: dict[str, int] = {}
         for r in rows:
             statuses[r["status"]] = statuses.get(r["status"], 0) + 1
+        # когда покупают (местное время): по часам и дням недели — для тихих часов, поднятия лотов и пополнения склада
+        by_hour, by_wday = [0] * 24, [0] * 7
+        for r in rows:
+            if r["created_at"]:
+                lt = time.localtime(r["created_at"])
+                by_hour[lt.tm_hour] += 1
+                by_wday[lt.tm_wday] += 1
         return {
+            "by_hour": by_hour, "by_weekday": by_wday,
             "orders": n, "funnel": [{"stage": s, "n": v, "pct": _r(v / n * 100, 1) if n else None} for s, v in funnel],
             "statuses": statuses,
             "times": {"link": med("paid_at", "link_received_at", rows), "offer": med("link_received_at", "offer_sent_at", rows),

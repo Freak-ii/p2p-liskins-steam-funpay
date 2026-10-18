@@ -94,6 +94,7 @@ def test_pnl_daily_details(tmp_path):
 
         md = a.mannbot_details(30)
         assert md["orders"] == 4 and md["funnel"][3]["n"] == 2 and md["confirm_rate"] == 50.0
+        assert sum(md["by_hour"]) == 4 and sum(md["by_weekday"]) == 4 and len(md["by_hour"]) == 24
         assert md["times"]["total"] == 600 and md["keys_sold"] == 3
         center.events.close()
     asyncio.run(go())

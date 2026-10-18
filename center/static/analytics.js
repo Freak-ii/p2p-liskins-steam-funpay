@@ -104,7 +104,20 @@ function anMann(d) {
       ${st(pct(d.refund_rate), 'возвратов')}${st(dur(t.total), 'оплата → выдача')}${st(dur(t.confirm), 'выдача → подтверждение')}</div>
     <table><tbody>${d.funnel.map((f) => `<tr><td style="width:40%">${esc(f.stage)}</td><td style="width:15%">${f.n}</td>
       <td><div class="bar" style="width:${f.pct || 0}%" title="${pct(f.pct)}"></div></td><td style="width:12%" class="muted">${pct(f.pct)}</td></tr>`).join('')}</tbody></table>
-    <div class="muted small" style="margin-top:6px">Медианы: ссылка ${dur(t.link)} · трейд ${dur(t.offer)} · принятие ${dur(t.accept)}.</div>`;
+    <div class="muted small" style="margin-top:6px">Медианы: ссылка ${dur(t.link)} · трейд ${dur(t.offer)} · принятие ${dur(t.accept)}.</div>
+    ${d.orders ? whenBuy(d.by_hour, d.by_weekday) : ''}`;
+}
+
+// Когда покупают: столбики по часам суток и дням недели (местное время компьютера с центром)
+function whenBuy(hours, days) {
+  const bars = (arr, labels) => {
+    const mx = Math.max(1, ...arr);
+    return `<div class="when">${arr.map((n, i) => `<div title="${labels[i]}: ${n}"><i style="height:${Math.round(n / mx * 100)}%"></i><span>${labels[i]}</span></div>`).join('')}</div>`;
+  };
+  const top = hours.map((n, h) => [n, h]).sort((a, b) => b[0] - a[0]).slice(0, 3).filter(([n]) => n).map(([, h]) => `${h}:00`);
+  return `<h4 style="margin:12px 0 4px">Когда покупают</h4>
+    ${bars(hours, hours.map((_, h) => String(h)))}${bars(days, ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'])}
+    <div class="muted small">${top.length ? `Больше всего заказов в ${top.join(', ')}. Держите ключи на складе и не ставьте на эти часы тихие часы.` : ''}</div>`;
 }
 
 async function anLoad() {
