@@ -15,9 +15,9 @@ from center import winutil
 def test_vault_roundtrip_and_wrong_key(tmp_path, monkeypatch):
     monkeypatch.delenv("CENTER_SECRET_KEY", raising=False)
     v = SecretStore(tmp_path)
-    v.update({"lisbot.A": "секрет-1", "mannbot.funpay.golden_key": "gk"})
+    v.update({"lisbot.A": "секрет-1", "mannbot.funpay.golden_key": "golden-key-plain-7f3a"})
     raw = (tmp_path / "secrets.dat").read_bytes()
-    assert "секрет".encode() not in raw and b"gk" not in raw
+    assert "секрет".encode() not in raw and b"golden-key-plain" not in raw   # длинная строка: 2 символа случайно встречаются в шифротексте
     v2 = SecretStore(tmp_path)
     assert v2.get("lisbot.A") == "секрет-1" and v2.prefix("lisbot") == {"A": "секрет-1"}
     v2.set("lisbot.A", None)
