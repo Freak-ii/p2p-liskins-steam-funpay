@@ -46,7 +46,7 @@ async function invLoad() {
 
 // Мост ключей LisBot → MannBot: куплено за кошелёк Steam, ждут 7 дней, в обмене, принято MannBot
 function invBridge(b) {
-  if (!b || (!b.enabled && !b.bought)) return '<div class="muted small" style="margin-top:8px">Мост ключей выключен: LisBot может покупать ключи за кошелёк Steam и передавать их MannBot (настройки LisBot → «Мост ключей»).</div>';
+  if (!b || (!b.enabled && !b.bought)) return '<div class="muted small" style="margin-top:8px">Мост ключей выключен: LisBot может покупать ключи за кошелёк Steam и передавать их MannBot (панель LisBot → «Настройки» → поля «Мост ключей», см. docs/key-bridge.md).</div>';
   const cur = esc(b.currency || '');
   return `<h3 style="margin-top:12px">Мост ключей${b.enabled ? '' : ' <span class="tag">выключен</span>'}</h3>
     <div class="kpi mon-kpi">

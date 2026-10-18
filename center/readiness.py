@@ -111,7 +111,7 @@ class Readiness:
         gifts = sec_m.get("accept_gifts_from") or []
         gifts = {str(x).strip() for x in (gifts if isinstance(gifts, list) else [gifts]) if str(x).strip()}
         if kb.get("enabled") or gifts:
-            where = "Настройки LisBot → «Мост ключей» и security.accept_gifts_from у MannBot"
+            where = "LisBot: «Открыть панель бота» → «Настройки» → «Мост ключей»; MannBot: «Настройки» → «Безопасность»"
             to = _partner_steam64(kb.get("tradeUrl", ""))
             bad = []
             if kb.get("enabled"):
