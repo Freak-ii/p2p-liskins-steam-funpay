@@ -99,7 +99,10 @@ def make_app(center: Center) -> web.Application:
         w = worker(request)
         if w.state != "running":
             raise web.HTTPFound("/?msg=" + f"{w.title} не запущен")
-        raise web.HTTPFound(w.panel_url())
+        url = w.panel_url()
+        if w.bind_host not in ("127.0.0.1", "localhost"):        # Docker/VPS: тот же адрес, что у панели центра
+            url = url.replace("127.0.0.1", request.url.host or "127.0.0.1", 1)
+        raise web.HTTPFound(url)
 
     async def alerts(request: web.Request):
         return web.json_response(center.alerts(int(request.query.get("limit", 100))))

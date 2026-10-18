@@ -44,6 +44,8 @@ class BotWorker(Worker):
         self.executable = executable
         self.home.mkdir(parents=True, exist_ok=True)
         self.vault = vault or SecretStore(self.home.parent)
+        # Docker/VPS: CENTER_BOT_HOST=0.0.0.0 — панели ботов доступны снаружи контейнера (вход по их токену)
+        self.bind_host = os.environ.get("CENTER_BOT_HOST", "127.0.0.1")
 
     @property
     def base_url(self) -> str:
@@ -133,7 +135,8 @@ class MannBotWorker(BotWorker):
 
     def command(self) -> list[str]:
         py = self.executable or sys.executable
-        cmd = [py, "-m", "mannbot.app.launcher", "--home", str(self.home), "--port", str(self.port), "--no-browser"]
+        cmd = [py, "-m", "mannbot.app.launcher", "--home", str(self.home), "--host", self.bind_host,
+               "--port", str(self.port), "--no-browser"]
         if self.demo:
             cmd.append("--demo")
         return cmd
@@ -408,7 +411,7 @@ class LisBotWorker(BotWorker):
                 user = {}
         user["dataDir"] = str(self.data_dir)
         user.setdefault("dashboard", {})
-        user["dashboard"].update({"enabled": True, "host": "127.0.0.1", "port": self.port})
+        user["dashboard"].update({"enabled": True, "host": self.bind_host, "port": self.port})
         # Telegram включается, только когда заданы токен и chat id — иначе бот не стартует из-за проверки настроек
         s = self.secrets()
         user.setdefault("telegram", {})["enabled"] = bool(s.get("TELEGRAM_BOT_TOKEN") and s.get("TELEGRAM_CHAT_ID"))

@@ -56,10 +56,11 @@ class Center:
                 await w.start("автозапуск центра")
         self._poll_task = asyncio.create_task(self._poll_loop(), name="center-poll")
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, stop_timeout: float = 15) -> None:
         if self._poll_task:
             self._poll_task.cancel()
-        await asyncio.gather(*(w.stop("завершение центра") for w in self.workers.values()), return_exceptions=True)
+        await asyncio.gather(*(w.stop("завершение центра", timeout=stop_timeout) for w in self.workers.values()),
+                             return_exceptions=True)
         self.events.add("center", "info", "center.stop", "Центр остановлен")
         self.events.close()
 

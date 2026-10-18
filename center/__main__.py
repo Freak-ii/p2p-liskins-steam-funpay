@@ -7,10 +7,12 @@ import logging
 import signal
 import socket
 import sys
+import threading
 import urllib.request
 import webbrowser
 from logging.handlers import RotatingFileHandler
 
+from center import winutil
 from center.config import CenterConfig, default_home
 
 log = logging.getLogger("center")
@@ -48,7 +50,7 @@ def setup_logging(home) -> None:
     root.addHandler(fh)
 
 
-async def run(home, host: str, port: int, *, demo: bool, open_browser: bool) -> None:
+async def run(home, host: str, port: int, *, demo: bool, open_browser: bool, on_ready=None) -> None:
     from center.app import Center
     from center.web import start_web
     center = Center(home, demo=demo)
@@ -68,12 +70,23 @@ async def run(home, host: str, port: int, *, demo: bool, open_browser: bool) -> 
             loop.add_signal_handler(sig, center.quit_event.set)
         except (NotImplementedError, RuntimeError):   # Windows
             pass
+    done = threading.Event()
+    # Windows: закрытие окна консоли крестиком — успеть мягко остановить ботов (Windows ждёт ~5 с),
+    # остальное доделает Job Object: процессы ботов не переживут центр
+    def console_closed():
+        center.fast_exit = True
+        loop.call_soon_threadsafe(center.quit_event.set)
+        done.wait(4.5)
+    winutil.on_console_close(console_closed)
+    if on_ready:
+        on_ready(center, url, loop)
     try:
         await center.quit_event.wait()
     finally:
         log.info("Завершение работы центра…")
-        await center.shutdown()
+        await center.shutdown(stop_timeout=3 if getattr(center, "fast_exit", False) else 15)
         await runner.cleanup()
+        done.set()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -83,6 +96,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--demo", action="store_true", help="MannBot в демо-режиме с эмуляцией FunPay и Steam")
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--tray", action="store_true", help="значок в трее (портативная сборка для Windows)")
     args = ap.parse_args(argv)
 
     from pathlib import Path
@@ -101,6 +115,11 @@ def main(argv: list[str] | None = None) -> None:
             return
         sys.exit(f"Порт {port} занят другой программой: укажите другой через --port")
     setup_logging(home)
+    if args.tray:
+        from center.tray import run_with_tray
+        run_with_tray(lambda on_ready: run(home, host, port, demo=args.demo, open_browser=not args.no_browser,
+                                           on_ready=on_ready))
+        return
     try:
         asyncio.run(run(home, host, port, demo=args.demo, open_browser=not args.no_browser))
     except KeyboardInterrupt:
