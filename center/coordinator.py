@@ -67,7 +67,7 @@ BOTS = ("lisbot", "mannbot")
 LIMIT_KEYS = {"strategy.maxSpendPerHourUsd", "strategy.maxSpendPerDayUsd", "strategy.maxOpenExposureUsd",
               "strategy.maxItemCapitalShare", "strategy.maxItemPriceUsd", "strategy.balanceReservePct",
               "strategy.maxPerItemPerDay", "strategy.maxHeldPerItem", "risk.maxDailyLossUsd", "risk.lowBalanceUsd",
-              "risk.unknownSpendIsCritical", "risk.strictConfirmations"}
+              "risk.unknownSpendIsCritical", "risk.strictConfirmations", "risk.acceptFreeOffers"}
 STRATEGY_KEYS = {"strategy.minRoi", "strategy.roiPerHoldDay", "strategy.valuationQuantile", "strategy.minDailyVolume",
                  "strategy.bottomTolerancePct", "strategy.maxFloorRisePct", "strategy.maxBookSharePerScan",
                  "strategy.maxShareOfDailyVolume", "strategy.minItemPriceUsd", "strategy.scanIntervalSec",

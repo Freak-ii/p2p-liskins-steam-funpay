@@ -127,6 +127,7 @@
     "maxTradeOfferAgeMin": 60,
     "maxValuationStalenessHours": 24,
     "strictConfirmations": true,
+    "acceptFreeOffers": true,
     "fxSanity": { "min": 50, "max": 200 }
   },
 
