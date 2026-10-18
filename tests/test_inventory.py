@@ -114,3 +114,20 @@ def test_inventory_api_and_coordinator(tmp_path):
         assert any("залежавшиеся" in d["title"] for d in c.coordinator.decisions(20, kind="proposal")), b
         c.events.close()
     asyncio.run(go())
+
+
+def test_low_lis_balance_only_in_live_mode(tmp_path):
+    seed(tmp_path)
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    con.execute("INSERT INTO kv VALUES('balance.last', ?, 0)", (json.dumps({"balance": 4.5, "ts": ms(NOW)}),))
+    con.commit()
+    con.close()
+    c = Center(tmp_path)
+    c.summaries["lisbot"] = {"dry_run": True}
+    assert not c.inventory.lis_balance()["low"] and c.inventory.check_balance() is None
+    c.summaries["lisbot"] = {"dry_run": False}
+    assert c.inventory.check_balance() and c.inventory.check_balance() is None    # раз в сутки
+    ev = c.events.recent(3)[0]
+    assert ev["kind"] == "inventory.low_balance" and ev["source"] == "lisbot"
+    assert any("Баланс LIS-SKINS $4.50" in x for x in c.inventory.report_lines())
+    c.events.close()

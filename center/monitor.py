@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS monitor_kv (k TEXT PRIMARY KEY, v TEXT);
 # события журнала центра, о которых сообщаем всегда (плюс любые critical)
 NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.unhealthy", "worker.missing_deps",
                 "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
-                "backup.failed", "backup.restored", "inventory.low_stock"}
+                "backup.failed", "backup.restored", "inventory.low_stock",
+                "inventory.low_balance"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
 

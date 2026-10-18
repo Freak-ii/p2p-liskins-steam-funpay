@@ -25,7 +25,7 @@ PANEL_ONLY = {"set_live_mode", "withdraw"}          # деньги и боево
 HELP = ("<b>Центр перепродажи</b>\n"
         "/status — состояние ботов и тревоги\n"
         "/report — отчёт за сутки, /week — за неделю\n"
-        "/stock — склад LisBot и ключи MannBot\n"
+        "/stock — склад LisBot и ключи MannBot, /goal — цель месяца\n"
         "/proposals — предложения координатора с кнопками\n"
         "/pause lisbot|mannbot — пауза торговли, /resume — продолжить\n"
         "/buypause, /buyresume — закупки LisBot\n"
@@ -104,6 +104,13 @@ class TelegramControl:
             return [(self._status_text(), None)]
         if cmd == "/report":
             return [(c.monitor.daily_report(), None)]
+        if cmd == "/goal":
+            g = await c.analytics.goal()
+            if not g["goal"]:
+                return [(f"Прибыль с начала месяца {g['profit']:,.0f} ₽, прогноз {g['forecast']:,.0f} ₽. "
+                         "Цель задаётся в панели: «Аналитика» → «Цель месяца».".replace(",", " "), None)]
+            return [((f"🎯 {g['profit']:,.0f} из {g['goal']:,.0f} ₽ ({g['progress']}%), прогноз {g['forecast']:,.0f} ₽"
+                      + (f", нужно {g['need_per_day']:,.0f} ₽ в день" if g["need_per_day"] else "")).replace(",", " "), None)]
         if cmd == "/week":
             return [(await c.monitor.weekly_report(), None)]
         if cmd == "/stock":

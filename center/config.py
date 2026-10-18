@@ -70,6 +70,7 @@ DEFAULTS: dict = {
         "lis_old_days": 0,           # предмет LisBot «долго лежит» после стольких дней; 0 — как sell.maxHoldDaysAlert LisBot
         "mann_days_warn": 3,         # ключей MannBot меньше чем на столько дней продаж — уведомление
         "mann_rate_days": 14,        # скорость продаж ключей — за столько последних дней
+        "lis_balance_warn_usd": 10,  # баланс LIS-SKINS ниже этого в боевом режиме — уведомление; 0 — не следить
         "check_seconds": 900,
     },
     "backup": {                      # center/backup.py

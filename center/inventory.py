@@ -156,6 +156,9 @@ class Inventory:
             if mann["level"] in ("low", "empty"):
                 line = "⚠ " + line
             out.append(line)
+        b = self.lis_balance()
+        if b["low"]:
+            out.append(f"⚠ Баланс LIS-SKINS ${b['balance']:.2f} — меньше ${b['warn_usd']:.2f}")
         return out
 
     # ------------------------------------------------------------------ сторож склада
@@ -174,9 +177,34 @@ class Inventory:
         self.center.events.add("mannbot", "warn", "inventory.low_stock", msg)
         return msg
 
+    def lis_balance(self) -> dict:
+        a = self.center.analytics
+        bal = (_kv(a.lis_db, "balance.last") or {}).get("balance")
+        s = self.center.summaries.get("lisbot") or {}
+        dry = s["dry_run"] if "dry_run" in s else a.lis_config().get("dryRun", True)
+        warn = float(self.cfg.get("lis_balance_warn_usd") or 0)
+        return {"balance": bal, "warn_usd": warn, "dry_run": bool(dry),
+                "low": bool(warn and isinstance(bal, (int, float)) and bal < warn and not dry)}
+
+    def check_balance(self) -> str | None:
+        """Баланс LIS-SKINS в боевом режиме ниже порога — LisBot скоро перестанет закупать. Не чаще раза в сутки."""
+        b = self.lis_balance()
+        if not b["low"]:
+            return None
+        mon = self.center.monitor
+        today = time.strftime("%Y-%m-%d", time.localtime(self.clock()))
+        if mon.kv_get("inventory_balance_date") == today:
+            return None
+        mon.kv_set("inventory_balance_date", today)
+        msg = (f"Баланс LIS-SKINS ${b['balance']:.2f} — меньше ${b['warn_usd']:.2f}: LisBot скоро не сможет закупать. "
+               "Пополните баланс или выведите выручку Steam.")
+        self.center.events.add("lisbot", "warn", "inventory.low_balance", msg)
+        return msg
+
     async def _loop(self) -> None:
         while True:
             try:
+                await asyncio.to_thread(self.check_balance)
                 await asyncio.to_thread(self.check)
             except Exception:  # noqa: BLE001
                 log.exception("проверка склада")

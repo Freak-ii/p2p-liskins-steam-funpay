@@ -93,3 +93,17 @@ def test_proposal_buttons_and_confirm_tier(tmp_path):
         assert co.get(lim["id"])["status"] == "failed"                            # LisBot не запущен — выполнение честно не удалось
         c.events.close()
     asyncio.run(go())
+
+
+def test_goal_command(tmp_path):
+    async def go():
+        c, calls = _center(tmp_path)
+        c._updates = [_msg(1, "/goal")]
+        await c.tg.poll_once()
+        assert "Цель задаётся в панели" in calls[-1][1]["text"]
+        c.analytics.save_goal(50000)
+        c._updates = [_msg(2, "/goal")]
+        await c.tg.poll_once()
+        assert "из 50 000 ₽" in calls[-1][1]["text"]
+        c.events.close()
+    asyncio.run(go())
