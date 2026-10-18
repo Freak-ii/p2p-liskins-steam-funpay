@@ -66,6 +66,7 @@ async function crmCustomers() {
   try {
     d = await api(`/api/crm/customers?${new URLSearchParams({ q: CRM.cq, risk: CRM.risk, tag: CRM.tag, segment: CRM.segment, sort: CRM.csort })}`);
   } catch { return; }
+  $('#crmCustCsv').href = `/api/crm/customers.csv?${new URLSearchParams({ q: CRM.cq, risk: CRM.risk, tag: CRM.tag, segment: CRM.segment, sort: CRM.csort })}`;
   const all = d.levels.low + d.levels.medium + d.levels.high;
   tabs('#crmRisk', [['', `Все ${all}`], ...Object.entries(RISK).map(([k, [t]]) => [k, `${t} риск ${d.levels[k]}`])], CRM.risk, (k) => { CRM.risk = k; crmCustomers(); });
   tabs('#crmSeg', [['', 'Все сегменты'], ...Object.entries(d.segment_names).filter(([k]) => d.segments[k] || k === CRM.segment)

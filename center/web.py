@@ -232,6 +232,15 @@ def make_app(center: Center) -> web.Application:
         return web.Response(body=body, content_type="text/csv", charset="utf-8",
                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
+    async def crm_customers_export(request: web.Request):
+        q = request.query
+        rows = await asyncio.to_thread(lambda: center.crm.customer_export_rows(
+            q=q.get("q", "").strip()[:200], risk=q.get("risk", ""), tag=q.get("tag", ""), segment=q.get("segment", ""),
+            sort=q.get("sort", "last_order")))
+        name = f"crm-customers-{time.strftime('%Y%m%d')}.csv"
+        return web.Response(body=center.analytics.to_csv(rows), content_type="text/csv", charset="utf-8",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
     async def crm_customers(request: web.Request):
         q = request.query
         return web.json_response(await asyncio.to_thread(
@@ -310,7 +319,7 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/crm/deals", crm_deals), web.get("/api/crm/deals.csv", crm_export),
         web.get("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal), web.post("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal),
         web.get("/api/crm/customers", crm_customers),
-        web.get("/api/crm/cohorts", crm_cohorts),
+        web.get("/api/crm/cohorts", crm_cohorts), web.get("/api/crm/customers.csv", crm_customers_export),
         web.get("/api/crm/customers/{cid:-?\\d+}", crm_customer), web.post("/api/crm/customers/{cid:-?\\d+}", crm_customer),
         web.get("/rtba", rtba_page), web.get("/api/rtba", rtba_status), web.get("/api/rtba/budget", rtba_budget), web.post("/api/rtba/budget", rtba_budget),
         web.post("/api/rtba/apply", rtba_apply), web.post("/api/rtba/backtest", rtba_backtest),

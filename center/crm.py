@@ -483,3 +483,17 @@ class Crm:
                 d[k] = dt.datetime.fromtimestamp(d[k]).strftime("%Y-%m-%d %H:%M") if d[k] else ""
             out.append([d[k] for k, _ in self.EXPORT_COLS])
         return out
+
+    def customer_export_rows(self, **filters) -> list[list]:
+        """Покупатели FunPay по тем же фильтрам, что и список в панели, — например, уснувшие для рассылки вручную."""
+        import datetime as dt
+        fmt = lambda ts: dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""  # noqa: E731
+        out = [["ID FunPay", "Ник", "Сегмент", "Заказов", "Подтверждено", "Возвратов", "Потратил", "Валюта", "Ключей",
+                "Первый заказ", "Последняя покупка", "Средняя оценка", "Риск", "Чёрный список", "Steam ID", "Теги", "Заметка"]]
+        for c in self.customers(**filters, limit=1000)["rows"]:
+            st = c["stats"]
+            out.append([c["funpay_id"], c["username"], c["segment"]["text"], st["orders"], st["completed"], st["refunded"],
+                        st["spent"], st["currency"], st["keys"], fmt(st["first_order"]), fmt(st["last_purchase"]),
+                        st["avg_stars"] if st["avg_stars"] is not None else "", c["risk"]["score"],
+                        "да" if c["blacklisted"] else "", " ".join(c["steam_ids"]), c["tags"], c["notes"]])
+        return out

@@ -92,3 +92,25 @@ def test_cohorts(tmp_path):
     assert d["rows"][-1]["new"] == 1 and d["rows"][-1]["retention"] == []
     assert d["rows"][-2]["new"] == 0 and d["rows"][-2]["retention"] == [None]
     assert sum(r["new"] for r in rows.values()) == 3
+
+
+def test_customers_csv_export(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+    from center.web import make_app
+    seed_crm(tmp_path)
+    _orders(tmp_path, [("S1", 40, "csvbuyer", 700, 3, "completed"), ("S2", 40, "csvbuyer", 300, 1, "completed")])
+    c = Center(tmp_path)
+    rows = c.crm.customer_export_rows(q="csvbuyer")
+    assert rows[0][:3] == ["ID FunPay", "Ник", "Сегмент"] and len(rows) == 2
+    assert rows[1][0] == 40 and rows[1][1] == "csvbuyer" and rows[1][3] == 2 and rows[1][6] == 1000
+
+    async def go():
+        token = c.cfg.ensure_token()
+        async with TestClient(TestServer(make_app(c))) as cl:
+            await cl.get(f"/login?token={token}", allow_redirects=False)
+            r = await cl.get("/api/crm/customers.csv?q=csvbuyer")
+            assert r.status == 200 and "crm-customers-" in r.headers["Content-Disposition"]
+            text = (await r.read()).decode("utf-8-sig")
+            assert "csvbuyer" in text and text.count("\n") >= 2
+    asyncio.run(go())
+    c.events.close()
