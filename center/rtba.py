@@ -216,7 +216,7 @@ class Rtba:
         return {"total_usd": total, "rate": rate, "rows": rows,
                 "capital": {"lisbot_usd": round(lis_cap, 2), "mannbot_usd": round(mann_cap_usd, 2),
                             "total_usd": round(lis_cap + mann_cap_usd, 2)},
-                "running": {n: self._running(w) for n, w in self.center.workers.items()}}
+                "running": {n: self._running(w) for n, w in self.center.workers.items()}, "last_apply": self.last_apply()}
 
     def save_plan(self, data: dict) -> list[str]:
         """Сохраняет план в center.yaml (без применения). None / '' — убрать пункт из плана."""
@@ -276,6 +276,36 @@ class Rtba:
         ok = all(r["ok"] for r in results)
         for r in results:
             self.center.events.add(r["bot"], "info" if r["ok"] else "warn", "budget.apply", r["message"])
+        done = {r["bot"] for r in results if r["ok"]}
+        undo = [{k: r[k] for k in ("key", "bot", "setting", "label", "unit")} | {"previous": r["current"], "applied": r["planned"]}
+                for r in todo if r["bot"] in done and r["current"] is not None]
+        if undo:                                  # что было до применения — для кнопки «Отменить»
+            self.center.monitor.kv_set("rtba_last_apply", json.dumps({"ts": time.time(), "rows": undo}, ensure_ascii=False))
+        return {"ok": ok, "message": "; ".join(r["message"] for r in results), "results": results}
+
+    def last_apply(self) -> dict | None:
+        try:
+            return json.loads(self.center.monitor.kv_get("rtba_last_apply") or "null")
+        except ValueError:
+            return None
+
+    async def undo(self) -> dict:
+        """Вернуть ботам значения, которые были до последнего «Применить». План в center.yaml не меняется."""
+        last = self.last_apply()
+        if not last or not last.get("rows"):
+            return {"ok": False, "message": "Отменять нечего: последнее применение уже отменено или его не было", "results": []}
+        results = []
+        lis = {r["setting"]: r["previous"] for r in last["rows"] if r["bot"] == "lisbot"}
+        mann = {r["setting"]: r["previous"] for r in last["rows"] if r["bot"] == "mannbot"}
+        if lis:
+            results.append(await self._apply_lis(lis))
+        if mann:
+            results.append(await self._apply_mann(mann))
+        ok = all(r["ok"] for r in results)
+        for r in results:
+            self.center.events.add(r["bot"], "info" if r["ok"] else "warn", "budget.undo", "Отмена применения лимитов. " + r["message"])
+        if ok:
+            self.center.monitor.kv_set("rtba_last_apply", "null")
         return {"ok": ok, "message": "; ".join(r["message"] for r in results), "results": results}
 
     async def _apply_lis(self, changes: dict) -> dict:

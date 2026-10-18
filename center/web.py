@@ -288,6 +288,12 @@ def make_app(center: Center) -> web.Application:
             asyncio.ensure_future(center.refresh(name))
         return web.json_response(res, status=200 if res["ok"] else 502)
 
+    async def rtba_undo(request: web.Request):
+        res = await center.rtba.undo()
+        for name in center.workers:
+            asyncio.ensure_future(center.refresh(name))
+        return web.json_response(res, status=200 if res["ok"] else 409)
+
     async def rtba_backtest(request: web.Request):
         data = await request.json()
         variants = [v for v in (data.get("variants") or []) if isinstance(v, dict)][:6]
@@ -329,7 +335,7 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/crm/cohorts", crm_cohorts), web.get("/api/crm/customers.csv", crm_customers_export),
         web.get("/api/crm/customers/{cid:-?\\d+}", crm_customer), web.post("/api/crm/customers/{cid:-?\\d+}", crm_customer),
         web.get("/rtba", rtba_page), web.get("/api/rtba", rtba_status), web.get("/api/rtba/budget", rtba_budget), web.post("/api/rtba/budget", rtba_budget),
-        web.post("/api/rtba/apply", rtba_apply), web.post("/api/rtba/backtest", rtba_backtest),
+        web.post("/api/rtba/apply", rtba_apply), web.post("/api/rtba/undo", rtba_undo), web.post("/api/rtba/backtest", rtba_backtest),
     ])
     app.add_routes(monitor_routes(center))
     app.add_routes(coordinator_routes(center))

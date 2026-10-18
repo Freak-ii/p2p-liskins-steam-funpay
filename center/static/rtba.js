@@ -127,8 +127,18 @@ function renderBudget(p) {
       <button class="btn" id="bSave">Сохранить план</button>
       <button class="btn primary" id="bApply" ${diff.length ? '' : 'disabled'}>Применить к ботам${diff.length ? ` (${diff.length})` : ''}</button>
       <span class="muted small">План хранится в center.yaml и ничего не меняет у ботов, пока вы не нажмёте «Применить». Работает: LisBot ${p.running.lisbot ? 'да' : 'нет'}, MannBot ${p.running.mannbot ? 'да' : 'нет'}.</span>
-    </div>`;
+    </div>
+    ${p.last_apply?.rows?.length ? `<div class="row small" style="margin-top:8px"><span class="muted">Применено ${ts(p.last_apply.ts)}: ${p.last_apply.rows.map((r) => `${esc(r.label)} ${showVal(r, r.previous)} → ${showVal(r, r.applied)}`).join('; ')}.</span>
+      <button class="btn small" id="bUndo">Вернуть как было</button></div>` : ''}`;
   $('#bSave').onclick = savePlan;
+  if ($('#bUndo')) {
+    $('#bUndo').onclick = async () => {
+      if (!confirm('Вернуть ботам значения, которые были до последнего «Применить»? План центра не изменится.')) return;
+      const r = await api('/api/rtba/undo', {});
+      flash(r.message, !r.ok);
+      loadBudget(); setTimeout(loadStatus, 1000);
+    };
+  }
   $('#bApply').onclick = () => {
     $('#applyList').innerHTML = `<table><tbody>${ST.budget.rows.filter((r) => r.differs).map((r) => `<tr><td>${esc(r.label)}</td><td>${showVal(r, r.current)} → <b>${showVal(r, r.planned)}</b></td></tr>`).join('')}</tbody></table>`;
     $('#applyDlg').showModal();
