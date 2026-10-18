@@ -15,6 +15,7 @@ from center.config import CenterConfig
 from center.crm import Crm
 from center.events import EventStore
 from center.vault import SecretStore
+from center.rtba import Rtba
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
 
 log = logging.getLogger("center")
@@ -42,6 +43,7 @@ class Center:
         self.started_at = time.time()
         self.analytics = Analytics(self)
         self.crm = Crm(self)
+        self.rtba = Rtba(self)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))

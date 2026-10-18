@@ -100,6 +100,37 @@ def test_parse_mafile_errors():
         pass
 
 
+def test_rtba_json_api_for_center(tmp_path):
+    sup = Supervisor(tmp_path, demo=True, overrides=DEMO_OVERRIDES)
+
+    async def go():
+        sup.engine.cfg.deal.message_rate_limit_seconds = 0
+        await run_scenario(sup.engine, sup.engine.fp, sup.engine.steam, verbose=False)
+        sup.db.exec("INSERT INTO price_history(ts,offer_id,old_price,new_price,best_competitor,competitors,position,"
+                    "reason,applied) VALUES(strftime('%s','now'),'1',150,149.5,150,3,1,'лидер рынка 150.00',1)")
+        client = await _client(sup)
+        try:
+            d = await (await client.get("/api/rtba")).json()
+            assert d["history"][0]["new_price"] == 149.5 and d["day"]["applied"] >= 1
+            assert "min_margin_pct" in d["config"] and d["floor"] >= 0
+            bad = await client.post("/api/rtba/config", json={"changes": {"dry_run": False}})
+            assert bad.status == 400                                   # боевой режим через RTBA не включить
+            r = await client.post("/api/rtba/config", json={"changes": {"min_margin_pct": 12, "strategy": "median"}})
+            assert (await r.json())["ok"]
+            assert sup.cfg.rtba.min_margin_pct == 12 and sup.engine.rtba.cfg.strategy == "median"
+            saved = yaml.safe_load(sup.config_path.read_text(encoding="utf-8"))
+            assert saved["rtba"]["min_margin_pct"] == 12
+            # работающему боту правила применяются сразу
+            await client.post("/control", data={"action": "start"})
+            await asyncio.sleep(0.5)
+            r = await client.post("/api/rtba/config", json={"changes": {"min_margin_pct": 7.5}})
+            assert (await r.json())["live"] and sup.engine.rtba.cfg.min_margin_pct == 7.5 and not sup.restart_required
+            await client.post("/control", data={"action": "stop"})
+        finally:
+            await client.close()
+    asyncio.run(go())
+
+
 def test_api_settings_json(tmp_path):
     sup = Supervisor(tmp_path)
 

@@ -24,6 +24,13 @@ export class Buyer {
     this.failedInRow = 0;
     this.stats = { scans: 0, rtbaSeen: 0, rtbaBuys: 0, scanBuys: 0, lastScanAt: 0, lastScanMs: 0, skips: {} };
     this.lastDecision = new Map();
+    this.rtbaLog = []; // последние решения RTBA для панели центра (только наблюдение, на логику не влияет)
+  }
+
+  /** Запись в журнал решений RTBA: outcome = buy | dry | skip | fail | gone. */
+  noteRtba(listing, outcome, reason, receivedAt) {
+    this.rtbaLog.push({ ts: Date.now(), name: listing.name, id: listing.id, price: listing.price, outcome, reason, latencyMs: receivedAt ? Date.now() - receivedAt : null });
+    if (this.rtbaLog.length > 300) this.rtbaLog.splice(0, this.rtbaLog.length - 300);
   }
 
   watchMap() { return new Map(this.db.watchlist(true).map((w) => [w.name, w])); }
@@ -93,11 +100,12 @@ export class Buyer {
     const book = this.books.get(listing.name) || new Map();
     book.set(listing.id, listing);
     this.books.set(listing.name, book);
-    if (!watch || !st.rtbaEnabled || !this.guard.canBuy) return;
+    if (!watch) return;
+    if (!st.rtbaEnabled || !this.guard.canBuy) { this.noteRtba(listing, 'skip', st.rtbaEnabled ? 'закупка на паузе' : 'RTBA выключен', meta?.receivedAt); return; }
     this.stats.rtbaSeen++;
     const last = this.lastRtba.get(listing.name) || 0;
-    if (Date.now() - last < st.rtbaCooldownSec * 1000) return;
-    if (!this.valuator.isFresh(listing.name, st.rtbaMaxValuationAgeHours)) return;
+    if (Date.now() - last < st.rtbaCooldownSec * 1000) { this.noteRtba(listing, 'skip', `пауза между покупками предмета (${st.rtbaCooldownSec} с)`, meta?.receivedAt); return; }
+    if (!this.valuator.isFresh(listing.name, st.rtbaMaxValuationAgeHours)) { this.noteRtba(listing, 'skip', 'оценка Steam устарела', meta?.receivedAt); return; }
     this.lastRtba.set(listing.name, Date.now());
     await this.consider(listing.name, [...book.values()], watch, 'rtba', { onlyId: listing.id, receivedAt: meta?.receivedAt });
   }
@@ -106,14 +114,22 @@ export class Buyer {
 
   consider(name, listings, watch, mode, { onlyId, receivedAt } = {}) {
     return this.lock.run(async () => {
-      if (!this.guard.canBuy) return;
+      const rtLot = mode === 'rtba' ? listings.find((l) => l.id === onlyId) : null;
+      if (!this.guard.canBuy) { if (rtLot) this.noteRtba(rtLot, 'skip', 'закупка на паузе', receivedAt); return; }
       const valuation = this.valuator.cached(name);
       const plan = planBuys({ name, listings, valuation, watch, ctx: this.ctxFor(name), cfg: this.cfg, floorHistory: this.floorHistory(name) });
       this.lastDecision.set(name, { ts: Date.now(), mode, reason: plan.reason, info: plan.info });
       if (plan.info?.suspicious) this.guard.warn('SUSPICIOUS_PRICE', `«${name}»: лот за ${fmtUsd(plan.info.floor)} при оценке ${fmtUsd(plan.info.netUsd)} — подозрительно, пропущено`);
-      if (!plan.buy.length) { this.stats.skips[plan.reason.split(' ')[0]] = (this.stats.skips[plan.reason.split(' ')[0]] || 0) + 1; return; }
+      if (!plan.buy.length) {
+        if (rtLot) this.noteRtba(rtLot, 'skip', plan.reason, receivedAt);
+        this.stats.skips[plan.reason.split(' ')[0]] = (this.stats.skips[plan.reason.split(' ')[0]] || 0) + 1;
+        return;
+      }
       let buys = plan.buy;
-      if (onlyId) { buys = buys.filter((b) => b.listing.id === onlyId); if (!buys.length) return; }
+      if (onlyId) {
+        buys = buys.filter((b) => b.listing.id === onlyId);
+        if (!buys.length) { if (rtLot) this.noteRtba(rtLot, 'skip', 'лот не вошёл в план (есть дешевле или вне коридора)', receivedAt); return; }
+      }
       await this.execute(name, buys, valuation, mode, receivedAt);
     });
   }
@@ -129,6 +145,7 @@ export class Buyer {
         const id = this.db.insertItem({ lis_item_id: b.listing.id, custom_id: customId, name, mode, status: 'dry_run', dry_run: 1, buy_price_usd: b.listing.price, fx_at_buy: valuation.fx, expected_net_usd: valuation.netUsd, expected_profit_usd: b.expectedProfit });
         this.db.event('buy.dry_run', { price: b.listing.price, expectedProfit: b.expectedProfit, latencyMs: receivedAt ? Date.now() - receivedAt : null }, id);
       }
+      if (mode === 'rtba') for (const b of buys) this.noteRtba(b.listing, 'dry', `купил бы, ожид. прибыль ${fmtUsd(b.expectedProfit)}`, receivedAt);
       this.log.info(`[DRY-RUN] ${mode}: купил бы «${name}» ×${buys.length} за ${fmtUsd(requested)} (ожид. прибыль ${fmtUsd(buys.reduce((s, b) => s + b.expectedProfit, 0))})`);
       return;
     }
@@ -149,6 +166,7 @@ export class Buyer {
         this.guard.recordError('lis-buy', e);
       }
       for (const b of buys) this.onRealtimeRemoved({ id: b.listing.id });
+      if (mode === 'rtba') for (const b of buys) this.noteRtba(b.listing, 'fail', errMsg(e).slice(0, 200), receivedAt);
       if (this.failedInRow >= this.cfg.risk.maxFailedPurchasesInRow) this.guard.critical('BUY_FAILURES', `${this.failedInRow} неудачных покупок подряд. Последняя ошибка: ${errMsg(e)}`);
       return;
     }
@@ -175,6 +193,7 @@ export class Buyer {
     const total = round2(got.reduce((a, b) => a + b, 0));
     this.db.updatePurchase(customId, { purchase_id: purchaseId, total_usd: total, status: got.length ? 'pending' : 'failed', raw: JSON.stringify(res).slice(0, 4000), error: got.length ? null : 'лоты недоступны' });
     for (const b of buys) this.onRealtimeRemoved({ id: b.listing.id });
+    if (mode === 'rtba') for (const b of buys) this.noteRtba(b.listing, got.length ? 'buy' : 'gone', got.length ? `куплено за ${fmtUsd(total)}` : 'лот уже продан', receivedAt);
     if (!got.length) { this.log.info(`«${name}»: лоты уже проданы (${mode})`); return; }
     this.failedInRow = 0;
     this.guard.recordSuccess('lis-buy');
