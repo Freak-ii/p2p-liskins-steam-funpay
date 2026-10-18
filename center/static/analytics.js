@@ -95,7 +95,12 @@ function anLis(d) {
     ${d.items.map((i) => `<tr><td title="${esc(i.name)}">${esc(i.name.length > 34 ? i.name.slice(0, 33) + '…' : i.name)}</td><td>${i.bought}</td><td>${i.sold || 0}</td>
       <td>${signed(i.profit, 'USD')}</td><td>${pct(i.roi)}</td><td>${i.hold_days == null ? '—' : i.hold_days + ' дн'}</td><td>${pct(i.accuracy)}</td></tr>`).join('')
       || '<tr><td colspan="7" class="muted">Сделок пока нет</td></tr>'}</tbody></table></div>
-    <div class="muted small" style="margin-top:6px">Суммы в $. «Прогноз» — фактическая выручка в % от оценки при покупке.</div>`;
+    <div class="muted small" style="margin-top:6px">Суммы в $. «Прогноз» — фактическая выручка в % от оценки при покупке.</div>
+    ${(d.roi_cut || []).length ? `<h3 style="margin-top:14px">Если бы минимальный ROI был другим</h3>
+    <table class="pnl"><thead><tr><th>Мин. ROI</th><th>Сделок</th><th>В минус</th><th>Прибыль</th><th>ROI</th></tr></thead><tbody>
+      ${d.roi_cut.map((r) => `<tr${r.current ? ' style="font-weight:600"' : ''}><td>${Math.round(r.min_roi * 100)}%${r.current ? ' · сейчас' : ''}</td><td>${r.deals}</td>
+        <td class="${r.losers ? 'neg' : ''}">${r.losers}</td><td>${signed(r.profit, 'USD')}</td><td>${pct(r.roi)}</td></tr>`).join('')}</tbody></table>
+    <div class="muted small" style="margin-top:6px">Проданные сделки, у которых прогноз ROI при покупке был не ниже порога (strategy.minRoi LisBot). Поднимать порог стоит, если при этом уходят в основном убыточные сделки.</div>` : ''}`;
 }
 
 function anMann(d) {

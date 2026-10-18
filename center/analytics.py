@@ -436,8 +436,21 @@ class Analytics:
             FROM items WHERE dry_run=0 AND status<>'failed' AND created_at>=? GROUP BY mode""", (since_ms,))]
         funnel = {r["status"]: r["n"] for r in _rows(self.lis_db, "SELECT status, COUNT(*) n FROM items WHERE dry_run=0 "
                                                      "AND created_at>=? GROUP BY status", (since_ms,))}
+        # что было бы с другим порогом strategy.minRoi: проданные сделки, у которых прогноз ROI при покупке был не ниже порога
+        sold = [(r["expected_net_usd"] / r["buy_price_usd"] - 1, r["profit_usd"] or 0.0, r["buy_price_usd"]) for r in _rows(
+            self.lis_db, "SELECT buy_price_usd, expected_net_usd, profit_usd FROM items WHERE dry_run=0 AND status='sold' "
+            "AND buy_price_usd>0 AND expected_net_usd>0 AND created_at>=?", (since_ms,))]
+        min_roi = (self.lis_config().get("strategy") or {}).get("minRoi")
+        roi_cut = []
+        for t in sorted({0.0, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2, *([float(min_roi)] if min_roi is not None else [])}):
+            kept = [x for x in sold if x[0] >= t - 1e-9]
+            spent = sum(x[2] for x in kept)
+            roi_cut.append({"min_roi": t, "deals": len(kept), "profit": _r(sum(x[1] for x in kept)),
+                            "losers": sum(1 for x in kept if x[1] < 0), "roi": _r(sum(x[1] for x in kept) / spent * 100, 1) if spent else None,
+                            "current": min_roi is not None and abs(t - float(min_roi)) < 1e-9})
         return {
             "items": items, "by_mode": by_mode, "by_type": by_type, "funnel": funnel,
+            "roi_cut": roi_cut if sold else [],
             "forecast": {"n": len(ratios), "fact_to_forecast": _r(statistics.mean(ratios) * 100, 1) if ratios else None,
                          "mean_abs_error": _r(mape, 1)},
             "hold": {"median_days": _r(_median(holds), 1), "avg_days": _r(statistics.mean([h for h in holds if h is not None]), 1)
