@@ -254,3 +254,21 @@ def test_faq_after_delivery_and_refund_request(tmp_path):
     assert len(after) == 1 and "Мои звёзды" in after[0] and "@alice_tg" in after[0]
     assert "не подтверждайте" in refund[0]
     assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code IN ('buyer_not_arrived','buyer_refund')") == 2
+
+
+def test_review_reply(tmp_path):
+    sup, e, fp, wallet = make(tmp_path)
+
+    async def go():
+        await boot(e)
+        fp.buyer_pays("Alice", 11, 100, username="alice_tg")
+        fp.buyer_pays("Bob", 12, 50, username="bob_tg")
+        await drain(e, wallet)
+        good, bad = sorted(fp.sales)[:2]
+        fp.reviews[bad] = 2
+        for oid in (good, bad, good):                   # повторная проверка того же отзыва — без второго ответа
+            await e._fetch_review_later(oid, delay=0)
+        return good, bad
+    good, bad = asyncio.run(go())
+    assert list(fp.review_replies) == [good] and "Alice" in fp.review_replies[good]
+    assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code='bad_review'") == 1

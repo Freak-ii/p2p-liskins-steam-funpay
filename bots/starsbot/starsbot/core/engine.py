@@ -282,6 +282,22 @@ class Engine:
             if page.review_stars <= 3:
                 await self.notifier.notify("WARNING", "bad_review", f"Отзыв {page.review_stars}★ по заказу #{oid}: "
                                            f"{page.review_text[:300]}", order_id=oid)
+            elif self.cfg.deal.get("review_reply", True) and not page.review_answered:
+                await self.reply_review(oid)
+
+    async def reply_review(self, oid: str) -> None:
+        """Ответ под хорошим отзывом: один раз на заказ, на плохие отвечает человек."""
+        o = self.db.get_order(oid)
+        if not o or self.db.kv_get(f"review_replied:{oid}"):
+            return
+        text = M.render(o["lang"] or self.cfg.general.language, "review_reply", **self._order_vars(o))
+        try:
+            await self.fp.reply_review(oid, text)
+        except FunPayError as e:
+            log.warning("ответ на отзыв %s: %s", oid, e)
+            return
+        self.db.kv_set(f"review_replied:{oid}", time.time())
+        self.db.add_event(oid, "review_replied", text=text)
 
     async def on_refund(self, o) -> None:
         oid = o["order_id"]

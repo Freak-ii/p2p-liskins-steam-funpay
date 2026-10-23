@@ -114,6 +114,7 @@ TEMPLATES: dict[str, dict[str, str]] = {
         ),
         "faq_premium": "В этом лоте продаются только Telegram Stars (звёзды). Telegram Premium здесь не продаётся.",
         "faq_where": "Звёзды видны в Telegram → Настройки → «Мои звёзды» (Telegram Stars) на аккаунте получателя.",
+        "review_reply": "Спасибо за отзыв, {buyer}! Рады, что {stars} ⭐ дошли быстро. Будем рады видеть вас снова 🙌",
     },
     "en": {
         "greeting_need_username": (
@@ -172,6 +173,7 @@ TEMPLATES: dict[str, dict[str, str]] = {
                        "don't confirm the order until it's resolved."),
         "faq_premium": "This listing sells Telegram Stars only, not Telegram Premium.",
         "faq_where": "Stars are shown in Telegram → Settings → My Stars on the recipient account.",
+        "review_reply": "Thank you for the review, {buyer}! Glad your {stars} ⭐ arrived quickly. See you again 🙌",
     },
 }
 

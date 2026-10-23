@@ -64,6 +64,7 @@ DEFAULTS: dict[str, Any] = {
         "auto_refund_bad_recipient": False,   # авто-возврат, если username так и не удалось получить
         "auto_refund_no_funds": False,   # авто-возврат, если на кошельке нет денег
         "message_rate_limit_seconds": 2,
+        "review_reply": True,            # отвечать на отзывы 4–5★ (на 1–3★ — только алерт, отвечаете вы)
     },
     "risk": {
         "enabled": True, "manual_review_score": 60, "block_score": 90, "large_order_stars": 1500,

@@ -184,6 +184,19 @@ class FunPayClient:
             raise FunPayError(f"возврат не выполнен: {data.get('msg') or data}")
         return True
 
+    async def reply_review(self, order_id: str, text: str) -> bool:
+        """Публичный ответ продавца под отзывом покупателя (тот же запрос, что кнопка «Ответить»)."""
+        if self.dry_run:
+            log.warning("[DRY-RUN] ответ на отзыв %s: %s", order_id, text)
+            return True
+        _, body = await self._request("POST", "/orders/review", ajax=True,
+                                      data={"authorId": self.user_id, "text": text[:999], "rating": "",
+                                            "csrf_token": self.csrf, "orderId": order_id})
+        data = json.loads(body)
+        if data.get("error"):
+            raise FunPayError(f"ответ на отзыв не отправлен: {data.get('msg') or data}")
+        return True
+
     # ------------------------------------------------------------------ lots
     async def get_lot_fields(self, offer_id: int, node_id: int) -> dict[str, str]:
         _, page = await self._request("GET", f"/lots/offerEdit?node={node_id}&offer={offer_id}")

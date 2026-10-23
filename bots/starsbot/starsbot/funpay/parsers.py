@@ -234,6 +234,7 @@ class OrderPage:
     buyer_username: str | None = None
     review_stars: int | None = None
     review_text: str = ""
+    review_answered: bool = False        # продавец уже ответил под отзывом
     total: float | None = None
 
 
@@ -292,11 +293,12 @@ def parse_order_page(page: str, order_id: str) -> OrderPage:
         m = re.search(r"rating(\d)", cls)
         stars = int(m.group(1)) if m else None
         review_text = text_of(s.select_one(".review-item-text"))
+    answered = s.select_one(".review-item-answer, .review-compiled-reply") is not None
     return OrderPage(order_id=order_id, status=status, params=params, quantity=qty,
                      chat_id=chat.get("data-id") if chat else None,
                      chat_name=chat.get("data-name") if chat else None,
                      buyer_id=buyer_id, buyer_username=buyer_name,
-                     review_stars=stars, review_text=review_text, total=total)
+                     review_stars=stars, review_text=review_text, review_answered=answered, total=total)
 
 
 # ---------------------------------------------------------------------------- lots (RTBA)

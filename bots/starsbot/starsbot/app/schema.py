@@ -143,6 +143,7 @@ MESSAGE_TITLES = {
     "faq_time": "FAQ: когда придут?", "faq_not_arrived": "FAQ: звёзды не пришли",
     "faq_refund": "FAQ: просьба о возврате/отмене", "faq_premium": "FAQ: про Telegram Premium",
     "faq_where": "FAQ: где посмотреть звёзды",
+    "review_reply": "Ответ на отзыв 4–5★ (публичный, под отзывом)",
 }
 
 

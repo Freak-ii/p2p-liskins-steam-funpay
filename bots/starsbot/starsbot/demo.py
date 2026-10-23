@@ -31,6 +31,8 @@ class FakeFunPay:
         self.lots: dict[str, dict] = {}
         self._orders_tag = 0
         self.refunds: list[str] = []
+        self.reviews: dict[str, int] = {}
+        self.review_replies: dict[str, str] = {}
 
     async def login(self):
         return None
@@ -95,7 +97,11 @@ class FakeFunPay:
         so = self.sales[oid]
         return OrderPage(order_id=oid, status=so.status, params=dict(self.params.get(oid, {})), quantity=so.quantity,
                          chat_id=str(500 + so.buyer_id), buyer_id=so.buyer_id, buyer_username=so.buyer_username,
-                         review_stars=5)
+                         review_stars=self.reviews.get(oid, 5), review_answered=oid in self.review_replies)
+
+    async def reply_review(self, oid, text):
+        self.review_replies[oid] = text
+        return True
 
     async def refund(self, oid):
         self.refunds.append(oid)
