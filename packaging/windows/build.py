@@ -18,8 +18,8 @@
 
 Python-зависимости берутся из requirements.txt в корне и из bots/*/requirements.txt (готовые колёса
 win_amd64), поэтому новый Python-бот (например StarsBot) попадает в сборку без правок этого скрипта.
-Сборку Python-части можно делать и на Linux. LisBot (--lisbot) собирается только на Windows: его
-better-sqlite3 — нативный модуль, его npm ставит под ту ОС, где запущен.
+Собирать можно и на Linux, включая LisBot (его единственный нативный модуль better-sqlite3 несёт готовую
+сборку под Windows). Установщик на Linux собирается через Wine: --iscc "wine /путь/ISCC.exe".
 """
 from __future__ import annotations
 
@@ -46,7 +46,8 @@ PY_MINOR = "3.12"
 NODE_MAJOR = "22"
 APP_NAME = "StarsCenter"
 SKIP_REQS = re.compile(r"^(pytest|pytest-\w+|pyinstaller|ruff|mypy|black)\b", re.I)
-PY_JUNK = ("Lib/test", "Lib/idlelib", "Lib/tkinter", "Lib/turtledemo", "Lib/ensurepip", "tcl", "Tools")
+PY_JUNK = ("Lib/test", "Lib/idlelib", "Lib/tkinter", "Lib/turtledemo", "Lib/ensurepip", "tcl", "Tools",
+           "libs", "include")                            # .lib и заголовки нужны только для сборки C-расширений
 IGNORE_ANYWHERE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", "node_modules", "tests", "test",
                                          ".venv*", "*.log", "*.sqlite3")
 IGNORE_AT_TOP = {"dist", "build", "packaging", "center-data", "data", "Dockerfile", "docker-compose.yml",
@@ -180,12 +181,25 @@ def install_node(dest: Path) -> str:
 
 
 def install_lisbot_modules(app_lisbot: Path, node_dir: Path) -> None:
-    if sys.platform != "win32":
-        sys.exit("--lisbot собирается только на Windows (нативный модуль better-sqlite3)")
-    env = {**os.environ, "PATH": str(node_dir) + os.pathsep + os.environ.get("PATH", "")}
-    run([str(node_dir / "npm.cmd"), "ci", "--omit=dev", "--no-audit", "--no-fund"], cwd=app_lisbot, env=env, shell=False)
-    run([str(node_dir / "node.exe"), "-e", "require('better-sqlite3')(':memory:').prepare('select 1').get()"],
-        cwd=app_lisbot, env=env)
+    """node_modules LisBot для Windows. Единственный нативный модуль — better-sqlite3, а он с версии 13
+    несёт готовые сборки под все ОС (prebuilds/win32-x64.node), поэтому собрать можно и на Linux."""
+    if sys.platform == "win32":
+        env = {**os.environ, "PATH": str(node_dir) + os.pathsep + os.environ.get("PATH", "")}
+        run([str(node_dir / "npm.cmd"), "ci", "--omit=dev", "--no-audit", "--no-fund"], cwd=app_lisbot, env=env)
+        run([str(node_dir / "node.exe"), "-e", "require('better-sqlite3')(':memory:').prepare('select 1').get()"],
+            cwd=app_lisbot, env=env)
+        return
+    npm = shutil.which("npm")
+    if not npm:
+        sys.exit("для --lisbot на Linux нужен npm (Node.js 20+)")
+    run([npm, "ci", "--omit=dev", "--no-audit", "--no-fund", "--ignore-scripts"], cwd=app_lisbot)
+    mods = app_lisbot / "node_modules"
+    win = list(mods.glob("better-sqlite3/prebuilds/win32-x64*.node")) + list(mods.glob("better-sqlite3/lib/win32-x64*"))
+    if not win:
+        sys.exit("в better-sqlite3 нет готовой сборки win32-x64 — соберите с --lisbot на Windows")
+    stray = [p for p in mods.rglob("*.node") if "prebuilds" not in p.parts and "better-sqlite3" not in p.parts]
+    if stray:
+        sys.exit("в node_modules есть нативные модули, собранные под Linux: " + ", ".join(map(str, stray[:5])))
 
 
 # ---------------------------------------------------------------- код и ярлыки
@@ -317,6 +331,11 @@ def make_zip(src: Path, out: Path) -> None:
                 z.write(f, Path(APP_NAME) / f.relative_to(src))
 
 
+def winpath(p: Path) -> str:
+    """Путь Linux → путь Wine (диск Z: — это корень файловой системы)."""
+    return "Z:" + str(Path(p).resolve()).replace("/", "\\")
+
+
 def find_iscc() -> str | None:
     for c in (shutil.which("iscc"), shutil.which("ISCC"),
               r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe", r"C:\Program Files\Inno Setup 6\ISCC.exe",
@@ -332,6 +351,7 @@ def main() -> None:
     ap.add_argument("--installer", action="store_true", help="собрать установщик Inno Setup (нужен ISCC.exe)")
     ap.add_argument("--version", default=os.environ.get("CENTER_VERSION", "1.0.0"))
     ap.add_argument("--no-zip", action="store_true")
+    ap.add_argument("--iscc", help="команда компилятора Inno Setup, например \"wine C:/is/ISCC.exe\"")
     args = ap.parse_args()
 
     shutil.rmtree(OUT, ignore_errors=True)
@@ -364,10 +384,17 @@ def main() -> None:
         make_zip(OUT, z)
         print(f"  Архив: {z} ({z.stat().st_size / 1e6:.1f} МБ)")
     if args.installer:
-        iscc = find_iscc()
-        if not iscc:
-            sys.exit("Не найден Inno Setup 6 (ISCC.exe): https://jrsoftware.org/isdl.php")
-        run([iscc, f"/DAppVersion={args.version}", f"/DSourceDir={OUT}", f"/DOutputDir={DIST}", str(HERE / "StarsCenter.iss")])
+        if args.iscc:
+            import shlex
+            iscc_cmd = shlex.split(args.iscc)
+            paths = [winpath(OUT), winpath(DIST), winpath(HERE / "StarsCenter.iss")] if iscc_cmd[0].endswith("wine") \
+                else [str(OUT), str(DIST), str(HERE / "StarsCenter.iss")]
+        else:
+            iscc = find_iscc()
+            if not iscc:
+                sys.exit("Не найден Inno Setup 6 (ISCC.exe): https://jrsoftware.org/isdl.php")
+            iscc_cmd, paths = [iscc], [str(OUT), str(DIST), str(HERE / "StarsCenter.iss")]
+        run([*iscc_cmd, f"/DAppVersion={args.version}", f"/DSourceDir={paths[0]}", f"/DOutputDir={paths[1]}", paths[2]])
         print(f"  Установщик: {DIST / f'{APP_NAME}-{args.version}-setup.exe'}")
 
 

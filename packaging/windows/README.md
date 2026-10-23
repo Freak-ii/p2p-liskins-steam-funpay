@@ -12,7 +12,14 @@
   ```
   python packaging\windows\build.py --lisbot --installer
   ```
-  Без `--lisbot` LisBot и Node.js в сборку не попадут (так можно собирать и на Linux, но только zip).
+  Без `--lisbot` LisBot и Node.js в сборку не попадут.
+* **На Linux без GitHub Actions** (так собрана версия 1.0.0): нужны `npm`, Wine с 32-битной частью
+  (`wine64 wine32:i386`) и Inno Setup из nuget-пакета `Tools.InnoSetup` (ISCC.exe):
+  ```
+  LANG=C.UTF-8 python3 packaging/windows/build.py --lisbot --installer --iscc "wine /путь/ISCC.exe"
+  ```
+  better-sqlite3 у LisBot уже содержит готовую сборку под Windows, поэтому `node_modules` можно ставить на Linux.
+  Под тем же Wine можно проверить результат: `wine runtime/python.exe app/launch.pyw --console --demo`.
 
 ## Как выглядит для пользователя
 

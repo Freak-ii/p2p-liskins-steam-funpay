@@ -264,7 +264,7 @@ class Desktop:
         items = [(self.CMD_PANEL, "Открыть панель центра", {"default"})]
         names = {"starsbot": (self.CMD_STARS, "StarsBot · Telegram Stars"), "mannbot": (self.CMD_MANN, "MannBot · FunPay"),
                  "lisbot": (self.CMD_LIS, "LisBot · LIS-SKINS")}
-        for b in self.bots:
+        for b in sorted(self.bots, key=lambda n: list(names).index(n) if n in names else 99):
             if b in names:
                 items.append((names[b][0], f"Открыть {names[b][1]}", set()))
         items += [None, (self.CMD_DATA, "Папка данных", set()), (self.CMD_LOGS, "Журналы", set()), None,

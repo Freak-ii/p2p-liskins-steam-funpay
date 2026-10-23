@@ -49,6 +49,12 @@ def main() -> None:
         windowed = True
     else:
         windowed = False
+        # вывод в файл/канал на Windows идёт в кодировке ANSI (cp1251/cp1252) — кириллица роняла бы print
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
 
     try:
         from desktop.app import Desktop
