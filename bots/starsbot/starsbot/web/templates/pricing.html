@@ -1,0 +1,26 @@
+{% extends "base.html" %}{% block title %}Цены / RTBA{% endblock %}
+{% block body %}<h1>Цены и RTBA</h1>
+<div class="card"><h2>Настройки RTBA</h2><div class="row">
+<span class="chip {{ 'c-green' if rtba.enabled else 'c-red' }}">RTBA {{ 'включён' if rtba.enabled else 'выключен' }}</span>
+<span class="chip">стратегия: {{rtba.strategy}}</span><span class="chip">шаг: {{rtba.undercut_abs}} ₽ / {{rtba.undercut_pct}}%</span>
+<span class="chip">маржа ≥ {{rtba.min_margin_pct}}%</span><span class="chip">комиссии: {{fee_pct}}%</span>
+<span class="chip">себестоимость звезды: {{ cost_per_star|money if cost_per_star else '—' }} ₽</span>
+<span class="chip">способ: {{rtba.method_filter or 'любой'}}</span>
+{% if is_admin %}<a class="chip" href="/settings#s-rtba">изменить →</a>{% endif %}</div></div>
+
+<div class="card tw"><h2>Номиналы</h2><table><tr><th>Номинал</th><th>Лот</th><th>Текущая цена</th><th>За звезду</th><th>Пол</th><th>Лидер</th><th>Позиция</th><th>Конкурентов</th><th>Последнее решение</th></tr>
+{% for l in lots %}{% set h = last.get(l.stars) %}<tr {% if l.stars == stars %}style="background:var(--chip)"{% endif %}>
+<td><a href="/pricing?stars={{l.stars}}"><b>{{l.stars}}⭐</b></a></td>
+<td>{% if l.offer_id %}<a href="https://funpay.com/lots/offer?id={{l.offer_id}}" target="_blank" rel="noopener">{{l.offer_id}}</a>{% else %}<span class="c-amber">не задан</span>{% endif %}</td>
+<td>{{ h.new_price|money if h else '—' }}</td><td>{{ (h.new_price / l.stars)|round(3) if h and h.new_price else '—' }}</td>
+<td>{{ h.floor|money if h else '—' }}</td><td>{{ h.best_competitor|money if h else '—' }}</td><td>{{ h.position if h else '—' }}</td><td>{{ h.competitors if h else '—' }}</td>
+<td class="muted">{{ (h.ts|ts ~ ' · ' ~ h.reason) if h else '—' }}</td></tr>{% else %}<tr><td colspan=9 class="muted">Лоты не настроены</td></tr>{% endfor %}</table></div>
+
+<div class="row" style="margin-bottom:10px">{% for d in denoms %}<a class="chip {{ 'c-blue' if d == stars }}" href="/pricing?stars={{d}}">{{d}}⭐</a>{% endfor %}</div>
+<div class="cols"><div class="card"><h2>{{stars}}⭐: наша цена, пол и лидер рынка</h2>{{ charts.lines(series|map(attribute='ts')|map('hm')|list, [('Наша цена (лот)', series|map(attribute='new_price')|list, 'var(--accent)'), ('Лидер рынка', series|map(attribute='best_competitor')|list, 'var(--blue)'), ('Пол цены', series|map(attribute='floor')|list, 'var(--gray)')])|safe }}</div>
+<div class="card tw"><h2>Конкуренты {{stars}}⭐ · {{snap_ts|ts}}</h2><table><tr><th>Продавец</th><th>Цена</th><th>За звезду</th><th>Наличие</th><th>Онлайн</th></tr>
+{% for c in comps|sort(attribute='price') %}<tr><td>{{c.seller}}</td><td>{{c.price|money}}</td><td>{{ (c.price / stars)|round(3) }}</td><td>{{c.amount}}</td><td>{{'●' if c.online else '○'}}</td></tr>{% else %}<tr><td colspan=5 class="muted">Нет данных</td></tr>{% endfor %}</table></div></div>
+<div class="card tw"><h2>Решения RTBA · {{stars}}⭐</h2><table><tr><th>Время</th><th>Было</th><th>Стало</th><th>Пол</th><th>Лидер</th><th>Поз.</th><th>Причина</th></tr>
+{% for h in history %}<tr><td>{{h.ts|ts}}</td><td>{{h.old_price|money}}</td><td>{{h.new_price|money}}{% if h.applied %} ✔{% endif %}</td><td>{{h.floor|money}}</td><td>{{h.best_competitor|money}}</td><td>{{h.position}}</td><td class="muted">{{h.reason}}</td></tr>{% else %}<tr><td colspan=7 class="muted">Решений пока нет</td></tr>{% endfor %}</table></div>
+<p class="help">Коэффициент «цена покупателя / цена лота» калибруется по нашему лоту в таблице: {{ markup or 'ещё не откалиброван' }}.</p>
+{% endblock %}

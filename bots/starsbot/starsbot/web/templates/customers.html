@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block title %}Клиенты{% endblock %}
+{% block body %}<h1>Клиенты</h1>
+<form class="card row" method="get"><input name="q" value="{{q}}" placeholder="ник FunPay, @username, заметка, тег" style="flex:1"><button>Найти</button></form>
+<div class="card tw"><table>
+<tr><th>Покупатель</th><th>Заказов</th><th>Завершено</th><th>Возвратов</th><th>Звёзд</th><th>LTV, ₽</th><th>Получатели</th><th>Последний визит</th><th>Заметка / теги</th><th>ЧС</th></tr>
+{% for c in rows %}<tr><td><a href="https://funpay.com/users/{{c.funpay_id}}/" target="_blank" rel="noopener">{{c.username}}</a> <a class="muted" href="/orders?q={{c.username}}">заказы</a></td>
+<td>{{c.orders_count}}</td><td>{{c.completed_count}}</td><td>{{c.refunded_count}}</td><td>{{c.stars_bought}}</td><td>{{c.total_spent|money}}</td>
+<td style="font-size:12px">{% set tg = c.tg_usernames|jsonload %}{% for u in tg %}@{{u}} {% else %}—{% endfor %}</td><td>{{c.last_seen|ts}}</td>
+<td>{% if can_op %}<form method="post" action="/customers/{{c.funpay_id}}" class="row"><input type="hidden" name="action" value="note">
+<input name="note" value="{{c.notes}}" placeholder="заметка" style="width:140px"><input name="tags" value="{{c.tags}}" placeholder="теги" style="width:90px"><button title="Сохранить">💾</button></form>
+{% else %}{{c.notes}} <span class="muted">{{c.tags}}</span>{% endif %}</td>
+<td>{% if can_op %}<form method="post" action="/customers/{{c.funpay_id}}" class="row">{% if c.blacklisted %}<span class="chip c-red">да</span><button name="action" value="unblock">снять</button>
+{% else %}<input name="note" placeholder="причина" style="width:100px"><button class="danger" name="action" value="blacklist">в ЧС</button>{% endif %}</form>
+{% else %}{{ 'да' if c.blacklisted else '' }}{% endif %}</td></tr>
+{% else %}<tr><td colspan="10" class="muted">Клиентов пока нет</td></tr>{% endfor %}</table></div>{% endblock %}

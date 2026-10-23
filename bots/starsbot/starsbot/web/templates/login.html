@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block title %}Вход{% endblock %}
+{% block body %}<div class="card" style="max-width:420px;margin:60px auto">
+<h1>⭐ Вход в StarsBot</h1>
+<form method="post" class="row"><input type="password" name="token" placeholder="токен доступа" autofocus style="flex:1">
+<button class="primary">Войти</button></form>
+<div class="help" style="margin-top:8px">Токен администратора — dashboard.token, оператора и наблюдателя — dashboard.operator_token / viewer_token.</div></div>{% endblock %}

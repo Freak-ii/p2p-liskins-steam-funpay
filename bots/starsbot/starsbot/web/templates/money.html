@@ -1,0 +1,102 @@
+{% extends "base.html" %}{% block title %}Деньги{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>Деньги: полный круг</h1>
+<div class="row">{% for d in [1,7,30,90] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/money?days={{d}}">{{d}} дн.</a>{% endfor %}</div></div>
+
+<div class="card"><h2>Как идут деньги</h2>
+<div class="row" style="gap:6px;font-size:13px">
+<span class="chip">① Покупатель платит на FunPay</span>→<span class="chip">② FunPay −{{e.funpay_fee_pct}}%</span>→
+<span class="chip">③ Вывод −{{e.withdraw_fee_pct}}%{% if e.withdraw_fee_fixed_rub %} −{{e.withdraw_fee_fixed_rub}} ₽{% endif %}</span>→
+<span class="chip">④ Покупка TON (спред {{e.exchange_spread_pct}}%{% if e.deposit_fee_ton %}, перевод {{e.deposit_fee_ton}} TON{% endif %})</span>→
+<span class="chip">⑤ Кошелёк бота</span>→<span class="chip">⑥ Fragment: звёзды + газ {{e.gas_per_purchase_ton}} TON</span>→<span class="chip">⑦ Звёзды покупателю</span></div>
+<div class="help">Комиссии меняются в <a href="/settings#s-economics">Настройки → Экономика</a>. Реальный курс TON считается по вашим пополнениям из журнала ниже — записывайте каждое пополнение.</div></div>
+
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ wallet.balance|ton }}</div><div class="l">TON на кошельке{% if wallet.ts %} · {{ wallet.ts|ts }}{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ wallet.capacity if wallet.capacity is not none else '—' }}</div><div class="l">звёзд хватит (за вычетом резерва и заказов в работе)</div></div>
+  <div class="card kpi"><div class="v">{{ rate|money }} ₽</div><div class="l">эффективный курс TON · {{ rate_src }}</div></div>
+  <div class="card kpi"><div class="v">{{ market|money }} ₽</div><div class="l">биржевой курс TON</div></div>
+  <div class="card kpi"><div class="v">{{ tps|ton }}</div><div class="l">TON за 1 звезду (Fragment)</div></div>
+  <div class="card kpi"><div class="v">{{ cps|round(3) if cps else '—' }} ₽</div><div class="l">себестоимость звезды</div></div>
+  <div class="card kpi"><div class="v">{% if wallet.balance is not none and rate %}{{ (wallet.balance * rate)|money }} ₽{% else %}—{% endif %}</div><div class="l">кошелёк в рублях</div></div>
+</div>
+<div class="card"><h2>Сколько заказов выдержит кошелёк</h2><div class="row">
+{% for c in cap %}<div class="card kpi" style="margin:0;min-width:110px"><div class="v">{{ c.orders if c.orders is not none else '—' }}</div><div class="l">× {{c.stars}}⭐ · {{c.ton|ton}} TON</div></div>{% endfor %}</div></div>
+
+<div class="card tw"><h2>Калькулятор круга по номиналам</h2>
+<div class="help" style="margin-bottom:8px">Меняйте цену лота — расчёт обновится сразу. Цена по умолчанию — текущая цена RTBA или последнего заказа.</div>
+<table id="calc"><tr><th>Номинал</th><th>Цена лота, ₽</th><th>− FunPay</th><th>− вывод</th><th>= чистыми</th><th>TON (звёзды + газ)</th><th>Себестоимость, ₽</th><th>Прибыль, ₽</th><th>Маржа</th><th>Безубыток, ₽</th></tr>
+{% for f in calc %}<tr data-stars="{{f.stars}}"><td><b>{{f.stars}}⭐</b></td>
+<td><input type="number" step="0.01" style="width:100px" value="{{ f.price if f.price else '' }}" oninput="recalc()"></td>
+<td class="fp">{{f.funpay_fee|money}}</td><td class="wd">{{f.withdraw_fee|money}}</td><td class="net"><b>{{f.net_rub|money}}</b></td>
+<td class="ton">{{f.ton_total|ton}}</td><td class="cost">{{f.cost_rub|money}}</td>
+<td class="profit {{ 'c-green' if (f.profit or 0) >= 0 else 'c-red' }}"><b>{{f.profit|money}}</b></td><td class="margin">{{ (f.margin_pct ~ '%') if f.margin_pct is not none else '—' }}</td>
+<td class="be">{{f.breakeven_price|money}}</td></tr>{% endfor %}</table></div>
+
+<div class="cols">
+<div class="card"><h2>Пришло за {{days|int}} дн.</h2><table>
+<tr><td>Выдано заказов / звёзд</td><td>{{period.orders}} / {{period.stars}}⭐</td></tr>
+<tr><td>Выручка (цена лотов)</td><td><b>{{period.gross|money}} ₽</b></td></tr>
+<tr><td class="muted">· подтверждено покупателями</td><td>{{period.confirmed_rub|money}} ₽</td></tr>
+<tr><td class="muted">· выдано, ждёт подтверждения (заморожено FunPay)</td><td>{{period.frozen_rub|money}} ₽</td></tr>
+<tr><td class="muted">· оплачено, ещё не выдано</td><td>{{period.waiting_rub|money}} ₽</td></tr>
+<tr><td>Выведено с FunPay (по журналу)</td><td>{{period.withdrawn_funpay|money}} ₽</td></tr>
+<tr><td>Пополнено кошелёк</td><td>{{period.topup_rub|money}} ₽ → {{period.topup_ton|ton}} TON ({{period.topups}} раз)</td></tr>
+</table></div>
+<div class="card"><h2>Ушло и осталось</h2><table>
+<tr><td>Комиссия FunPay</td><td>{{period.funpay_fee|money}} ₽</td></tr>
+<tr><td>Комиссия вывода</td><td>{{period.withdraw_fee|money}} ₽</td></tr>
+<tr><td>Чистыми после комиссий</td><td><b>{{period.net|money}} ₽</b></td></tr>
+<tr><td>TON на звёзды</td><td>{{period.ton_spent|ton}} TON</td></tr>
+<tr><td>TON на газ</td><td>{{period.gas|ton}} TON</td></tr>
+<tr><td>Себестоимость звёзд</td><td>{{period.cost|money}} ₽</td></tr>
+<tr><td>Прочие расходы</td><td>{{period.expenses|money}} ₽</td></tr>
+<tr><td><b>Прибыль</b></td><td><b class="{{ 'c-green' if (period.profit or 0) >= 0 else 'c-red' }}">{{period.profit|money}} ₽</b>{% if period.gross %} ({{ ((period.profit or 0) / period.gross * 100)|round(1) }}%){% endif %}</td></tr>
+</table></div></div>
+
+{% if period.by_denomination %}<div class="card tw"><h2>По номиналам за {{days|int}} дн.</h2><table><tr><th>Номинал</th><th>Заказов</th><th>Выручка</th><th>TON</th><th>Себестоимость</th><th>Прибыль</th><th>Маржа</th></tr>
+{% for d in period.by_denomination %}<tr><td>{{d.stars}}⭐</td><td>{{d.orders}}</td><td>{{d.gross|money}}</td><td>{{d.ton|ton}}</td><td>{{d.cost|money}}</td><td class="{{ 'c-green' if d.profit >= 0 else 'c-red' }}">{{d.profit|money}}</td><td>{{d.margin_pct}}%</td></tr>{% endfor %}</table></div>{% endif %}
+
+<div class="cols">
+<div class="card"><h2>Сверка кошелька</h2>
+{% if rec.known %}<table>
+<tr><td>Баланс на точке отсчёта ({{ rec.start.ts|ts }})</td><td>{{rec.start.ton|ton}} TON</td></tr>
+<tr><td>+ пополнения и корректировки</td><td>{{rec.topups|ton}}</td></tr>
+<tr><td>− выводы TON</td><td>{{rec.withdrawn|ton}}</td></tr>
+<tr><td>− звёзды</td><td>{{rec.spent|ton}}</td></tr>
+<tr><td>− газ</td><td>{{rec.gas|ton}}</td></tr>
+<tr><td>= должно быть</td><td><b>{{rec.expected|ton}} TON</b></td></tr>
+<tr><td>фактически в сети</td><td><b>{{rec.actual|ton}} TON</b></td></tr>
+<tr><td>расхождение</td><td class="{{ 'c-red' if rec.alarm else 'c-green' }}"><b>{{rec.diff|ton}} TON</b>{% if rec.alarm %} — запишите пополнение/вывод в журнал или проверьте кошелёк{% endif %}</td></tr>
+</table>{% else %}<span class="muted">Баланс кошелька ещё ни разу не получен — запустите бота.</span>{% endif %}
+{% if is_admin %}<form method="post" style="margin-top:10px"><input type="hidden" name="action" value="reset_start">
+<button onclick="return confirm('Принять текущий баланс за новую точку отсчёта сверки?')">Сбросить точку отсчёта</button></form>{% endif %}</div>
+<div class="card"><h2>Баланс кошелька</h2>{{ charts.lines(balance|map(attribute='ts')|map('hm')|list, [('TON', balance|map(attribute='ton')|list, 'var(--accent)')])|safe }}</div>
+</div>
+
+<div class="card"><h2>Журнал движения денег</h2>
+{% if can_op %}<form method="post" class="row" style="margin-bottom:10px"><input type="hidden" name="action" value="cashflow">
+<select name="kind" style="width:auto">{% for k, t in cashflow_kinds.items() %}<option value="{{k}}">{{t}}</option>{% endfor %}</select>
+<input name="rub" placeholder="₽" style="width:110px"><input name="ton" placeholder="TON" style="width:110px">
+<input name="note" placeholder="комментарий (биржа, карта…)" style="flex:1"><button class="primary">Записать</button></form>
+<div class="help" style="margin-bottom:8px">Пополнение: сколько рублей потратили и сколько TON пришло на кошелёк бота — отсюда реальный курс. Вывод с FunPay: сколько рублей пришло на карту.</div>{% endif %}
+<div class="tw"><table><tr><th>Время</th><th>Операция</th><th>₽</th><th>TON</th><th>Курс</th><th>Комментарий</th><th></th></tr>
+{% for j in journal %}<tr><td>{{j.ts|ts}}</td><td>{{ cashflow_kinds.get(j.kind, j.kind) }}</td><td>{{j.rub|money}}</td><td>{{j.ton|ton}}</td>
+<td>{{ (j.rub / j.ton)|round(2) if j.ton and j.rub else '' }}</td><td>{{j.note}}</td>
+<td>{% if is_admin %}<form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="{{j.id}}"><button class="danger" onclick="return confirm('Удалить запись?')">✕</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan=7 class="muted">Записей нет</td></tr>{% endfor %}</table></div></div>
+<script>
+const fmt=v=>v==null?'—':(+v).toLocaleString('ru-RU',{maximumFractionDigits:2}),fmtT=v=>v==null?'—':(+(+v).toFixed(4)).toString();
+let calcT=null;
+function recalc(){clearTimeout(calcT);calcT=setTimeout(async()=>{const prices={};
+ for(const tr of document.querySelectorAll('#calc tr[data-stars]')){const v=tr.querySelector('input').value;if(v)prices[tr.dataset.stars]=v}
+ const res=await postJSON('/api/calc',{prices});
+ for(const f of res.rows){const tr=document.querySelector('#calc tr[data-stars="'+f.stars+'"]');if(!tr)continue;
+  tr.querySelector('.fp').textContent=fmt(f.funpay_fee);tr.querySelector('.wd').textContent=fmt(f.withdraw_fee);
+  tr.querySelector('.net').innerHTML='<b>'+fmt(f.net_rub)+'</b>';tr.querySelector('.ton').textContent=fmtT(f.ton_total);
+  tr.querySelector('.cost').textContent=fmt(f.cost_rub);const p=tr.querySelector('.profit');p.innerHTML='<b>'+fmt(f.profit)+'</b>';
+  p.className='profit '+((f.profit||0)>=0?'c-green':'c-red');tr.querySelector('.margin').textContent=f.margin_pct==null?'—':f.margin_pct+'%';
+  tr.querySelector('.be').textContent=fmt(f.breakeven_price)}},250)}
+onLive(ev=>{if((ev.type==='wallet'||ev.type==='cashflow')&&!document.querySelector('input:focus'))setTimeout(()=>location.reload(),1500)});
+</script>
+{% endblock %}
