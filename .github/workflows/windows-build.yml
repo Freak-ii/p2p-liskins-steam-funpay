@@ -1,0 +1,56 @@
+# Windows 10/11-версия Центра (StarsBot, MannBot, LisBot): установщик и портативный zip.
+# Запуск: Actions → Build Windows → Run workflow, пуш тега center-v* (версия = тег) или PR,
+# который меняет упаковку, код центра или зависимости ботов.
+name: Build Windows
+on:
+  workflow_dispatch:
+  push:
+    tags: ["center-v*"]
+  pull_request:
+    paths:
+      - "packaging/windows/**"
+      - ".github/workflows/windows-build.yml"
+      - "center/**"
+      - "requirements.txt"
+      - "bots/*/requirements.txt"
+      - "bots/lisbot/package-lock.json"
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Версия
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".Replace("center-v", "") } else { "0.0.${{ github.run_number }}" }
+          "CENTER_VERSION=$v" >> $env:GITHUB_ENV
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Сборка (Python, Node.js, LisBot, установщик)
+        run: python packaging/windows/build.py --lisbot --installer
+      - name: Проверка портативной версии
+        run: python packaging/windows/smoke_test.py dist/windows/StarsCenter --port 8897
+      - name: Тихая установка и проверка установленной версии (как из ярлыка, через pythonw)
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist/windows/StarsCenter-*-setup.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CURRENTUSER" -Wait
+          $app = "$env:LOCALAPPDATA\Programs\StarsCenter"
+          if (-not (Test-Path "$app\runtime\pythonw.exe")) { throw "установщик не положил runtime" }
+          python packaging/windows/smoke_test.py $app --windowed --port 8898
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Start-Process "$app\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          Start-Sleep 3
+          if (Test-Path "$app\runtime") { throw "удаление оставило runtime" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StarsCenter-windows-${{ env.CENTER_VERSION }}
+          path: |
+            dist/windows/StarsCenter-*-setup.exe
+            dist/windows/StarsCenter-*-win64-portable.zip
+          if-no-files-found: error
