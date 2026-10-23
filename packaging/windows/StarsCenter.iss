@@ -62,10 +62,15 @@ Name: "{group}\Папка данных"; Filename: "{localappdata}\StarsCenter"
 Name: "{group}\Прочти меня"; Filename: "{app}\ПРОЧТИ МЕНЯ.txt"
 Name: "{group}\Удалить Центр"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\Центр"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\launch.pyw"""; WorkingDir: "{app}\app"; IconFilename: "{app}\app\center.ico"; Tasks: desktopicon
-Name: "{userstartup}\Центр"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\launch.pyw"" --no-browser"; WorkingDir: "{app}\app"; IconFilename: "{app}\app\center.ico"; Tasks: autostart
+
+[Registry]
+; автозапуск — то же значение, что переключает пункт «Запускать при входе в Windows» в трее
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "StarsCenter"; ValueData: """{app}\runtime\pythonw.exe"" ""{app}\app\launch.pyw"" --no-browser"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\launch.pyw"""; WorkingDir: "{app}\app"; Description: "Запустить Центр"; Flags: nowait postinstall skipifsilent
+; автообновление из трея ставит тихо с /RELAUNCH — после установки центр запускается снова
+Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\launch.pyw"" --no-browser"; WorkingDir: "{app}\app"; Flags: nowait; Check: IsRelaunch
 
 [UninstallRun]
 ; аккуратно останавливаем запущенный центр (и его ботов) перед удалением файлов
@@ -86,6 +91,23 @@ begin
     '-NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like ''' +
     ExpandConstant('{app}') + '\runtime\*'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"',
     '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+function IsRelaunch(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+      Result := True;
+end;
+
+// Автозапуск, включённый из трея, тоже убираем при удалении программы.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'StarsCenter');
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

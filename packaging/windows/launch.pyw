@@ -1,7 +1,8 @@
 """Лаунчер Windows-версии Центра. Лежит в <программа>\\app рядом с center\\ и bots\\.
 
 Ярлык установщика запускает его через runtime\\pythonw.exe (без окна консоли), «Центр.bat» — через
-python.exe с параметром --console. Остальные параметры передаются центру как есть (--demo, --port, --home…).
+python.exe с параметром --console (без трея). Остальные параметры передаются центру как есть
+(--demo, --port, --home, --no-browser…); --no-tray — без значка в трее. Сама логика — в пакете desktop.
 """
 from __future__ import annotations
 
@@ -29,20 +30,8 @@ def message_box(text: str) -> None:
         print(text, file=sys.stderr)
 
 
-def disable_missing_lisbot(argv: list[str]) -> None:
-    """Сборка без LisBot: выключаем его в center.yaml, если пользователь сам не решил иначе."""
-    from center.config import CenterConfig
-    home = Path(os.environ["CENTER_HOME"])
-    if "--home" in argv[:-1]:
-        home = Path(argv[argv.index("--home") + 1]).expanduser().resolve()
-    if "--demo" in argv:
-        home = home / "demo"
-    cfg = CenterConfig(home)
-    if "lisbot" not in (cfg.user.get("workers") or {}):
-        cfg.save({"workers": {"lisbot": {"enabled": False}}})
-
-
 def main() -> None:
+    console = "--console" in sys.argv[1:]
     argv = [a for a in sys.argv[1:] if a != "--console"]
     os.chdir(APP)
     sys.path.insert(0, str(APP))
@@ -61,16 +50,9 @@ def main() -> None:
     else:
         windowed = False
 
-    if not (APP / "bots" / "lisbot").is_dir():
-        disable_missing_lisbot(argv)
-
-    from center.__main__ import main as center_main
     try:
-        center_main(argv)
-    except SystemExit as e:
-        if windowed and e.code not in (None, 0):
-            message_box(str(e.code))
-        raise
+        from desktop.app import Desktop
+        code = Desktop(argv, app_dir=APP, console=console).run()
     except Exception:  # noqa: BLE001
         if windowed:
             home = Path(os.environ["CENTER_HOME"])
@@ -79,6 +61,7 @@ def main() -> None:
             crash.write_text(traceback.format_exc(), encoding="utf-8")
             message_box(f"Центр не запустился. Подробности: {crash}")
         raise
+    sys.exit(code)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@
     StarsCenter/                    готовая папка программы
       runtime/                      официальный CPython для Windows (пакет python с nuget.org) + зависимости
       node/                         Node.js для LisBot (только с --lisbot)
-      app/                          center/ и bots/ (без тестов), лаунчер launch.pyw
+      app/                          center/ и bots/ (без тестов), лаунчер launch.pyw и desktop/ (трей, обновления)
       Центр.bat, Центр (демо).bat   запуск с окном консоли (видно журнал)
     StarsCenter-<версия>-win64-portable.zip
     StarsCenter-<версия>-setup.exe  (с --installer, нужен Inno Setup 6: ISCC.exe)
@@ -201,6 +201,7 @@ def copy_code(app: Path, with_lisbot: bool) -> list[str]:
         if (ROOT / f).exists():
             shutil.copy2(ROOT / f, app / f)
     shutil.copy2(HERE / "launch.pyw", app / "launch.pyw")
+    shutil.copytree(HERE / "desktop", app / "desktop", ignore=IGNORE_ANYWHERE)
     return bots
 
 
@@ -220,7 +221,17 @@ README_TXT = """Центр: StarsBot (Telegram Stars через Fragment) + Mann
   • Портативная версия: распакуйте архив (лучше в папку без пробелов, например C:\\StarsCenter)
     и запустите «Центр.bat» (с окном журнала) или app\\launch.pyw.
   • «Центр (демо).bat» — посмотреть программу без аккаунтов: эмуляция FunPay/Steam/Fragment.
-  • Выход: кнопка «Выключить центр» в панели. Закрытие вкладки браузера программу НЕ останавливает.
+  • Первый запуск сразу откроет мастер настройки StarsBot (FunPay, кошелёк TON, Fragment).
+  • Программа живёт в трее (значок-звезда у часов): клик — панель, правый клик — меню
+    (боты, папка данных, журналы, автозапуск, обновления, выход).
+  • Выход: «Выключить центр и ботов» в меню трея или кнопка в панели.
+    Закрытие вкладки браузера программу НЕ останавливает.
+
+ОБНОВЛЕНИЯ
+  Программа сама проверяет новые версии (GitHub Releases), если в файле
+  %LOCALAPPDATA%\\StarsCenter\\updates.json указан токен GitHub только на чтение:
+    {"repo": "Freak-ii/p2p-liskins-steam-funpay", "token": "github_pat_..."}
+  Обновление ставится по клику на уведомление, данные сохраняются.
 
 ГДЕ ДАННЫЕ
   %LOCALAPPDATA%\\StarsCenter\\center-data  (настройки, базы, журналы, ключи).
