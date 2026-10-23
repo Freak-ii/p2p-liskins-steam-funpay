@@ -15,7 +15,7 @@ DEFAULTS: dict[str, Any] = {
     "general": {
         "dry_run": True, "demo": False, "language": "ru",
         "database": "data/starsbot.sqlite3", "log_file": "data/starsbot.log", "log_level": "INFO",
-        "autostart": False,
+        "autostart": False, "backup_keep_days": 14,
     },
     "messages": {"ru": {}, "en": {}},
     "funpay": {
@@ -67,6 +67,12 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True, "manual_review_score": 60, "block_score": 90, "large_order_stars": 1500,
         "max_orders_per_buyer_per_day": 6, "max_recipients_per_buyer_per_day": 3,
         "blacklist_funpay_users": [], "blacklist_usernames": [],
+    },
+    # предохранители денег в боевом режиме (в dry-run и демо не действуют)
+    "safety": {
+        "pilot_orders": 3,              # первые N боевых покупок — только после /approve продавца
+        "daily_ton_limit": 0.0,         # не тратить больше N TON за сутки без одобрения (0 — без лимита)
+        "max_order_ton": 0.0,           # заказ дороже N TON — только после одобрения (0 — без лимита)
     },
     "rtba": {
         "enabled": False, "interval_seconds": 300, "strategy": "top1", "target_position": 1,

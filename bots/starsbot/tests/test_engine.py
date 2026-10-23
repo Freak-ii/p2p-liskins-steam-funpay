@@ -147,3 +147,71 @@ def test_order_claimed_by_other_bot_is_skipped(tmp_path, monkeypatch):
         return oid
     oid = asyncio.run(go())
     assert sup.db.get_order(oid) is None and not wallet.history
+
+
+def test_pilot_mode_and_daily_limit_in_live_mode(tmp_path):
+    sup, e, fp, wallet = make(tmp_path)
+    e.cfg.general.demo = False                     # как в боевом режиме: предохранители включены
+    e.cfg.safety.pilot_orders = 1
+    e.cfg.safety.daily_ton_limit = 2.0
+
+    async def go():
+        await boot(e)
+        a = fp.buyer_pays("Alice", 11, 100, username="alice_tg")       # 1.15 TON
+        await drain(e, wallet)
+        st_pilot = sup.db.get_order(a)["status"]
+        await e.handle_command("approve", [a])
+        await drain(e, wallet)
+        b = fp.buyer_pays("Bob", 12, 75, username="bob_real")          # 0.8625 TON: 2.01 > 2.0 за сутки
+        await drain(e, wallet)
+        return a, b, st_pilot
+    a, b, st_pilot = asyncio.run(go())
+    assert st_pilot == S.PENDING_APPROVAL.value
+    assert sup.db.get_order(a)["status"] == S.DELIVERED.value and len(wallet.history) == 1
+    assert sup.db.get_order(b)["status"] == S.PENDING_APPROVAL.value and len(wallet.history) == 1
+    assert e.live_purchases() == 1 and abs(e.spent_ton_24h() - 1.15) < 1e-6
+    assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE text LIKE '%пилотный режим%'") == 1
+    assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE text LIKE '%лимита 2 TON%'") == 1
+
+
+def test_returning_buyer_greeting_hints_last_recipient(tmp_path):
+    sup, e, fp, wallet = make(tmp_path)
+
+    async def go():
+        await boot(e)
+        fp.buyer_pays("Alice", 11, 100, username="alice_tg")
+        await drain(e, wallet)
+        first = [t for ch, t in fp.outbox if ch == "511"]
+        fp.buyer_pays("Alice", 11, 50)                 # второй заказ без username
+        await drain(e, wallet)
+        second = [t for ch, t in fp.outbox if ch == "511"][len(first):]
+        return first, second
+    first, second = asyncio.run(go())
+    assert "снова" not in first[0]
+    assert "Рады видеть вас снова" in second[0] and "@alice_tg" in second[0]
+    assert "{" not in second[0]
+
+
+def test_db_backup_and_health(tmp_path):
+    from starsbot.crm.db import Database
+    db = Database(tmp_path / "data" / "starsbot.sqlite3")
+    db.kv_set("x", 1)
+    folder = tmp_path / "data" / "backups"
+    for day in ("20260101", "20260102", "20260103"):
+        (folder / f"starsbot-{day}.sqlite3").parent.mkdir(parents=True, exist_ok=True)
+        (folder / f"starsbot-{day}.sqlite3").write_bytes(b"old")
+    dest = db.backup(folder, keep=2)
+    assert dest.exists() and Database(dest).kv_get("x") == 1
+    assert sorted(p.name for p in folder.glob("*.sqlite3"))[0] == "starsbot-20260103.sqlite3"
+    assert len(list(folder.glob("*.sqlite3"))) == 2
+
+    sup, e, fp, wallet = make(tmp_path / "bot")
+    e.last_ok.update(funpay_poll=time.time(), ton_watch=time.time(), wallet=time.time())
+    e._fragment_state(session="ok", kyc="verified")
+    assert e.health()["ok"]
+    e.last_ok["funpay_poll"] = time.time() - 3600
+    e.started_at = time.time() - 4000
+    h = e.health()
+    assert not h["ok"] and [c["name"] for c in h["checks"] if not c["ok"]] == ["funpay_poll"]
+    asyncio.run(e.watchdog())
+    assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code='watchdog'") == 1

@@ -6,6 +6,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
     ("general", [
         ("dry_run", "Тестовый режим (dry-run)", "bool", "Бот читает FunPay и Fragment и ведёт CRM, но ничего не отправляет и не покупает"),
         ("autostart", "Запускать бота при открытии приложения", "bool", ""),
+        ("backup_keep_days", "Хранить резервные копии базы, дней", "int", "Копия раз в сутки в data/backups"),
         ("language", "Язык сообщений покупателю по умолчанию", "choice:ru|en", "Бот переключится на English, если покупатель пишет на английском"),
         ("log_level", "Подробность журнала", "choice:INFO|WARNING|DEBUG", ""),
     ]),
@@ -76,6 +77,12 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("blacklist_funpay_users", "Чёрный список ников FunPay", "list", "По одному в строке"),
         ("blacklist_usernames", "Чёрный список username Telegram", "list", "По одному в строке"),
     ]),
+    ("safety", [
+        ("pilot_orders", "Пилот: первые N боевых покупок — с одобрения", "int",
+         "Бот готовит покупку и ждёт /approve, пока не пройдут N реальных оплат. 0 — выключено"),
+        ("daily_ton_limit", "Лимит трат за сутки, TON", "float", "Сверх лимита — только с одобрения. 0 — без лимита"),
+        ("max_order_ton", "Заказ дороже, TON — с одобрения", "float", "0 — без ограничения"),
+    ]),
     ("rtba", [
         ("enabled", "RTBA (автоцена) включена", "bool", ""),
         ("interval_seconds", "Проверять рынок каждые, сек", "int", ""),
@@ -116,7 +123,8 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
 
 SECTION_TITLES = {
     "general": "Основное", "funpay": "FunPay", "fragment": "Fragment", "ton": "TON-кошелёк", "rates": "Курс TON",
-    "economics": "Деньги: комиссии", "deal": "Сделка", "risk": "Риск-система", "rtba": "RTBA — автоцена",
+    "economics": "Деньги: комиссии", "deal": "Сделка", "risk": "Риск-система",
+    "safety": "Предохранители денег", "rtba": "RTBA — автоцена",
     "notifications.telegram": "Telegram", "notifications": "Уведомления", "dashboard": "Доступ к панели (роли)",
     "sla": "Сроки (SLA)",
 }

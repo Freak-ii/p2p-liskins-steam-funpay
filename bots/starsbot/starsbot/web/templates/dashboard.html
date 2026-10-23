@@ -22,6 +22,7 @@
       <div class="kpi"><div class="v">{{ rate[0]|money }} ₽</div><div class="l">курс TON ({{ rate[1] }})</div></div>
     </div>
     <div class="row" style="margin-top:8px">{% for c in cap %}<span class="chip" title="{{c.ton|ton}} TON за заказ">{{c.stars}}⭐ × {{ c.orders if c.orders is not none else '—' }}</span>{% endfor %}</div>
+    <div class="help">Потрачено за сутки: {{ spent24|ton }} TON{% if safety.daily_ton_limit %} из {{ safety.daily_ton_limit }} (лимит){% endif %}{% if not dry_run and not app.demo and safety.pilot_orders and live_done < safety.pilot_orders %} · <b class="c-amber">пилот: боевых оплат {{ live_done }} из {{ safety.pilot_orders }}, каждая — с вашего одобрения</b>{% endif %}</div>
     <div class="help">В работе: {{ wallet.committed or 0 }} звёзд (уже оплачены покупателями, ещё не куплены). <a href="/money">Деньги и калькулятор →</a></div>
   </div>
 </div>

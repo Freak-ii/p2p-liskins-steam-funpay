@@ -37,6 +37,7 @@ def test_demo_pages_controls_and_money(tmp_path):
         try:
             oid = res["orders"][1]
             for path in ["/", "/?days=30", "/orders", "/orders?q=bob_real", f"/orders/{oid}", "/customers",
+                         "/customers?seg=repeat", "/customers?seg=vip&q=Greg", "/customers/11",
                          "/pricing", "/pricing?stars=250", "/money", "/money?days=7&p100=150", "/analytics",
                          "/alerts", "/settings", "/setup", "/messages", "/messages?lang=en", "/logs", "/api/logs",
                          "/api/status"]:

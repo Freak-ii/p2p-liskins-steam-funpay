@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% block title %}{{c.username}}{% endblock %}
+{% block body %}
+<h1>{{c.username}} {% for t, color in segs %}<span class="chip c-{{color}}">{{t}}</span> {% endfor %}</h1>
+<div class="grid">
+  <div class="card kpi"><div class="v">{{c.orders_count}}</div><div class="l">заказов · завершено {{c.completed_count}}</div></div>
+  <div class="card kpi"><div class="v">{{c.total_spent|money}} ₽</div><div class="l">LTV (оплачено)</div></div>
+  <div class="card kpi"><div class="v">{{profit|money}} ₽</div><div class="l">прибыль с клиента</div></div>
+  <div class="card kpi"><div class="v">{{c.stars_bought}}</div><div class="l">звёзд куплено</div></div>
+  <div class="card kpi"><div class="v">{{c.refunded_count}}</div><div class="l">возвратов</div></div>
+  <div class="card kpi"><div class="v" style="font-size:15px">{{c.first_seen|ts}}</div><div class="l">первый визит · последний {{c.last_seen|ts}}</div></div>
+</div>
+<div class="cols">
+<div class="card"><h2>Заметка и теги</h2>
+{% if can_op %}<form method="post" action="/customers/{{c.funpay_id}}"><input type="hidden" name="action" value="note">
+<textarea name="note" placeholder="заметка о клиенте">{{c.notes}}</textarea>
+<div class="row" style="margin-top:6px"><input name="tags" value="{{c.tags}}" placeholder="теги через запятую" style="flex:1"><button>Сохранить</button></div></form>
+<form method="post" action="/customers/{{c.funpay_id}}" class="row" style="margin-top:10px">{% if c.blacklisted %}<span class="chip c-red">в чёрном списке</span><button name="action" value="unblock">Убрать из ЧС</button>
+{% else %}<input name="note" placeholder="причина" style="flex:1"><button class="danger" name="action" value="blacklist">В чёрный список</button>{% endif %}</form>
+{% else %}<pre>{{c.notes}}</pre><span class="muted">{{c.tags}}</span>{% endif %}
+<p><a href="https://funpay.com/users/{{c.funpay_id}}/" target="_blank" rel="noopener">Профиль на FunPay ↗</a></p></div>
+<div class="card tw"><h2>Получатели звёзд</h2><table><tr><th>Username</th><th>Заказов</th><th>Звёзд</th><th>Последний</th></tr>
+{% for r in recipients %}<tr><td>@{{r.tg_username}}</td><td>{{r.n}}</td><td>{{r.stars}}</td><td>{{r.last|ts}}</td></tr>{% else %}<tr><td colspan=4 class="muted">—</td></tr>{% endfor %}</table></div>
+</div>
+<div class="card tw"><h2>Заказы</h2><table><tr><th>Заказ</th><th>⭐</th><th>Получатель</th><th>Сумма</th><th>Статус</th><th>Отзыв</th><th>Оплачен</th></tr>
+{% for o in orders %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.stars}}</td><td>{{ ('@' ~ o.tg_username) if o.tg_username else '—' }}</td>
+<td>{{o.price|money}}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{{ (o.review_stars ~ '★') if o.review_stars else '' }}</td><td>{{o.paid_at|ts}}</td></tr>{% endfor %}</table></div>
+<div class="card"><h2>Последние сообщения</h2>{% for m in msgs %}<div style="margin:6px 0;padding:6px 8px;border-radius:8px;background:var(--chip);{% if m.direction=='out' %}margin-left:30px{% else %}margin-right:30px{% endif %}">
+<div class="muted" style="font-size:11px">{{ 'бот' if m.direction=='out' else 'покупатель' }} · {{m.ts|ts}}{% if m.order_id %} · #{{m.order_id}}{% endif %}</div><pre>{{m.text}}</pre></div>{% else %}<span class="muted">Нет сообщений</span>{% endfor %}</div>
+{% endblock %}

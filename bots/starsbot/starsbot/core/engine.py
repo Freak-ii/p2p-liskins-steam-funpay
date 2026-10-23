@@ -16,6 +16,7 @@ import math
 import re
 import statistics
 import time
+from pathlib import Path
 from typing import Any
 
 from starsbot.core import messages as M
@@ -85,9 +86,21 @@ class Engine:
 
     def _order_vars(self, o) -> dict:
         name = o["tg_name"] or ""
+        en = (o["lang"] or self.cfg.general.language) == "en"
+        returning, last_hint = "", ""
+        prev = self.db.one("SELECT tg_username FROM orders WHERE buyer_id=? AND order_id<>? AND delivered_at IS NOT NULL "
+                           "ORDER BY delivered_at DESC LIMIT 1", (o["buyer_id"], o["order_id"])) if o["buyer_id"] else None
+        if prev is not None:     # постоянный покупатель: тёплое приветствие и подсказка прошлого получателя
+            returning = "Welcome back 🙌 " if en else "Рады видеть вас снова 🙌 "
+            if prev["tg_username"]:
+                last_hint = (f"Last time the stars went to @{prev['tg_username']} — if it's the same account, just "
+                             "send it again.\n" if en else
+                             f"Прошлый заказ вы получали на @{prev['tg_username']} — если аккаунт тот же, просто "
+                             "пришлите его ещё раз.\n")
         return {"order_id": o["order_id"], "buyer": o["buyer_username"], "stars": o["stars"],
                 "username": o["tg_username"] or "", "name_part": f" ({name})" if name else "",
-                "denominations": ", ".join(str(d) for d in self._denominations())}
+                "denominations": ", ".join(str(d) for d in self._denominations()),
+                "returning": returning, "last_hint": last_hint}
 
     async def say(self, o, key: str, **extra: Any) -> None:
         """Отправить шаблонное сообщение в чат заказа."""
@@ -613,6 +626,8 @@ class Engine:
         elif share and cost_rub is not None and o["price"] and cost_rub > float(o["price"]) * share / 100:
             problem = (f"себестоимость {cost_rub:.2f} ₽ больше {share:g}% суммы заказа {o['price']:g} ₽ "
                        "(вырос курс TON или цена на Fragment?)")
+        if not problem:
+            problem = self._safety_problem(amount)
         if problem and not o["approved"]:
             self._set(oid, S.PENDING_APPROVAL, "price_guard", fail_reason="price_guard", ton_amount=amount,
                       cost_rub=cost_rub)
@@ -671,6 +686,35 @@ class Engine:
         self._set(oid, S.SENT, "tx_sent", sent_at=time.time(), tx_msg_hash=sent.msg_hash)
         self.wallet_info["ts"] = 0
         await self.fragment.confirm(tx, sent.boc)
+
+    def live_purchases(self) -> int:
+        """Сколько реальных (не dry-run) оплат уже ушло в сеть."""
+        return int(self.db.scalar("SELECT COUNT(*) FROM purchases WHERE state IN ('sent','confirmed') "
+                                  "AND msg_hash NOT LIKE 'dry%'", (), 0))
+
+    def spent_ton_24h(self) -> float:
+        return float(self.db.scalar("SELECT SUM(amount_nano) FROM purchases WHERE state IN ('sent','confirmed',"
+                                    "'signed','unknown') AND created_at>=?", (time.time() - 86400,), 0) or 0) / 1e9
+
+    def _safety_problem(self, amount: float) -> str:
+        """Предохранители боевого режима: пилотные покупки, лимит на заказ и на сутки."""
+        c = self.cfg
+        if c.general.dry_run or c.general.demo:
+            return ""
+        s = c.get("safety") or {}
+        pilot = int(s.get("pilot_orders") or 0)
+        done = self.live_purchases()
+        if pilot and done < pilot:
+            return (f"пилотный режим: боевая покупка {done + 1} из {pilot} — проверьте получателя и сумму "
+                    f"({amount:.4f} TON)")
+        max_order = float(s.get("max_order_ton") or 0)
+        if max_order and amount > max_order:
+            return f"заказ стоит {amount:.4f} TON — больше лимита {max_order:g} TON на заказ"
+        daily = float(s.get("daily_ton_limit") or 0)
+        spent = self.spent_ton_24h()
+        if daily and spent + amount > daily:
+            return f"за сутки уже потрачено {spent:.3f} TON, с этим заказом будет больше лимита {daily:g} TON"
+        return ""
 
     async def _purchase_error(self, o, code: str, text: str) -> None:
         oid = o["order_id"]
@@ -1129,6 +1173,40 @@ class Engine:
             lines.append(f"{k}: {int(time.time() - ts)} c назад")
         return "\n".join(lines)
 
+    # ================================================================== здоровье и резервные копии
+    def health(self) -> dict:
+        """Свежесть рабочих циклов: если цикл давно не отрабатывал, бот «завис» на этом участке."""
+        now = time.time()
+        limits = {"funpay_poll": 3 * float(self.cfg.funpay.poll_interval) + 60, "ton_watch": 180, "wallet": 600}
+        checks = []
+        for name, limit in limits.items():
+            ts = self.last_ok.get(name)
+            age = now - ts if ts else now - self.started_at
+            checks.append({"name": name, "age": round(age), "limit": round(limit), "ok": age <= limit})
+        fr = self.fragment_status
+        checks.append({"name": "fragment_session", "ok": fr.get("session") != "expired" and fr.get("kyc") != "required",
+                       "detail": f"{fr.get('session')}/{fr.get('kyc')}"})
+        return {"ok": all(c["ok"] for c in checks), "uptime": round(now - self.started_at), "paused": self.paused,
+                "checks": checks}
+
+    async def watchdog(self) -> None:
+        if time.time() - self.started_at < 300:
+            return                                   # дать циклам разогнаться после запуска
+        stale = [c for c in self.health()["checks"] if not c["ok"] and "age" in c]
+        if stale:
+            await self.notifier.notify("CRITICAL", "watchdog", "Бот не обновлял: " + ", ".join(
+                f"{c['name']} ({c['age'] // 60} мин)" for c in stale) + ". Проверьте интернет и журнал.",
+                throttle_key="watchdog")
+
+    async def backup_db(self) -> None:
+        folder = Path(self.db.path).parent / "backups" if self.db.path != ":memory:" else None
+        if folder is None:
+            return
+        keep = int((self.cfg.get("general") or {}).get("backup_keep_days") or 14)
+        dest = await asyncio.to_thread(self.db.backup, folder, keep)
+        if dest is not None:
+            self.last_ok["backup"] = time.time()
+
     # ================================================================== циклы
     async def _loop(self, name: str, interval: float, fn) -> None:
         errors = 0
@@ -1202,6 +1280,8 @@ class Engine:
             self._loop("ton_watch", 8, self.watch_purchases),
             self._loop("wallet", 90, self.wallet_watch),
             self._loop("timers", 30, self.timers),
+            self._loop("watchdog", 120, self.watchdog),
+            self._loop("backup", 3600, self.backup_db),
             self._loop("raise", 300, self.raise_lots),
             self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),
             self.deliver_worker(),

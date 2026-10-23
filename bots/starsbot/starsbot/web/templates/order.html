@@ -3,7 +3,7 @@
 <h1>Заказ #{{o.order_id}} <span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></h1>
 <div class="cols">
 <div class="card"><h2>Детали</h2><table>
-<tr><td>Покупатель</td><td>{{o.buyer_username}} (id {{o.buyer_id}}){% if customer %} · заказов {{customer.orders_count}}, LTV {{customer.total_spent|money}} ₽{% if customer.blacklisted %} <span class="chip c-red">ЧС</span>{% endif %}{% endif %}</td></tr>
+<tr><td>Покупатель</td><td><a href="/customers/{{o.buyer_id}}">{{o.buyer_username}}</a>{% if customer %} {% for t, color in segments_of(customer) %}<span class="chip c-{{color}}">{{t}}</span> {% endfor %}{% endif %}{% if customer %} · заказов {{customer.orders_count}}, LTV {{customer.total_spent|money}} ₽{% if customer.blacklisted %} <span class="chip c-red">ЧС</span>{% endif %}{% endif %}</td></tr>
 <tr><td>Товар</td><td>{{o.description}}</td></tr>
 <tr><td>Звёзды</td><td><b>{{o.stars}}⭐</b> ({{o.quantity}} × {{o.stars_per_unit}})</td></tr>
 <tr><td>Сумма</td><td>{{o.price|money}} {{o.currency}}</td></tr>

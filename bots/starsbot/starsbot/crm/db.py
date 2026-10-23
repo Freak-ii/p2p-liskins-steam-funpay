@@ -87,6 +87,7 @@ ORDER_COLUMNS = {
 
 class Database:
     def __init__(self, path: str | Path = ":memory:"):
+        self.path = str(path)
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
@@ -118,6 +119,27 @@ class Database:
                 fn(event)
             except Exception:  # noqa: BLE001
                 pass
+
+    def backup(self, folder: str | Path, keep: int = 14) -> Path | None:
+        """Копия базы на сегодня (sqlite backup API — безопасно при работающем боте); старше keep копий — удаляются."""
+        if self.path == ":memory:":
+            return None
+        folder = Path(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / f"{Path(self.path).stem}-{time.strftime('%Y%m%d')}.sqlite3"
+        if dest.exists():
+            return dest
+        tmp = dest.with_suffix(".tmp")
+        target = sqlite3.connect(str(tmp))
+        try:
+            with self._lock:
+                self.conn.backup(target)
+        finally:
+            target.close()
+        tmp.replace(dest)
+        for old in sorted(folder.glob(f"{Path(self.path).stem}-*.sqlite3"))[:-keep]:
+            old.unlink(missing_ok=True)
+        return dest
 
     # ------------------------------------------------------------ kv
     def kv_get(self, key: str, default: Any = None) -> Any:

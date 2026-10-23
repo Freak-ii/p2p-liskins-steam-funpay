@@ -78,7 +78,7 @@ center-data/
 ```
 python -m pytest -q                        # центр
 cd bots/mannbot && python -m pytest -q     # MannBot (31 тест)
-cd bots/starsbot && python -m pytest -q    # StarsBot (31 тест)
+cd bots/starsbot && python -m pytest -q    # StarsBot (34 теста)
 cd bots/lisbot && npm test                 # LisBot (26 тестов)
 ```
 

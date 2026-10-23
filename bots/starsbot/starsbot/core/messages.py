@@ -16,16 +16,16 @@ import re
 TEMPLATES: dict[str, dict[str, str]] = {
     "ru": {
         "greeting_need_username": (
-            "Здравствуйте, {buyer}! Спасибо за оплату заказа #{order_id} 🎉\n"
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
             "⭐ Товар: {stars} Telegram Stars\n"
             "🤖 Выдача автоматическая через официальную платформу Telegram — Fragment, обычно 1–5 минут.\n\n"
-            "👉 Пришлите в этот чат ваш username в Telegram, например: @username\n"
+            "👉 Пришлите в этот чат ваш username в Telegram, например: @username\n{last_hint}"
             "Найти его: Telegram → Настройки → «Имя пользователя». Звёзды придут на этот аккаунт.\n\n"
             "ℹ️ Username нужен только для зачисления звёзд: мы не пишем вам в Telegram, всё общение — здесь, "
             "в чате FunPay. Пожалуйста, подтверждайте заказ только после того, как звёзды придут."
         ),
         "greeting_with_username": (
-            "Здравствуйте, {buyer}! Спасибо за оплату заказа #{order_id} 🎉\n"
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
             "⭐ {stars} Telegram Stars → @{username}{name_part}\n"
             "🤖 Отправляю автоматически через официальную платформу Telegram — Fragment, обычно 1–5 минут.\n"
             "Если username указан с ошибкой, сразу напишите правильный в этот чат.\n"
@@ -106,16 +106,16 @@ TEMPLATES: dict[str, dict[str, str]] = {
     },
     "en": {
         "greeting_need_username": (
-            "Hi {buyer}! Thank you for paying for order #{order_id} 🎉\n"
+            "Hi {buyer}! {returning}Thank you for paying for order #{order_id} 🎉\n"
             "⭐ Item: {stars} Telegram Stars\n"
             "🤖 Delivery is automatic via Telegram's official platform Fragment, usually 1–5 minutes.\n\n"
-            "👉 Please send your Telegram username to this chat, e.g. @username\n"
+            "👉 Please send your Telegram username to this chat, e.g. @username\n{last_hint}"
             "Find it in Telegram → Settings → Username. The stars will be credited to that account.\n\n"
             "ℹ️ We only need the username to credit the stars; we won't message you in Telegram. Please confirm "
             "the order only after the stars arrive."
         ),
         "greeting_with_username": (
-            "Hi {buyer}! Thank you for paying for order #{order_id} 🎉\n"
+            "Hi {buyer}! {returning}Thank you for paying for order #{order_id} 🎉\n"
             "⭐ {stars} Telegram Stars → @{username}{name_part}\n"
             "🤖 Sending automatically via Fragment, usually 1–5 minutes. If the username is wrong, send the correct "
             "one right away. Please confirm the order only after the stars arrive."
@@ -199,7 +199,8 @@ OVERRIDES: dict[str, dict[str, str]] = {}
 TEMPLATE_VARS = {
     "order_id": "ABCD1234", "buyer": "Покупатель", "stars": 100, "username": "durov", "name_part": " (Pavel)",
     "reason": "аккаунт не найден", "attempt": 1, "max_attempts": 3, "status_text": "ждём username",
-    "denominations": "50, 75, 100", "status_hint": "",
+    "denominations": "50, 75, 100", "status_hint": "", "returning": "Рады видеть вас снова 🙌 ",
+    "last_hint": "Прошлый заказ вы получали на @durov — если аккаунт тот же, просто пришлите его ещё раз.\n",
 }
 
 

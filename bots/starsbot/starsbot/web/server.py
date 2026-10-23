@@ -37,6 +37,28 @@ ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 CASHFLOW_KINDS = {"topup": "Пополнение кошелька TON", "withdraw_funpay": "Вывод с FunPay",
                   "withdraw_ton": "Вывод TON с кошелька", "expense": "Расход (прочее)", "adjust": "Корректировка TON"}
 COOKIE = "sb_token"
+# сегменты мини-CRM: (код, название, цвет, SQL-условие по таблице customers)
+SEGMENTS = [("new", "новый", "gray", "orders_count<=1"),
+            ("repeat", "постоянный", "green", "(completed_count>=2 OR orders_count>=3)"),
+            ("vip", "VIP", "blue", "total_spent>=5000"),
+            ("refunds", "были возвраты", "amber", "refunded_count>0"),
+            ("blacklist", "ЧС", "red", "blacklisted=1")]
+SEGMENT_SQL = {code: cond for code, _, _, cond in SEGMENTS}
+
+
+def segments_of(c) -> list[tuple[str, str]]:
+    out = []
+    if c["blacklisted"]:
+        out.append(("ЧС", "red"))
+    if c["total_spent"] >= 5000:
+        out.append(("VIP", "blue"))
+    if c["completed_count"] >= 2 or c["orders_count"] >= 3:
+        out.append(("постоянный", "green"))
+    elif c["orders_count"] <= 1:
+        out.append(("новый", "gray"))
+    if c["refunded_count"]:
+        out.append(("были возвраты", "amber"))
+    return out
 ROLE = web.RequestKey("role", str) if hasattr(web, "RequestKey") else "role"
 
 
@@ -74,7 +96,8 @@ def make_app(sup, log_handler=None) -> web.Application:
     env.filters["md"] = lambda d: str(d)[5:]
     env.filters["hm"] = lambda v: dt.datetime.fromtimestamp(float(v)).strftime("%d.%m %H:%M")
     env.globals.update(colors=STATUS_COLORS, statuses=[s.value for s in S], charts=charts, state_text=STATE_TEXT,
-                       role_titles=ROLE_TITLES, cashflow_kinds=CASHFLOW_KINDS)
+                       role_titles=ROLE_TITLES, cashflow_kinds=CASHFLOW_KINDS,
+                       segments_of=segments_of)
 
     # ------------------------------------------------------------------ доступ
     def tokens() -> dict[str, str]:
@@ -175,7 +198,8 @@ def make_app(sup, log_handler=None) -> web.Application:
                       recs=db.q("SELECT * FROM recommendations WHERE active=1 ORDER BY severity, ts DESC"),
                       active=db.active_orders()[:20], status=sup.engine.status_text(),
                       fragment=sup.engine.fragment_status, wallet=db.kv_get("wallet") or {},
-                      rate=sup.econ.effective_rate(), feed=db.q("SELECT * FROM order_events WHERE order_id NOT IN ('-', '') ORDER BY id DESC LIMIT 25"))
+                      rate=sup.econ.effective_rate(), safety=sup.cfg.safety, live_done=sup.engine.live_purchases(),
+                      spent24=sup.engine.spent_ton_24h(), feed=db.q("SELECT * FROM order_events WHERE order_id NOT IN ('-', '') ORDER BY id DESC LIMIT 25"))
 
     async def orders(request: web.Request):
         st = request.query.get("status", "")
@@ -236,12 +260,30 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     async def customers(request: web.Request):
         qtext = request.query.get("q", "").strip().lstrip("@")
-        sql, params = "SELECT * FROM customers", []
+        seg = request.query.get("seg", "")
+        sql, params = "SELECT * FROM customers WHERE 1=1", []
         if qtext:
-            sql += " WHERE username LIKE ? OR tg_usernames LIKE ? OR notes LIKE ? OR tags LIKE ?"
+            sql += " AND (username LIKE ? OR tg_usernames LIKE ? OR notes LIKE ? OR tags LIKE ?)"
             params = [f"%{qtext}%"] * 4
-        return render("customers.html", request, q=qtext,
+        if seg in SEGMENT_SQL:
+            sql += " AND " + SEGMENT_SQL[seg]
+        return render("customers.html", request, q=qtext, seg=seg, segments=SEGMENTS,
                       rows=sup.db.q(sql + " ORDER BY last_seen DESC LIMIT 300", params))
+
+    async def customer(request: web.Request):
+        db = sup.db
+        cid = int(request.match_info["cid"])
+        c = db.customer(cid)
+        if not c:
+            raise web.HTTPNotFound()
+        rows = db.q("SELECT * FROM orders WHERE buyer_id=? ORDER BY created_at DESC LIMIT 200", (cid,))
+        recipients = db.q("SELECT tg_username, COUNT(*) n, SUM(stars) stars, MAX(created_at) last FROM orders "
+                          "WHERE buyer_id=? AND tg_username IS NOT NULL GROUP BY tg_username ORDER BY n DESC", (cid,))
+        profit = sum((sup.econ.order_flow(o).profit or 0) for o in rows if o["delivered_at"] and o["status"] != "refunded")
+        return render("customer.html", request, c=c, orders=rows, recipients=recipients, profit=round(profit, 2),
+                      segs=segments_of(c),
+                      msgs=db.q("SELECT m.* FROM messages m JOIN orders o ON o.chat_id=m.chat_id WHERE o.buyer_id=? "
+                                "GROUP BY m.id ORDER BY m.id DESC LIMIT 40", (cid,)))
 
     async def customer_action(request: web.Request):
         data = await request.post()
@@ -252,7 +294,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         elif act == "note":
             sup.db.set_customer_note(cid, str(data.get("note", ""))[:1000], str(data.get("tags", ""))[:200])
         audit(request, f"customer.{act}", str(cid))
-        raise back(request, "Сохранено", "/customers")
+        raise back(request, "Сохранено", f"/customers/{cid}")
 
     async def pricing(request: web.Request):
         db, a = sup.db, sup.analytics
@@ -378,6 +420,10 @@ def make_app(sup, log_handler=None) -> web.Application:
         s = sup.analytics.summary(1)
         return web.json_response({**sup.status(), "summary": s, "capacity": sup.econ.wallet_capacity(),
                                   "rate": sup.econ.effective_rate()[0], "role": request[ROLE]})
+
+    async def api_health(request: web.Request):
+        h = sup.engine.health() if sup.state == "running" else {"ok": sup.state != "error", "checks": []}
+        return web.json_response({**h, "state": sup.state}, status=200 if h["ok"] else 503)
 
     async def stream(request: web.Request):
         """SSE: события БД (заказы, алерты, кошелёк, Fragment) + новые строки журнала."""
@@ -548,11 +594,12 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/login", login), web.post("/login", login), web.post("/logout", logout), web.get("/api/ping", ping),
         web.get("/", dashboard), web.get("/orders", orders), web.get("/orders/{oid}", order),
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
+        web.get("/customers/{cid:\\d+}", customer),
         web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing),
         web.get("/money", money), web.post("/money", money_action), web.post("/api/calc", api_calc),
         web.get("/analytics", analytics_page), web.get("/alerts", alerts),
         web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
-        web.get("/api/summary", api_status), web.get("/api/stream", stream),
+        web.get("/api/summary", api_status), web.get("/api/health", api_health), web.get("/api/stream", stream),
         web.get("/setup", setup), web.post("/setup", setup),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),
