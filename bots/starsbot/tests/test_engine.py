@@ -264,7 +264,8 @@ def test_review_reply(tmp_path):
         fp.buyer_pays("Alice", 11, 100, username="alice_tg")
         fp.buyer_pays("Bob", 12, 50, username="bob_tg")
         await drain(e, wallet)
-        good, bad = sorted(fp.sales)[:2]
+        by_buyer = {so.buyer_username: oid for oid, so in fp.sales.items()}
+        good, bad = by_buyer["Alice"], by_buyer["Bob"]
         fp.reviews[bad] = 2
         for oid in (good, bad, good):                   # повторная проверка того же отзыва — без второго ответа
             await e._fetch_review_later(oid, delay=0)
