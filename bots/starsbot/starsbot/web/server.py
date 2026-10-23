@@ -37,7 +37,7 @@ STATE_TEXT = {"stopped": ("Остановлен", "gray"), "starting": ("Зап�
 ROLE_TITLES = {"admin": "администратор", "operator": "оператор", "viewer": "наблюдатель"}
 ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 CASHFLOW_KINDS = {"topup": "Пополнение кошелька TON", "withdraw_funpay": "Вывод с FunPay",
-                  "withdraw_ton": "Вывод TON с кошелька", "expense": "Расход (прочее)", "adjust": "Корректировка TON"}
+                  "withdraw_ton": "Вывод TON с кошелька", "withdraw_ozon": "Выплата с Ozon", "expense": "Расход (прочее)", "adjust": "Корректировка TON"}
 COOKIE = "sb_token"
 HEALTH_NAMES = {"funpay_poll": "FunPay", "ton_watch": "TON-транзакции", "wallet": "Баланс",
                 "fragment_session": "Fragment"}
@@ -140,6 +140,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("role", role)
         ctx.setdefault("can_op", bool(role) and ROLE_LEVEL[role] >= 1)
         ctx.setdefault("is_admin", role == "admin")
+        ctx.setdefault("ozon_on", "ozon" in sup.engine.channels)
         return web.Response(text=env.get_template(name).render(**ctx), content_type="text/html")
 
     @web.middleware
@@ -210,16 +211,20 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     async def orders(request: web.Request):
         st = request.query.get("status", "")
+        channel = request.query.get("channel", "")
         qtext = request.query.get("q", "").strip()
         sql, params = "SELECT * FROM orders WHERE 1=1", []
         if st:
             sql += " AND status=?"
             params.append(st)
+        if channel:
+            sql += " AND COALESCE(channel,'funpay')=?"
+            params.append(channel)
         if qtext:
             sql += " AND (order_id LIKE ? OR buyer_username LIKE ? OR tg_username LIKE ?)"
             params += [f"%{qtext.lstrip('@#')}%"] * 3
         return render("orders.html", request, rows=sup.db.q(sql + " ORDER BY created_at DESC LIMIT 300", params),
-                      st=st, q=qtext)
+                      st=st, q=qtext, channel=channel)
 
     async def order(request: web.Request):
         db = sup.db
@@ -231,7 +236,10 @@ def make_app(sup, log_handler=None) -> web.Application:
         return render("order.html", request, o=o, events=db.events(oid), flow=flow,
                       msgs=db.q("SELECT * FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 80", (o["chat_id"],)),
                       purchases=db.q("SELECT * FROM purchases WHERE order_id=? ORDER BY id", (oid,)),
-                      customer=db.customer(o["buyer_id"]), risk=json.loads(o["risk_reasons"] or "[]"))
+                      customer=db.customer(o["buyer_id"]) if o["channel"] != "ozon" else None,
+                      risk=json.loads(o["risk_reasons"] or "[]"),
+                      ozon_code=db.one("SELECT * FROM ozon_codes WHERE order_id=?", (oid,))
+                      if o["channel"] == "ozon" and "ozon" in sup.engine.channels else None)
 
     async def order_action(request: web.Request):
         engine, db = sup.engine, sup.db
@@ -328,7 +336,9 @@ def make_app(sup, log_handler=None) -> web.Application:
             if v:
                 custom[d] = v
         rate, rate_src = econ.effective_rate()
+        ozon_calc = econ.calculator(channel="ozon") if "ozon" in sup.engine.channels else []
         return render("money.html", request, days=days, period=econ.period(days), calc=econ.calculator(custom),
+                      ozon_calc=ozon_calc, oz=sup.cfg.get("ozon") or {},
                       custom=custom, rate=rate, rate_src=rate_src, market=getattr(sup.engine.rates, "value", None),
                       tps=econ.ton_per_star(), cps=econ.cost_per_star_rub(), cap=econ.wallet_capacity(),
                       rec=econ.reconcile(), wallet=db.kv_get("wallet") or {}, e=sup.cfg.economics,
@@ -405,7 +415,66 @@ def make_app(sup, log_handler=None) -> web.Application:
     async def api_calc(request: web.Request):
         data = await request.json()
         prices = {int(k): float(v) for k, v in (data.get("prices") or {}).items() if _num(v, None)}
-        return web.json_response({"rows": [f.as_dict() for f in sup.econ.calculator(prices)]})
+        channel = "ozon" if data.get("channel") == "ozon" else "funpay"
+        return web.json_response({"rows": [f.as_dict() for f in sup.econ.calculator(prices, channel=channel)]})
+
+    # ------------------------------------------------------------------ Ozon
+    async def ozon_page(request: web.Request):
+        ch = sup.engine.channels.get("ozon")
+        if ch is None:
+            return render("ozon.html", request, ch=None, oz=sup.cfg.get("ozon") or {})
+        db = sup.db
+        codes = db.q("SELECT c.*, o.status, o.tg_username, o.price FROM ozon_codes c LEFT JOIN orders o ON "
+                     "o.order_id=c.order_id ORDER BY c.created_at DESC LIMIT 100")
+        attention = db.q("SELECT * FROM ozon_postings WHERE codes_state IN ('pending','failed') ORDER BY first_seen")
+        return render("ozon.html", request, ch=ch, oz=sup.cfg.ozon, s=ch.summary(), codes=codes, attention=attention,
+                      calc=sup.econ.calculator(channel="ozon"))
+
+    async def ozon_action(request: web.Request):
+        need(request, "admin")
+        ch = sup.engine.channels.get("ozon")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        if act == "products":
+            products = []
+            for d in sorted({int(x) for x in DENOMINATIONS} | {int(p.get("stars") or 0) for p in
+                                                                  (sup.cfg.ozon.products or []) if p.get("stars")}):
+                offer = str(f.get(f"offer_{d}", "")).strip()
+                sku = str(f.get(f"sku_{d}", "")).strip()
+                item: dict = {"stars": d, "offer_id": offer}
+                if sku.isdigit():
+                    item["sku"] = int(sku)
+                products.append(item)
+            extra = str(f.get("extra_stars", "")).strip()
+            if extra.isdigit() and int(extra) >= 50 and str(f.get("extra_offer", "")).strip():
+                products.append({"stars": int(extra), "offer_id": str(f.get("extra_offer")).strip()})
+            sup.save({"ozon": {"products": products}})
+            msg = "Товары Ozon сохранены" + (". Перезапустите бота, чтобы применить" if sup.restart_required else "")
+        elif ch is None:
+            msg = "Сначала включите Ozon в настройках"
+        elif act == "poll":
+            try:
+                await ch.poll()
+                msg = "Ozon проверен" + (f": {ch.last_error}" if ch.last_error else "")
+            except Exception as e:  # noqa: BLE001
+                msg = f"Ozon: {e}"
+        elif act == "upload":
+            number = str(f.get("posting", ""))
+            db = sup.db
+            db.exec("UPDATE ozon_postings SET codes_state='pending' WHERE posting_number=? AND codes_state='failed'",
+                    (number,))
+            ok = await ch.upload(number)
+            msg = "Коды переданы в Ozon" if ok else "Ozon не принял коды — смотрите алерты"
+        elif act == "test":
+            try:
+                ps = await ch.client.list_postings(time.time() - 7 * 86400)
+                msg = f"Ozon API отвечает: отправлений за 7 дней — {len(ps)}"
+            except Exception as e:  # noqa: BLE001
+                msg = f"Ozon API: {e}"
+        else:
+            msg = "?"
+        audit(request, f"ozon.{act}", str(f.get("posting", "")), msg)
+        raise web.HTTPFound(URL("/ozon").with_query(msg=msg))
 
     async def analytics_page(request: web.Request):
         a = sup.analytics
@@ -646,6 +715,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),
         web.post("/api/preview", preview_message), web.get("/logs", logs), web.get("/api/logs", api_logs),
+        web.get("/ozon", ozon_page), web.post("/ozon", ozon_action),
     ])
     return app
 

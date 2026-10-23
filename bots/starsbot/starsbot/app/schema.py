@@ -120,6 +120,28 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
     ("sla", [
         ("order_total_minutes", "Заказ должен быть выдан за, мин", "int", ""),
     ]),
+    ("ozon", [
+        ("enabled", "Продавать на Ozon", "bool", "Кабинет «Цифровые товары» с доступом к Seller API"),
+        ("client_id", "Client-Id", "str", "Кабинет Ozon → Настройки → Seller API"),
+        ("api_key", "Api-Key", "secret", "Ключ с правами на отправления и товары кабинета цифровых товаров"),
+        ("poll_interval", "Проверять новые заказы Ozon, сек", "int", ""),
+        ("code_prefix", "Префикс кодов активации", "str", "Коды вида TGS-ABCD-EFGH-JKMN"),
+        ("stock_sync", "Остатки на Ozon по балансу кошелька", "bool", "Товар уходит в 0, когда TON не хватает"),
+        ("max_stock", "Максимальный остаток на Ozon", "int", ""),
+        ("commission_pct", "Комиссия Ozon, %", "float", "Игровая валюта — 10%, прочие цифровые товары — 15%"),
+        ("withdraw_fee_pct", "Комиссия вывода с Ozon, %", "float", "Обычно 0"),
+    ]),
+    ("ozon.activation_bot", [
+        ("enabled", "Бот активации в Telegram", "bool", "Покупатель присылает боту код и @username"),
+        ("bot_token", "Токен бота активации (@BotFather)", "secret",
+         "Отдельный бот, не тот, что для уведомлений: его будут видеть покупатели"),
+    ]),
+    ("ozon.activation_web", [
+        ("enabled", "Страница активации на сайте", "bool", "Нужен публичный адрес (VPS или туннель)"),
+        ("host", "Адрес страницы", "str", "0.0.0.0 — доступна извне"),
+        ("port", "Порт страницы", "int", ""),
+        ("public_url", "Публичная ссылка", "str", "Для инструкции в карточке, например https://stars.example.ru"),
+    ]),
 ]
 
 SECTION_TITLES = {
@@ -127,7 +149,8 @@ SECTION_TITLES = {
     "economics": "Деньги: комиссии", "deal": "Сделка", "risk": "Риск-система",
     "safety": "Предохранители денег", "rtba": "RTBA — автоцена",
     "notifications.telegram": "Telegram", "notifications": "Уведомления", "dashboard": "Доступ к панели (роли)",
-    "sla": "Сроки (SLA)",
+    "sla": "Сроки (SLA)", "ozon": "Ozon: продажи", "ozon.activation_bot": "Ozon: бот активации",
+    "ozon.activation_web": "Ozon: страница активации",
 }
 
 MESSAGE_TITLES = {

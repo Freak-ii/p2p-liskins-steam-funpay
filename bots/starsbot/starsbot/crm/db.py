@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS orders (
     reminded INTEGER DEFAULT 0, admin_alerted INTEGER DEFAULT 0, lang TEXT DEFAULT 'ru',
     review_stars INTEGER, notes TEXT DEFAULT '', fail_reason TEXT DEFAULT '',
     created_at REAL, paid_at REAL, username_at REAL, purchase_started_at REAL, sent_at REAL,
-    delivered_at REAL, completed_at REAL, last_buyer_msg_at REAL, updated_at REAL
+    delivered_at REAL, completed_at REAL, last_buyer_msg_at REAL, updated_at REAL,
+    channel TEXT DEFAULT 'funpay', payout REAL
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
@@ -82,7 +83,11 @@ ORDER_COLUMNS = {
     "tx_hash", "tx_fee_ton", "fragment_ref", "purchase_attempts", "risk_score", "risk_reasons", "approved", "reminded",
     "admin_alerted", "lang", "review_stars", "notes", "fail_reason", "created_at", "paid_at", "username_at",
     "purchase_started_at", "sent_at", "delivered_at", "completed_at", "last_buyer_msg_at",
+    "channel", "payout",
 }
+
+# Колонки, добавленные после первых версий: в старых базах их создаёт миграция в Database.__init__
+MIGRATIONS = {"orders": [("channel", "TEXT DEFAULT 'funpay'"), ("payout", "REAL")]}
 
 
 class Database:
@@ -93,6 +98,12 @@ class Database:
         self.conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        for table, cols in MIGRATIONS.items():
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            for col, decl in cols:
+                if col not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_channel ON orders(channel)")
         self._lock = threading.RLock()
         self.listeners: list[Callable[[dict], None]] = []   # realtime: панель подписывается на события
 

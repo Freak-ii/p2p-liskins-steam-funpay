@@ -1,0 +1,67 @@
+{% extends "base.html" %}{% block title %}Ozon{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>Ozon: продажа звёзд кодами активации</h1>
+{% if ch and is_admin %}<div class="row"><form method="post"><button name="action" value="poll">Проверить заказы сейчас</button></form>
+<form method="post"><button name="action" value="test">Проверить Ozon API</button></form></div>{% endif %}</div>
+
+{% if not ch %}
+<div class="card"><h2>Ozon выключен</h2>
+<p>Как это работает: на Ozon карточка цифрового товара «Telegram Stars» (кабинет «Цифровые товары», работа через
+Seller API). После оплаты бот передаёт Ozon одноразовый код активации, покупатель видит его в заказе и в письме,
+вводит код и свой @username в боте активации — и бот покупает звёзды на Fragment с того же кошелька, что и для FunPay.</p>
+<p>Что нужно: отдельный кабинет продавца цифровых товаров на Ozon с ключом Seller API, карточки товаров по номиналам
+и отдельный Telegram-бот для покупателей (@BotFather).</p>
+{% if is_admin %}<p><a href="/settings#s-ozon">Настройки → Ozon</a></p>{% endif %}</div>
+{% else %}
+<div class="grid">
+  <div class="card kpi"><div class="v">{% if s.last_ok %}{{ s.last_ok|ts }}{% else %}—{% endif %}</div><div class="l">последний опрос Ozon{% if s.error %} · <span class="c-red">{{s.error}}</span>{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ s.codes_waiting }}</div><div class="l">кодов выдано, ждут активации</div></div>
+  <div class="card kpi"><div class="v">{{ s.stars_waiting }}⭐</div><div class="l">зарезервировано на кошельке под эти коды</div></div>
+  <div class="card kpi"><div class="v {{ 'c-red' if s.pending_upload else '' }}">{{ s.pending_upload }}</div><div class="l">отправлений без переданных кодов</div></div>
+  <div class="card kpi"><div class="v">{% if s.bot_username %}@{{s.bot_username}}{% elif s.bot %}бот{% else %}—{% endif %}</div><div class="l">бот активации{% if s.web %} · страница {{ s.web_url or 'включена' }}{% endif %}</div></div>
+</div>
+
+{% if attention %}<div class="card tw"><h2 class="c-red">Коды не переданы в Ozon</h2>
+<div class="help">Ozon ждёт коды до дедлайна, иначе отменит заказ. Бот повторяет передачу при каждом опросе.</div><table>
+<tr><th>Отправление</th><th>Дедлайн</th><th>Попыток</th><th>Ошибка</th><th></th></tr>
+{% for p in attention %}<tr><td>{{p.posting_number}}</td><td>{{p.deadline}}</td><td>{{p.upload_attempts}}</td><td class="c-red">{{p.error}}</td>
+<td>{% if is_admin %}<form method="post"><input type="hidden" name="posting" value="{{p.posting_number}}"><button name="action" value="upload">Передать ещё раз</button></form>{% endif %}</td></tr>{% endfor %}</table></div>{% endif %}
+
+<div class="cols">
+<div class="card"><h2>Товары (номиналы)</h2>
+<div class="help" style="margin-bottom:8px">Артикул (offer_id) — как в карточке товара на Ozon. SKU можно не указывать. Остаток на Ozon бот выставляет сам по балансу кошелька.</div>
+<form method="post"><input type="hidden" name="action" value="products"><table>
+<tr><th>Номинал</th><th>Артикул offer_id</th><th>SKU</th><th>Остаток на Ozon</th></tr>
+{% for p in oz.products %}<tr><td><b>{{p.stars}}⭐</b></td>
+<td><input name="offer_{{p.stars}}" value="{{p.offer_id or ''}}" {% if not is_admin %}disabled{% endif %}></td>
+<td><input name="sku_{{p.stars}}" value="{{p.sku or ''}}" style="width:110px" {% if not is_admin %}disabled{% endif %}></td>
+<td>{{ s.stocks.get(p.offer_id|string, '—') if p.offer_id else '—' }}</td></tr>{% endfor %}
+{% if is_admin %}<tr><td><input name="extra_stars" placeholder="ещё, ⭐" style="width:80px"></td><td><input name="extra_offer" placeholder="артикул"></td><td colspan="2" class="muted">например, 200 ⭐</td></tr>{% endif %}
+</table>{% if is_admin %}<button>Сохранить товары</button>{% endif %}</form></div>
+
+<div class="card"><h2>Инструкция для карточки товара</h2>
+<div class="help" style="margin-bottom:6px">Скопируйте во вкладку «Инструкция» карточки на Ozon.</div>
+<pre style="white-space:pre-wrap">Как получить звёзды:
+1. После оплаты код активации появится на странице заказа в Ozon и придёт на почту.
+2. Откройте бот активации в Telegram{% if s.bot_username %}: @{{s.bot_username}}{% endif %}{% if s.web_url %} или страницу {{s.web_url}}{% endif %}.
+3. Отправьте код активации и username аккаунта, на который зачислить звёзды (например, @username).
+4. Звёзды придут на аккаунт через официальную платформу Telegram — Fragment, обычно за 1–5 минут.
+Вход в аккаунт, пароли и коды из Telegram не нужны — никому их не сообщайте.</pre></div>
+</div>
+
+{% if calc %}<div class="card tw"><h2>Экономика номиналов на Ozon</h2>
+<div class="help" style="margin-bottom:8px">Комиссия Ozon {{oz.commission_pct}}%, вывод {{oz.withdraw_fee_pct}}%. Цена — из последнего заказа Ozon; подробный калькулятор — на странице «Деньги».</div>
+<table><tr><th>Номинал</th><th>Цена, ₽</th><th>− Ozon</th><th>= чистыми</th><th>Себестоимость</th><th>Прибыль</th><th>Безубыток</th></tr>
+{% for f in calc %}<tr><td>{{f.stars}}⭐</td><td>{{f.price|money}}</td><td>{{f.funpay_fee|money}}</td><td>{{f.net_rub|money}}</td><td>{{f.cost_rub|money}}</td>
+<td class="{{ 'c-green' if (f.profit or 0) >= 0 else 'c-red' }}">{{f.profit|money}}</td><td>{{f.breakeven_price|money}}</td></tr>{% endfor %}</table></div>{% endif %}
+
+<div class="card tw"><h2>Коды активации</h2><table>
+<tr><th>Код</th><th>Заказ</th><th>⭐</th><th>Код в Ozon</th><th>Активирован</th><th>Получатель</th><th>Статус заказа</th></tr>
+{% for c in codes %}<tr><td><code>{% if is_admin %}{{c.display}}{% else %}{{ c.display[:-4] }}****{% endif %}</code></td>
+<td><a href="/orders/{{c.order_id}}">{{c.order_id}}</a></td><td>{{c.stars}}</td>
+<td>{{ {'new':'не передан','issued':'выдан','cancelled':'аннулирован','declined':'не выдан'}.get(c.state, c.state) }}</td>
+<td>{{c.redeemed_at|ts}}</td><td>{{ ('@' ~ c.tg_username) if c.tg_username else '—' }}</td>
+<td>{% if c.status %}<span class="chip c-{{colors[c.status]}}">{{c.status|st}}</span>{% endif %}</td></tr>
+{% else %}<tr><td colspan="7" class="muted">Заказов с Ozon пока не было</td></tr>{% endfor %}</table></div>
+{% endif %}
+{% endblock %}

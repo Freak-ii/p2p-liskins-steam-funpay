@@ -28,7 +28,7 @@ log = logging.getLogger("app")
 
 SECRET_FIELDS = {("funpay", "golden_key"), ("fragment", "cookies"), ("ton", "mnemonic"), ("ton", "toncenter_api_key"),
                  ("notifications.telegram", "bot_token"), ("dashboard", "token"), ("dashboard", "operator_token"),
-                 ("dashboard", "viewer_token")}
+                 ("dashboard", "viewer_token"), ("ozon", "api_key"), ("ozon.activation_bot", "bot_token")}
 
 
 class MemoryLogHandler(logging.Handler):
@@ -174,6 +174,10 @@ class Supervisor:
         self.engine.econ = self.econ
         self.analytics = Analytics(cfg, self.db, self.notifier, self.engine)
         self.engine.analytics = self.analytics
+        from starsbot.ozon.channel import build_channel
+        ozon = build_channel(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
+        if ozon is not None:
+            self.engine.channels["ozon"] = ozon
 
     async def start(self) -> str:
         if self.state in ("running", "starting"):
@@ -227,7 +231,8 @@ class Supervisor:
         return await self.start()
 
     async def _close_clients(self) -> None:
-        for c in (self.engine.fp, self.engine.fragment, self.engine.wallet, self.notifier):
+        for c in (self.engine.fp, self.engine.fragment, self.engine.wallet, self.notifier,
+                  *self.engine.channels.values()):
             try:
                 await c.close()
             except Exception:  # noqa: BLE001

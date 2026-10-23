@@ -86,12 +86,22 @@ class Economics:
         return round((1 - (1 - f) * (1 - w)) * 100, 3)
 
     # ------------------------------------------------------------------ один круг
+    def fee_pcts(self, channel: str = "funpay") -> tuple[float, float]:
+        """(комиссия площадки, комиссия вывода) в процентах для канала продаж."""
+        if channel == "ozon":
+            oz = self.cfg.get("ozon") or {}
+            return float(oz.get("commission_pct") or 0), float(oz.get("withdraw_fee_pct") or 0)
+        return float(self.e.funpay_fee_pct or 0), float(self.e.withdraw_fee_pct or 0)
+
     def flow(self, stars: int, price: float, *, ton_per_star: float | None = None, ton_stars: float | None = None,
-             gas_ton: float | None = None, rate: float | None = None) -> Flow:
+             gas_ton: float | None = None, rate: float | None = None, channel: str = "funpay",
+             payout: float | None = None) -> Flow:
+        """funpay_fee — комиссия площадки (FunPay или Ozon); payout — фактическая выплата площадки, если известна."""
         e = self.e
-        funpay_fee = price * float(e.funpay_fee_pct or 0) / 100
+        fee_pct, wd_pct = self.fee_pcts(channel)
+        funpay_fee = price - payout if payout is not None else price * fee_pct / 100
         after_fp = price - funpay_fee
-        withdraw_fee = after_fp * float(e.withdraw_fee_pct or 0) / 100   # фикс. комиссия — на вывод, не на заказ
+        withdraw_fee = after_fp * wd_pct / 100   # фикс. комиссия — на вывод, не на заказ
         net = after_fp - withdraw_fee
         tps = ton_per_star if ton_per_star is not None else self.ton_per_star()
         if ton_stars is None:
@@ -102,7 +112,7 @@ class Economics:
             rate, _ = self.effective_rate()
         cost = ton_total * rate if (rate and ton_stars) else None
         profit = net - cost if cost is not None else None
-        keep = (1 - float(e.funpay_fee_pct or 0) / 100) * (1 - float(e.withdraw_fee_pct or 0) / 100)
+        keep = (1 - fee_pct / 100) * (1 - wd_pct / 100)
         breakeven = cost / keep if cost is not None and keep > 0 else None
         return Flow(stars=stars, price=round(price, 2), funpay_fee=round(funpay_fee, 2),
                     withdraw_fee=round(withdraw_fee, 2), net_rub=round(net, 2), ton_stars=round(ton_stars, 6),
@@ -119,27 +129,35 @@ class Economics:
         mine = self.topup_rate()
         if mine:
             rate = mine
+        channel = (o["channel"] if "channel" in o.keys() else None) or "funpay"
+        payout = o["payout"] if "payout" in o.keys() and o["payout"] is not None else None
         return self.flow(int(o["stars"] or 0), float(o["price"] or 0), ton_stars=float(o["ton_amount"] or 0),
-                         gas_ton=float(o["tx_fee_ton"]) if o["tx_fee_ton"] is not None else None, rate=rate)
+                         gas_ton=float(o["tx_fee_ton"]) if o["tx_fee_ton"] is not None else None, rate=rate,
+                         channel=channel, payout=float(payout) if payout is not None else None)
 
-    def current_prices(self) -> dict[int, float]:
-        """Текущая цена каждого номинала: последнее решение RTBA или цена из последнего заказа."""
+    def current_prices(self, channel: str = "funpay") -> dict[int, float]:
+        """Текущая цена каждого номинала: последнее решение RTBA (только FunPay) или цена из последнего заказа."""
         out: dict[int, float] = {}
-        for r in self.db.q("SELECT stars, new_price FROM price_history WHERE id IN (SELECT MAX(id) FROM price_history "
-                           "GROUP BY stars)"):
-            if r["stars"] and r["new_price"]:
-                out[int(r["stars"])] = float(r["new_price"])
+        if channel == "funpay":
+            for r in self.db.q("SELECT stars, new_price FROM price_history WHERE id IN (SELECT MAX(id) FROM "
+                               "price_history GROUP BY stars)"):
+                if r["stars"] and r["new_price"]:
+                    out[int(r["stars"])] = float(r["new_price"])
         for r in self.db.q("SELECT stars_per_unit, price, quantity FROM orders WHERE stars_per_unit IS NOT NULL "
-                           "ORDER BY created_at DESC LIMIT 200"):
+                           "AND COALESCE(channel,'funpay')=? ORDER BY created_at DESC LIMIT 200", (channel,)):
             s = int(r["stars_per_unit"])
             if s not in out and r["quantity"]:
                 out[s] = round(float(r["price"]) / int(r["quantity"]), 2)
         return out
 
-    def calculator(self, prices: dict[int, float] | None = None) -> list[Flow]:
-        prices = {**self.current_prices(), **(prices or {})}
-        denoms = sorted({int(l["stars"]) for l in (self.cfg.funpay.lots or []) if l.get("stars")} | set(prices))
-        return [self.flow(d, float(prices.get(d) or 0)) for d in denoms]
+    def calculator(self, prices: dict[int, float] | None = None, channel: str = "funpay") -> list[Flow]:
+        prices = {**self.current_prices(channel), **(prices or {})}
+        if channel == "ozon":
+            items = (self.cfg.get("ozon") or {}).get("products") or []
+        else:
+            items = self.cfg.funpay.lots or []
+        denoms = sorted({int(l["stars"]) for l in items if l.get("stars")} | set(prices))
+        return [self.flow(d, float(prices.get(d) or 0), channel=channel) for d in denoms]
 
     # ------------------------------------------------------------------ кошелёк
     def wallet_capacity(self) -> list[dict]:
@@ -215,7 +233,28 @@ class Economics:
             "topup_rub": round(float(top["r"] or 0), 2) if top else 0, "topup_ton": round(float(top["t"] or 0), 4)
             if top else 0, "topups": int(top["n"] or 0) if top else 0, "withdrawn_funpay": round(withdrawals, 2),
             "by_denomination": self._by_denomination(delivered),
+            "by_channel": self._by_channel(delivered),
         }
+
+    def _by_channel(self, rows) -> dict[str, dict]:
+        acc: dict[str, dict] = {}
+        for r in rows:
+            f = self.order_flow(r)
+            ch = (r["channel"] if "channel" in r.keys() else None) or "funpay"
+            a = acc.setdefault(ch, {"orders": 0, "stars": 0, "gross": 0.0, "fees": 0.0, "net": 0.0, "cost": 0.0,
+                                    "profit": 0.0})
+            a["orders"] += 1
+            a["stars"] += int(r["stars"] or 0)
+            a["gross"] += f.price
+            a["fees"] += f.funpay_fee + f.withdraw_fee
+            a["net"] += f.net_rub
+            a["cost"] += f.cost_rub or 0
+            a["profit"] += f.profit or 0
+        for a in acc.values():
+            for k in ("gross", "fees", "net", "cost", "profit"):
+                a[k] = round(a[k], 2)
+            a["margin_pct"] = round(a["profit"] / a["gross"] * 100, 1) if a["gross"] else None
+        return acc
 
     def _by_denomination(self, rows) -> list[dict]:
         acc: dict[int, dict] = {}
@@ -237,7 +276,7 @@ class Economics:
         return out
 
     def add_cashflow(self, kind: str, rub: float, ton: float, note: str = "") -> None:
-        assert kind in ("topup", "withdraw_funpay", "withdraw_ton", "expense", "adjust")
+        assert kind in ("topup", "withdraw_funpay", "withdraw_ozon", "withdraw_ton", "expense", "adjust")
         self.db.exec("INSERT INTO cashflow(ts,kind,rub,ton,note) VALUES(?,?,?,?,?)",
                      (time.time(), kind, float(rub or 0), float(ton or 0), note[:300]))
         self.db.emit({"type": "cashflow", "kind": kind})
