@@ -217,6 +217,22 @@ def test_db_backup_and_health(tmp_path):
     assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code='watchdog'") == 1
 
 
+def test_fragment_cookie_age_reminder(tmp_path):
+    sup, e, fp, wallet = make(tmp_path)
+    assert e.fragment_cookie_age_days() is None
+    sup.save({"fragment": {"cookies": "stel_ssid=a; stel_token=b"}}, rebuild=False)
+    first = sup.cfg.fragment.cookies_set_at
+    assert first and abs(first - time.time()) < 5
+    sup.save({"fragment": {"cookies": ""}}, rebuild=False)          # пусто = не менять, отметка та же
+    assert sup.cfg.fragment.cookies_set_at == first
+    e.cfg.fragment.cookies_set_at = time.time() - 20 * 86400
+    e.cfg.fragment.session_warn_days = 14
+    asyncio.run(e.fragment_age_reminder())
+    asyncio.run(e.fragment_age_reminder())                          # второй раз в те же сутки — тишина
+    assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code='fragment_age'") == 1
+    assert e.health()["fragment_age_days"] >= 20
+
+
 def test_faq_after_delivery_and_refund_request(tmp_path):
     sup, e, fp, wallet = make(tmp_path)
 

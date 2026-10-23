@@ -26,6 +26,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
     ]),
     ("fragment", [
         ("cookies", "Cookie Fragment", "secret", "stel_ssid=…; stel_dt=…; stel_token=…; stel_ton_token=… — из браузера, где на fragment.com подключён кошелёк бота и пройден KYC"),
+        ("session_warn_days", "Напомнить обновить cookies через, дней", "int", "Сессия Fragment живёт 2–4 недели; 0 — не напоминать"),
         ("session_check_minutes", "Проверять сессию перед заказом, если прошло больше, мин", "int", ""),
         ("hide_lots_when_down", "Скрывать лоты, пока сессия истекла или нет KYC", "bool", ""),
         ("max_ton_per_star", "Не покупать дороже, TON за звезду", "float", "0 — без ограничения"),

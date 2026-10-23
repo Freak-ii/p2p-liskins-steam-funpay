@@ -75,6 +75,8 @@ fragment:
   session_check_minutes: 10
   # Скрывать лоты, пока сессия истекла или нет KYC
   hide_lots_when_down: true
+  cookies_set_at: 0
+  session_warn_days: 14
 
 ton:
   # Сид-фраза (24 слова) — Хранится только в config.yaml на этом компьютере. Используйте отдельный кошелёк только для бота

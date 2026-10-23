@@ -42,6 +42,8 @@ DEFAULTS: dict[str, Any] = {
         "max_cost_share_pct": 100.0,     # не покупать, если себестоимость > X% от суммы заказа (защита от убытка)
         "session_check_minutes": 10,     # проверять сессию Fragment перед заказом, если с прошлой проверки прошло больше
         "hide_lots_when_down": True,     # скрывать лоты, пока сессия Fragment истекла или нет KYC
+        "cookies_set_at": 0,             # когда вставлены cookies (ставится автоматически)
+        "session_warn_days": 14,         # напомнить обновить cookies заранее, после стольких дней (0 — не напоминать)
     },
     "ton": {
         "mnemonic": "", "address": "", "version": "v5r1",   # Tonkeeper по умолчанию создаёт W5 (v5r1)

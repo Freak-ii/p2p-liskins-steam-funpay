@@ -105,6 +105,10 @@ class Supervisor:
     def save(self, updates: dict, *, rebuild: bool = True) -> None:
         """Сливает изменения в config.yaml. Пустая строка в секретном поле = «не менять»."""
         raw = copy.deepcopy(self.raw)
+        new_cookies = str((updates.get("fragment") or {}).get("cookies") or "").strip()
+        if new_cookies and new_cookies != str((raw.get("fragment") or {}).get("cookies") or "").strip():
+            updates = copy.deepcopy(updates)
+            updates["fragment"]["cookies_set_at"] = int(time.time())   # от этого считается возраст сессии
 
         def merge(dst: dict, src: dict, path: str = "") -> None:
             for k, v in src.items():

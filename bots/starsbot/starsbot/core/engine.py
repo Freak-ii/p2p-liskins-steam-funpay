@@ -1197,7 +1197,25 @@ class Engine:
         checks.append({"name": "fragment_session", "ok": fr.get("session") != "expired" and fr.get("kyc") != "required",
                        "detail": f"{fr.get('session')}/{fr.get('kyc')}"})
         return {"ok": all(c["ok"] for c in checks), "uptime": round(now - self.started_at), "paused": self.paused,
-                "checks": checks}
+                "checks": checks, "fragment_age_days": self.fragment_cookie_age_days()}
+
+    def fragment_cookie_age_days(self) -> float | None:
+        ts = float(self.cfg.fragment.get("cookies_set_at") or 0)
+        return round((time.time() - ts) / 86400, 1) if ts else None
+
+    async def fragment_age_reminder(self) -> None:
+        """Cookies Fragment живут 2–4 недели: напомнить заранее, а не узнать по скрытым лотам."""
+        warn = float(self.cfg.fragment.get("session_warn_days") or 0)
+        age = self.fragment_cookie_age_days()
+        if not warn or age is None or age < warn or self.fragment_status.get("session") == "expired":
+            return
+        if time.time() - float(self.db.kv_get("fragment_age_warned", 0)) < 86400:
+            return                                   # не чаще раза в сутки
+        self.db.kv_set("fragment_age_warned", time.time())
+        await self.notifier.notify("WARNING", "fragment_age",
+                                   f"Cookies Fragment вставлены {int(age)} дн. назад. Сессия скоро истечёт: "
+                                   "обновите их в мастере настройки заранее, чтобы лоты не скрылись.",
+                                   throttle_key="fragment_age")
 
     async def watchdog(self) -> None:
         if time.time() - self.started_at < 300:
@@ -1207,6 +1225,7 @@ class Engine:
             await self.notifier.notify("CRITICAL", "watchdog", "Бот не обновлял: " + ", ".join(
                 f"{c['name']} ({c['age'] // 60} мин)" for c in stale) + ". Проверьте интернет и журнал.",
                 throttle_key="watchdog")
+        await self.fragment_age_reminder()
 
     async def backup_db(self) -> None:
         folder = Path(self.db.path).parent / "backups" if self.db.path != ":memory:" else None

@@ -3,12 +3,19 @@
 <div class="row" style="justify-content:space-between"><h1>Дашборд</h1>
 <div class="row">{% for d in [1,7,30] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/?days={{d}}">{{d}} дн.</a>{% endfor %}</div></div>
 
+{% if health %}<div class="card" id="c-health" style="padding:8px 12px"><div class="row">
+  <b>Здоровье:</b>
+  {% for c in health.checks %}<span class="chip c-{{ 'green' if c.ok else 'red' }}" title="{{ c.detail or ('обновлялось ' ~ c.age ~ ' c назад, норма до ' ~ c.limit ~ ' c') }}">{{ health_names.get(c.name, c.name) }}</span>{% endfor %}
+  <span class="muted">работает {{ health.uptime|dur }}</span>
+</div></div>{% endif %}
+
 <div class="cols">
   <div class="card" id="c-fragment"><h2>Fragment</h2>
     {% set fs = fragment.session or 'unknown' %}{% set ky = fragment.kyc or 'unknown' %}
     <div class="row">
       <span class="chip c-{{ 'green' if fs == 'ok' else ('red' if fs == 'expired' else 'gray') }}" id="f-session">Сессия: {{ {'ok':'активна','expired':'истекла','unknown':'не проверена'}.get(fs, fs) }}</span>
       <span class="chip c-{{ 'green' if ky == 'verified' else ('red' if ky == 'required' else 'gray') }}" id="f-kyc">KYC: {{ {'verified':'пройден','required':'нужен','unknown':'не проверен'}.get(ky, ky) }}</span>
+      {% if cookie_age is not none %}<span class="chip c-{{ 'amber' if warn_days and cookie_age >= warn_days else 'gray' }}" id="f-age" title="Сколько дней назад вставлены cookies">cookies: {{ cookie_age|int }} дн.</span>{% endif %}
       <span class="muted" id="f-checked">проверено {{ fragment.checked_at|ts }}</span>
       {% if is_admin %}<form method="post" action="/control"><button name="action" value="check_fragment">Проверить сейчас</button></form>{% endif %}
     </div>

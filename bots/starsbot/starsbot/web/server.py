@@ -37,6 +37,8 @@ ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 CASHFLOW_KINDS = {"topup": "Пополнение кошелька TON", "withdraw_funpay": "Вывод с FunPay",
                   "withdraw_ton": "Вывод TON с кошелька", "expense": "Расход (прочее)", "adjust": "Корректировка TON"}
 COOKIE = "sb_token"
+HEALTH_NAMES = {"funpay_poll": "FunPay", "ton_watch": "TON-транзакции", "wallet": "Баланс",
+                "fragment_session": "Fragment"}
 # сегменты мини-CRM: (код, название, цвет, SQL-условие по таблице customers)
 SEGMENTS = [("new", "новый", "gray", "orders_count<=1"),
             ("repeat", "постоянный", "green", "(completed_count>=2 OR orders_count>=3)"),
@@ -199,7 +201,10 @@ def make_app(sup, log_handler=None) -> web.Application:
                       active=db.active_orders()[:20], status=sup.engine.status_text(),
                       fragment=sup.engine.fragment_status, wallet=db.kv_get("wallet") or {},
                       rate=sup.econ.effective_rate(), safety=sup.cfg.safety, live_done=sup.engine.live_purchases(),
-                      spent24=sup.engine.spent_ton_24h(), feed=db.q("SELECT * FROM order_events WHERE order_id NOT IN ('-', '') ORDER BY id DESC LIMIT 25"))
+                      spent24=sup.engine.spent_ton_24h(), cookie_age=sup.engine.fragment_cookie_age_days(),
+                      warn_days=float(sup.cfg.fragment.get("session_warn_days") or 0),
+                      health=sup.engine.health() if sup.state == "running" else None, health_names=HEALTH_NAMES,
+                      feed=db.q("SELECT * FROM order_events WHERE order_id NOT IN ('-', '') ORDER BY id DESC LIMIT 25"))
 
     async def orders(request: web.Request):
         st = request.query.get("status", "")
