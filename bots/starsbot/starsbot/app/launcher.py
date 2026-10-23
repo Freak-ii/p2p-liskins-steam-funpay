@@ -79,13 +79,17 @@ def _is_starsbot(host: str, port: int) -> bool:
 async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo: bool, autostart: bool | None,
                   mem: MemoryLogHandler) -> None:
     from starsbot.web.server import start_web
-    sup = Supervisor(home, demo=demo, overrides=DEMO_OVERRIDES if demo else None)
+    from starsbot.ozon.fake import DEMO_PRODUCTS
+    demo_over = {**DEMO_OVERRIDES, "ozon": {"enabled": True, "products": DEMO_PRODUCTS}}
+    sup = Supervisor(home, demo=demo, overrides=demo_over if demo else None)
     token = sup.ensure_token()
     if demo:
         from starsbot.demo import run_scenario
         sup.engine.cfg.deal.message_rate_limit_seconds = 0
         await run_scenario(sup.engine, sup.engine.fp, sup.engine.wallet, verbose=False)
-        log.info("Демо-сценарий выполнен: 6 заказов в CRM")
+        from starsbot.ozon.fake import run_ozon_demo
+        await run_ozon_demo(sup.engine, sup.engine.wallet)
+        log.info("Демо-сценарий выполнен: 6 заказов FunPay и 3 заказа Ozon в CRM")
     runner = await start_web(sup, host, port, mem)
     shown_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     url = f"http://{shown_host}:{port}/login?token={token}"

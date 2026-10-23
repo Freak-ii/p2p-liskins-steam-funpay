@@ -51,6 +51,7 @@ class Engine:
         self.coord = coord
         self.analytics = analytics
         self.econ = None                       # starsbot.economics.Economics (подключает Supervisor)
+        self.channels: dict[str, Any] = {}     # другие площадки продаж, например «ozon» (starsbot.ozon.channel)
         self.risk = RiskEngine(cfg.risk, db)
         self.rtba = RTBAEngine(cfg.rtba)
         self.queue: asyncio.Queue[str] = asyncio.Queue()
@@ -102,12 +103,25 @@ class Engine:
                 "denominations": ", ".join(str(d) for d in self._denominations()),
                 "returning": returning, "last_hint": last_hint}
 
+    def channel_of(self, o):
+        """Канал продаж заказа, если это не FunPay (у FunPay-заказов channel = 'funpay' или пусто)."""
+        name = o["channel"] if o is not None and "channel" in o.keys() else None
+        return self.channels.get(name) if name and name != "funpay" else None
+
     async def say(self, o, key: str, **extra: Any) -> None:
         """Отправить шаблонное сообщение в чат заказа."""
+        ch = self.channel_of(o)
+        if ch is not None:
+            await ch.say(o, key, {**self._order_vars(o), **extra})
+            return
         await self.say_text(o, M.render(o["lang"] or self.cfg.general.language, key,
                                         **{**self._order_vars(o), **extra}))
 
     async def say_text(self, o, text: str) -> None:
+        ch = self.channel_of(o)
+        if ch is not None:
+            await ch.say_text(o, text)
+            return
         await self.send_chat(o["chat_id"], text, o["order_id"])
 
     async def send_chat(self, chat_id: str | None, text: str, order_id: str | None = None) -> None:
@@ -838,7 +852,10 @@ class Engine:
         await self.say(o, "delivered")
         await self.notifier.notify("INFO", "delivered", f"⭐ Заказ #{oid}: {o['stars']} звёзд → @{o['tg_username']} "
                                    f"({o['ton_amount'] or 0:.4f} TON)", order_id=oid)
-        if o["fp_status"] == "closed":
+        ch = self.channel_of(o)
+        if ch is not None:
+            await ch.on_delivered(self.db.get_order(oid))
+        elif o["fp_status"] == "closed":
             await self.on_buyer_confirmed(self.db.get_order(oid))
 
     # ================================================================== Fragment и кошелёк
@@ -928,6 +945,8 @@ class Engine:
                 self.enqueue(o["order_id"])
 
     async def stock_sync(self, balance: float, per_star: float | None, committed: int) -> None:
+        for ch in self.channels.values():          # кошелёк общий: остатки на других площадках — по тому же балансу
+            await ch.stock_sync(balance, per_star, committed)
         if not self.cfg.funpay.stock_sync or self.paused or not per_star:
             return
         free_ton = max(0.0, balance - float(self.cfg.ton.fee_reserve_ton) - committed * per_star)
@@ -958,6 +977,8 @@ class Engine:
         for o in self.db.orders_by_status(S.AWAITING_USERNAME):
             if self.paused:
                 break
+            if self.channel_of(o) is not None and not o["tg_username"]:
+                continue                 # код Ozon ещё не активирован: напомнить покупателю некуда, это не просрочка
             if o["tg_username"] and not o["tg_recipient"] and o["fail_reason"] in ("fragment_auth", "network",
                                                                                    "rate_limit", "layout", "fragment"):
                 if now - float(o["updated_at"] or 0) > 60:
@@ -984,6 +1005,8 @@ class Engine:
                 self.enqueue(o["order_id"])
         for o in self.db.active_orders():
             total_m = (now - (o["paid_at"] or now)) / 60
+            if self.channel_of(o) is not None and S(o["status"]) == S.AWAITING_USERNAME and not o["tg_username"]:
+                continue
             if S(o["status"]) != S.DELIVERED and total_m > float(self.cfg.sla.order_total_minutes):
                 await self.notifier.notify("WARNING", "sla_total", f"#{o['order_id']} не выдан {total_m:.0f} мин. "
                                            f"(статус {o['status']})", order_id=o["order_id"],
@@ -1076,6 +1099,8 @@ class Engine:
             return "по заказу была транзакция с неясным исходом — проверьте кошелёк и отметьте «Выдан вручную»"
         if not o["tg_username"]:
             self._set(oid, S.AWAITING_USERNAME, "admin_take", approved=1, username_attempts=0, admin_alerted=0)
+            if self.channel_of(o) is not None:
+                return "заказ передан боту: ждём, когда покупатель активирует код"
             await self.say(o, "greeting_need_username")
             self.db.add_event(oid, "greeting_sent")
             return "заказ передан боту: ждём username от покупателя"
@@ -1114,6 +1139,9 @@ class Engine:
         st = S(o["status"])
         if st in (S.DELIVERED, S.COMPLETED) or st.money_in_flight:
             return "звёзды уже оплачены — возврат через бота запрещён"
+        ch = self.channel_of(o)
+        if ch is not None:
+            return await ch.admin_refund(oid)
         try:
             await self.fp.refund(oid)
         except FunPayError as e:
@@ -1204,6 +1232,8 @@ class Engine:
         """Свежесть рабочих циклов: если цикл давно не отрабатывал, бот «завис» на этом участке."""
         now = time.time()
         limits = {"funpay_poll": 3 * float(self.cfg.funpay.poll_interval) + 60, "ton_watch": 180, "wallet": 600}
+        for ch in self.channels.values():
+            limits.update(ch.health_limits())
         checks = []
         for name, limit in limits.items():
             ts = self.last_ok.get(name)
@@ -1334,6 +1364,8 @@ class Engine:
         ]
         if self.analytics:
             loops.append(self._loop("analytics", 600, self.analytics.tick))
+        for ch in self.channels.values():
+            loops += ch.loops(self._loop)
         self._tasks = [asyncio.create_task(c) for c in loops]
         await asyncio.gather(*self._tasks)
 

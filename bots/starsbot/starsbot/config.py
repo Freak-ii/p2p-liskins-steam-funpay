@@ -103,6 +103,25 @@ DEFAULTS: dict[str, Any] = {
     "dashboard": {"enabled": True, "host": "127.0.0.1", "port": 8083, "token": "",
                   "operator_token": "", "viewer_token": ""},
     "sla": {"order_total_minutes": 60},
+    # Второй канал продаж: Ozon (кабинет «Цифровые товары», работа через Seller API).
+    # Покупатель получает от Ozon код активации и вводит его вместе с @username в боте активации.
+    "ozon": {
+        "enabled": False,
+        "client_id": "", "api_key": "",          # кабинет Ozon → Настройки → Seller API (ключ кабинета цифровых товаров)
+        "api_base": "https://api-seller.ozon.ru",
+        "poll_interval": 30,             # опрос новых отправлений, сек
+        "lookback_hours": 72,            # за какой период читать отправления
+        # Товары: артикул (offer_id) карточки Ozon → сколько звёзд в одной штуке
+        "products": [{"stars": n, "offer_id": ""} for n in DENOMINATIONS],
+        "code_prefix": "TGS",            # коды вида TGS-ABCD-EFGH-JKMN
+        "stock_sync": True,              # остатки на Ozon = сколько раз хватит баланса кошелька
+        "max_stock": 100,
+        "commission_pct": 10.0,          # комиссия Ozon с цены (игровая валюта — 10%, прочие цифровые — 15%)
+        "withdraw_fee_pct": 0.0,         # Ozon платит на расчётный счёт, обычно без комиссии
+        "activation_bot": {"enabled": True, "bot_token": ""},   # отдельный Telegram-бот для покупателей
+        "activation_web": {"enabled": False, "host": "0.0.0.0", "port": 8084, "public_url": ""},
+        "messages": {},                  # свои тексты для покупателей Ozon (ключи как в starsbot/ozon/texts.py)
+    },
 }
 
 _ENV_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
@@ -184,4 +203,24 @@ def validate_config(cfg: Section) -> list[str]:
         problems.append("dashboard.token должен быть не короче 12 символов")
     if cfg.rates.source == "manual" and float(cfg.rates.ton_rub or 0) <= 0:
         problems.append("rates.ton_rub: при ручном курсе укажите курс TON в рублях")
+    problems += validate_ozon(cfg)
     return problems
+
+
+def validate_ozon(cfg: Section) -> list[str]:
+    oz = cfg.get("ozon") or {}
+    if not oz.get("enabled"):
+        return []
+    out = []
+    if not str(oz.get("client_id") or "").strip() or not str(oz.get("api_key") or "").strip():
+        out.append("ozon: укажите Client-Id и Api-Key Seller API")
+    if not any(p.get("offer_id") and p.get("stars") for p in (oz.get("products") or [])):
+        out.append("ozon.products: укажите артикул (offer_id) хотя бы одного товара со звёздами")
+    bot, web = oz.get("activation_bot") or {}, oz.get("activation_web") or {}
+    if not ((bot.get("enabled") and bot.get("bot_token")) or web.get("enabled")):
+        out.append("ozon: включите бот активации (токен @BotFather) или страницу активации — иначе покупатель не "
+                   "сможет ввести код")
+    if bot.get("enabled") and bot.get("bot_token") and \
+            str(bot.get("bot_token")) == str(cfg.notifications.telegram.bot_token or ""):
+        out.append("ozon.activation_bot: нужен отдельный бот, не тот, что для уведомлений продавцу")
+    return out

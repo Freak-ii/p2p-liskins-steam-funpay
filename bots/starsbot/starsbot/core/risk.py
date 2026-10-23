@@ -37,6 +37,8 @@ class RiskEngine:
             reasons.append(f"+{points}: {why}")
 
         buyer_id, username = order["buyer_id"], order["buyer_username"]
+        if "channel" in order.keys() and order["channel"] not in (None, "", "funpay"):
+            return self._assess_marketplace(order, tg_username, add, lambda: (score, reasons))
         cust = self.db.customer(buyer_id) if buyer_id else None
         if username in (c.blacklist_funpay_users or []) or (cust and cust["blacklisted"]):
             add(100, "покупатель в чёрном списке")
@@ -72,6 +74,27 @@ class RiskEngine:
                 if len(known) >= 5 and tg_username.lower() not in known:
                     add(10, "покупатель часто меняет получателей")
 
+        return self._decide(score, reasons)
+
+    def _assess_marketplace(self, order, tg_username, add, result) -> RiskResult:
+        """Ozon и другие площадки не сообщают продавцу покупателя: считаем по получателю звёзд."""
+        c = self.cfg
+        stars = int(order["stars"] or 0)
+        if stars >= int(c.large_order_stars):
+            add(25, f"крупный заказ ({stars} ⭐)")
+        if tg_username and tg_username.lower() in {str(x).lstrip("@").lower() for x in (c.blacklist_usernames or [])}:
+            add(100, f"username @{tg_username} в чёрном списке")
+        if tg_username:
+            day_ago = time.time() - 86400
+            n = self.db.scalar("SELECT COUNT(*) FROM orders WHERE lower(tg_username)=? AND channel=? AND created_at>? "
+                               "AND order_id<>?", (tg_username.lower(), order["channel"], day_ago, order["order_id"]))
+            if n >= int(c.max_orders_per_buyer_per_day):
+                add(30, f"на @{tg_username} за сутки уже {n} заказов с {order['channel']}")
+        score, reasons = result()
+        return self._decide(score, reasons)
+
+    def _decide(self, score: int, reasons: list[str]) -> RiskResult:
+        c = self.cfg
         decision = "auto"
         if score >= int(c.block_score):
             decision = "block"

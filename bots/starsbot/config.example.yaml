@@ -232,3 +232,35 @@ dashboard:
 sla:
   # Заказ должен быть выдан за, мин
   order_total_minutes: 60
+
+# Второй канал продаж: Ozon (кабинет «Цифровые товары» с Seller API). Покупатель получает от Ozon код
+# активации и вводит его с @username в боте активации. Кошелёк, Fragment и CRM — общие с FunPay.
+ozon:
+  enabled: false
+  # Кабинет Ozon → Настройки → Seller API
+  client_id: ${STARSBOT_OZON_CLIENT_ID}
+  api_key: ${STARSBOT_OZON_API_KEY}
+  poll_interval: 30
+  # Артикул (offer_id) карточки Ozon → звёзд в одной штуке. sku — необязательно
+  products:
+    - {stars: 50, offer_id: ''}
+    - {stars: 100, offer_id: ''}
+    - {stars: 250, offer_id: ''}
+    - {stars: 500, offer_id: ''}
+  code_prefix: TGS
+  # Остатки на Ozon = сколько раз хватит баланса кошелька
+  stock_sync: true
+  max_stock: 100
+  # Комиссия Ozon: игровая валюта — 10%, прочие цифровые товары — 15%
+  commission_pct: 10.0
+  withdraw_fee_pct: 0.0
+  # Отдельный Telegram-бот для покупателей (не тот, что для уведомлений)
+  activation_bot:
+    enabled: true
+    bot_token: ${STARSBOT_OZON_BOT_TOKEN}
+  # Публичная страница активации (нужен белый IP/VPS или туннель)
+  activation_web:
+    enabled: false
+    host: 0.0.0.0
+    port: 8084
+    public_url: ''
