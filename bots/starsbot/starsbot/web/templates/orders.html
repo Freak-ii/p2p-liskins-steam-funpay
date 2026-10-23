@@ -1,5 +1,6 @@
 {% extends "base.html" %}{% block title %}Заказы{% endblock %}
-{% block body %}<h1>Заказы</h1>
+{% block body %}<div class="row" style="justify-content:space-between"><h1>Заказы</h1>
+{% if can_op %}<a class="chip" href="/export/orders.csv?days=30">⬇ CSV за 30 дн.</a>{% endif %}</div>
 <form class="card row" method="get"><input name="q" value="{{q}}" placeholder="ID заказа, ник FunPay, @username получателя" style="flex:1">
 <select name="status"><option value="">все статусы</option>{% for s in statuses %}<option value="{{s}}" {% if s==st %}selected{% endif %}>{{s|st}}</option>{% endfor %}</select>
 <button>Найти</button></form>

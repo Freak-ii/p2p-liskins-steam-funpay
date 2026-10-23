@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import datetime as dt
 import hmac
 import json
@@ -333,6 +335,40 @@ def make_app(sup, log_handler=None) -> web.Application:
                       balance=sup.analytics.balance_series(300),
                       journal=db.q("SELECT * FROM cashflow ORDER BY id DESC LIMIT 100"))
 
+    async def export(request: web.Request):
+        """CSV для учёта: «;» и BOM, чтобы Excel сразу открыл кириллицу по столбцам."""
+        need(request, "operator")
+        what = request.match_info["what"]
+        days = _num(request.query.get("days"), 0) or 0
+        since = time.time() - days * 86400 if days else 0
+        buf = io.StringIO()
+        w = csv.writer(buf, delimiter=";")
+        fmt = lambda t: dt.datetime.fromtimestamp(float(t)).strftime("%Y-%m-%d %H:%M:%S") if t else ""
+        if what == "orders":
+            w.writerow(["order_id", "created", "delivered", "buyer", "recipient", "stars", "price_rub", "status",
+                        "funpay_fee", "withdraw_fee", "net_rub", "ton_total", "ton_rate", "cost_rub", "profit_rub",
+                        "tx_hash", "fail_reason"])
+            for o in sup.db.q("SELECT * FROM orders WHERE created_at>=? ORDER BY created_at", (since,)):
+                bought = o["ton_amount"] and o["status"] in (S.DELIVERED.value, S.COMPLETED.value)
+                fl = sup.econ.order_flow(o) if bought else None
+                r = lambda v: "" if v is None else str(round(float(v), 4)).replace(".", ",")
+                w.writerow([o["order_id"], fmt(o["created_at"]), fmt(o["delivered_at"]), o["buyer_username"],
+                            o["tg_username"] or "", o["stars"], r(o["price"]), o["status"],
+                            r(fl and fl.funpay_fee), r(fl and fl.withdraw_fee), r(fl and fl.net_rub),
+                            r(fl and fl.ton_total), r(fl and fl.ton_rate), r(fl and fl.cost_rub),
+                            r(fl and fl.profit), o["tx_hash"] or "", o["fail_reason"] or ""])
+        elif what == "cashflow":
+            w.writerow(["id", "ts", "kind", "rub", "ton", "note"])
+            for c in sup.db.q("SELECT * FROM cashflow WHERE ts>=? ORDER BY ts", (since,)):
+                w.writerow([c["id"], fmt(c["ts"]), CASHFLOW_KINDS.get(c["kind"], c["kind"]),
+                            str(c["rub"]).replace(".", ","), str(c["ton"]).replace(".", ","), c["note"]])
+        else:
+            raise web.HTTPNotFound()
+        audit(request, f"export.{what}", "", f"{days or 'all'} дн.")
+        name = f"starsbot-{what}-{dt.date.today():%Y%m%d}.csv"
+        return web.Response(body=("\ufeff" + buf.getvalue()).encode("utf-8"), content_type="text/csv",
+                            charset="utf-8", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
     async def money_action(request: web.Request):
         f = await request.post()
         act = f.get("action")
@@ -604,7 +640,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/money", money), web.post("/money", money_action), web.post("/api/calc", api_calc),
         web.get("/analytics", analytics_page), web.get("/alerts", alerts),
         web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
-        web.get("/api/summary", api_status), web.get("/api/health", api_health), web.get("/api/stream", stream),
+        web.get("/api/summary", api_status), web.get("/api/health", api_health),
+        web.get(r"/export/{what}.csv", export), web.get("/api/stream", stream),
         web.get("/setup", setup), web.post("/setup", setup),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),

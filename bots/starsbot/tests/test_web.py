@@ -92,6 +92,18 @@ def test_roles(tmp_path):
             assert (await op.post("/setup", data={})).status == 403
             assert (await op.post("/control", data={"action": "dry_off"})).status == 403
             assert (await op.post("/money", data={"action": "delete", "id": "1"})).status == 403
+            assert (await viewer.get("/export/orders.csv")).status == 403
+            r = await op.get("/export/orders.csv")
+            body = (await r.read()).decode("utf-8-sig")
+            assert r.status == 200 and "attachment" in r.headers["Content-Disposition"]
+            lines = body.strip().splitlines()
+            assert lines[0].startswith("order_id;") and len(lines) == 1 + len(res["orders"])
+            done = next(l for l in lines if l.startswith(oid + ";")).split(";")
+            assert done[14]                                        # прибыль посчитана для выданного заказа
+            sup.econ.add_cashflow("topup", 1000, 3.5, "тест")
+            cf = (await (await op.get("/export/cashflow.csv")).read()).decode("utf-8-sig")
+            assert "Пополнение кошелька TON;1000" in cf and "3,5" in cf
+            assert (await op.get("/export/secrets.csv")).status == 404
             await op.post("/control", data={"action": "pause"})
             assert sup.engine.paused
         finally:
