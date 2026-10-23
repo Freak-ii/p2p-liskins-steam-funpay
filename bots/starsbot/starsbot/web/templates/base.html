@@ -55,7 +55,7 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
 <header>
   <span class="logo">⭐ StarsBot</span>
   <nav>
-    {% for href, name in [('/', 'Дашборд'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/money', 'Деньги'), ('/pricing', 'Цены / RTBA'), ('/analytics', 'Аналитика'), ('/messages', 'Сообщения')] + ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')] %}
+    {% for href, name in [('/', 'Дашборд'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/money', 'Деньги'), ('/pricing', 'Цены / RTBA'), ('/analytics', 'Аналитика'), ('/messages', 'Сообщения')] + ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал'), ('/help', 'Справка')] %}
     <a href="{{href}}" class="{{ 'active' if path == href else '' }}">{{name}}</a>{% endfor %}
     <a href="/alerts" class="{{ 'active' if path == '/alerts' else '' }}">Алерты{% if alerts_open %} <span class="chip c-red">{{alerts_open}}</span>{% endif %}</a>
   </nav>
