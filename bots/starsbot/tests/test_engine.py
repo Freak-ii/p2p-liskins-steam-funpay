@@ -215,3 +215,26 @@ def test_db_backup_and_health(tmp_path):
     assert not h["ok"] and [c["name"] for c in h["checks"] if not c["ok"]] == ["funpay_poll"]
     asyncio.run(e.watchdog())
     assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code='watchdog'") == 1
+
+
+def test_faq_after_delivery_and_refund_request(tmp_path):
+    sup, e, fp, wallet = make(tmp_path)
+
+    async def go():
+        await boot(e)
+        fp.buyer_pays("Alice", 11, 100, username="alice_tg")
+        await drain(e, wallet)
+        n = len(fp.outbox)
+        fp.buyer_says(11, "звёзды не пришли(")
+        await drain(e, wallet)
+        after = [t for _, t in fp.outbox[n:]]
+        fp.buyer_pays("Bob", 12, 50)
+        await drain(e, wallet)
+        n = len(fp.outbox)
+        fp.buyer_says(12, "передумал, верните деньги")
+        await drain(e, wallet)
+        return after, [t for _, t in fp.outbox[n:]]
+    after, refund = asyncio.run(go())
+    assert len(after) == 1 and "Мои звёзды" in after[0] and "@alice_tg" in after[0]
+    assert "не подтверждайте" in refund[0]
+    assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code IN ('buyer_not_arrived','buyer_refund')") == 2

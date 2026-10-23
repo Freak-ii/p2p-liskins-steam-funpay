@@ -103,6 +103,17 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "username, никакие коды, пароли и вход в аккаунт не нужны. Никому их не сообщайте!"
         ),
         "faq_time": "Обычно звёзды приходят за 1–5 минут после оплаты и получения username. {status_hint}",
+        "faq_not_arrived": (
+            "Понимаю, проверяю 🙏 {status_hint}\n"
+            "Звёзды видны в Telegram → Настройки → «Мои звёзды» на аккаунте @{username}. Иногда баланс обновляется "
+            "с задержкой до 10 минут. Я уже сообщил продавцу — если звёзд не будет, он разберётся в этом чате."
+        ),
+        "faq_refund": (
+            "Передал продавцу вашу просьбу по заказу #{order_id}, он ответит в этом чате. Если звёзды ещё не "
+            "отправлены, возврат оформляется через FunPay. Пожалуйста, не подтверждайте заказ, пока вопрос не решён."
+        ),
+        "faq_premium": "В этом лоте продаются только Telegram Stars (звёзды). Telegram Premium здесь не продаётся.",
+        "faq_where": "Звёзды видны в Telegram → Настройки → «Мои звёзды» (Telegram Stars) на аккаунте получателя.",
     },
     "en": {
         "greeting_need_username": (
@@ -154,6 +165,13 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "faq_safe": ("It's safe: the stars are bought on Telegram's official platform Fragment. We only need your "
                      "username — never share codes or passwords with anyone."),
         "faq_time": "Usually the stars arrive within 1–5 minutes after payment and username. {status_hint}",
+        "faq_not_arrived": ("Checking it 🙏 {status_hint}\nStars are shown in Telegram → Settings → My Stars on "
+                            "@{username}; the balance can update with up to 10 minutes delay. I've notified the "
+                            "seller — if the stars don't show up, they will sort it out in this chat."),
+        "faq_refund": ("I've passed your request for #{order_id} to the seller, they'll reply in this chat. Please "
+                       "don't confirm the order until it's resolved."),
+        "faq_premium": "This listing sells Telegram Stars only, not Telegram Premium.",
+        "faq_where": "Stars are shown in Telegram → Settings → My Stars on the recipient account.",
     },
 }
 
@@ -260,6 +278,13 @@ OFF_PLATFORM_HINTS = ("discord", "дискорд", "whatsapp", "ватсап", "
                       "пиши в лс", "пиши в тг", "напиши в тг", "свяжись со мной", "для связи", "дешевле напрямую")
 
 FAQ = [
+    ("faq_not_arrived", re.compile(r"не\s*(при|за)шл|не\s*получил|не\s*вижу|не\s*начисл|не\s*зачисл|где\s+(мои\s+)?зв[её]зд|"
+                                  r"not\s+(received|arrived)|didn.?t\s+(get|receive|arrive)|haven.?t\s+(got|received)",
+                                  re.I)),
+    ("faq_refund", re.compile(r"возвр|верни(те)?\s+деньги|отмен(а|ить|ите)\s+заказ|refund|cancel", re.I)),
+    ("faq_premium", re.compile(r"преми?ум|premium", re.I)),
+    ("faq_where", re.compile(r"где\s+(посмотреть|увидеть|проверить)|как\s+(посмотреть|проверить)|where\s+(can|do)\s+i\s+see",
+                             re.I)),
     ("faq_gift", re.compile(r"подар|gift", re.I)),
     ("faq_safe", re.compile(r"безопасн|не скам|не обман|scam|safe|законн|бан", re.I)),
     ("faq_time", re.compile(r"когда|скоро|долго|сколько ждать|how long|when", re.I)),

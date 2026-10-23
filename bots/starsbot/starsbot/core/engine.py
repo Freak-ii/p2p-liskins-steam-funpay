@@ -350,7 +350,8 @@ class Engine:
                 await self.say(o, "awaiting_approval")
                 await self.notifier.notify("WARNING", "risk_review", f"Заказ #{oid} требует проверки (риск "
                                            f"{risk.score}): " + "; ".join(risk.reasons) +
-                                           f"\n/approve {oid} — выдать, /reject {oid} — отклонить", order_id=oid)
+                                           f"\n/approve {oid} — выдать, /reject {oid} — отклонить", order_id=oid,
+                                           buttons=[("✔ Выдать", f"approve {oid}"), ("✋ В ручную", f"reject {oid}")])
                 return
         self._set(oid, S.READY, "ready")
         self.enqueue(oid)
@@ -481,10 +482,14 @@ class Engine:
     async def answer_faq(self, o, text: str) -> None:
         key = M.detect_faq(text)
         hint = ""
-        if key == "faq_time":
+        if key in ("faq_time", "faq_not_arrived"):
             hint = M.render(o["lang"], "status", **self._order_vars(o),
                             status_text=M.status_text(o["lang"], o["status"]))
         await self.say(o, key, status_hint=hint)
+        if key in ("faq_not_arrived", "faq_refund"):      # п. 2.1.4: такие вопросы продавец видит сразу
+            what = "звёзды не пришли" if key == "faq_not_arrived" else "просит возврат/отмену"
+            await self.notifier.notify("WARNING", f"buyer_{key[4:]}", f"#{o['order_id']} ({o['status']}): покупатель "
+                                       f"{o['buyer_username']} — {what}: {text[:300]}", order_id=o["order_id"])
 
     async def on_chat_without_order(self, chat_id: str, msg: ChatMessage) -> None:
         """Сообщение в чате, где у нас нет активного заказа (пресейл или вопрос после выдачи)."""
@@ -495,6 +500,9 @@ class Engine:
             self.db.log_message(chat_id, last["order_id"], "in", msg.text)
             if M.is_off_platform_request(msg.text):
                 await self.say(last, "off_platform")
+            elif M.detect_faq(msg.text) and S(last["status"]) in (S.DELIVERED, S.COMPLETED) and \
+                    time.time() - (last["delivered_at"] or 0) < 7 * 86400:
+                await self.answer_faq(last, msg.text)
             elif S(last["status"]) == S.DELIVERED or (S(last["status"]) == S.COMPLETED and M.is_question(msg.text)
                                                       and time.time() - (last["delivered_at"] or 0) < 3 * 86400):
                 await self.say(last, "after_delivery")
@@ -633,7 +641,8 @@ class Engine:
                       cost_rub=cost_rub)
             await self.say(o, "awaiting_approval")
             await self.notifier.notify("CRITICAL", "price_guard", f"#{oid}: покупка остановлена — {problem}. "
-                                       f"/approve {oid} — купить всё равно.", order_id=oid)
+                                       f"/approve {oid} — купить всё равно.", order_id=oid,
+                                       buttons=[("✔ Купить", f"approve {oid}"), ("✋ В ручную", f"reject {oid}")])
             return
         # 3. транзакция от Fragment и её проверка
         try:
@@ -744,7 +753,8 @@ class Engine:
         await self.say(o, "delay")
         await self.notifier.notify("CRITICAL", "out_of_funds", f"Не хватает TON для заказа #{oid} ({o['stars']} ⭐): "
                                    f"{text}. Пополните кошелёк и нажмите «Одобрить», или оформите возврат.",
-                                   order_id=oid)
+                                   order_id=oid, buttons=[("✔ Пополнил, купить", f"approve {oid}"),
+                                                          ("💰 Баланс", "balance")])
         if self.cfg.deal.auto_refund_no_funds:
             await self.admin_refund(oid, "нет средств на кошельке (авто)")
 
