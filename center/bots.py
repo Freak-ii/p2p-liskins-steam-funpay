@@ -81,12 +81,19 @@ class BotWorker(Worker):
 
 
 # ====================================================================== MannBot
+def coord_db_path(center_home: Path, demo: bool = False) -> Path:
+    """Общий файл координации ботов одного аккаунта FunPay (MannBot + StarsBot): чаты, заказы, частота запросов."""
+    return center_home / "shared" / ("funpay_coord_demo.sqlite3" if demo else "funpay_coord.sqlite3")
+
+
 class MannBotWorker(BotWorker):
     """MannBot (Python): запускается своим лаунчером в режиме приложения, без браузера."""
 
     name = "mannbot"
     title = "MannBot · FunPay"
     src = BOTS_DIR / "mannbot"
+    package = "mannbot"
+    cookie = "mb_token"
     actions = {"bot_start": "Запустить торговлю", "bot_stop": "Остановить торговлю",
                "pause": "Пауза", "resume": "Продолжить"}
 
@@ -95,17 +102,19 @@ class MannBotWorker(BotWorker):
         self.demo = demo
 
     def check_deps(self) -> str | None:
-        if not (self.src / "mannbot").is_dir():
-            return f"нет исходников MannBot в {self.src}"
+        if not (self.src / self.package).is_dir():
+            return f"нет исходников {self.title.split(' ')[0]} в {self.src}"
         try:
             import aiohttp as _a, bs4 as _b, jinja2 as _j, yaml as _y  # noqa: F401
+            for mod in self.extra_modules:
+                __import__(mod)
         except ImportError as e:
             return f"не установлены Python-пакеты ({e.name}): pip install -r requirements.txt"
         return None
 
     def command(self) -> list[str]:
         py = self.executable or sys.executable
-        cmd = [py, "-m", "mannbot.app.launcher", "--home", str(self.home), "--port", str(self.port), "--no-browser"]
+        cmd = [py, "-m", f"{self.package}.app.launcher", "--home", str(self.home), "--port", str(self.port), "--no-browser"]
         if self.demo:
             cmd.append("--demo")
         return cmd
@@ -113,8 +122,11 @@ class MannBotWorker(BotWorker):
     def cwd(self) -> Path:
         return self.src
 
+    extra_modules: tuple[str, ...] = ()
+
     def env(self) -> dict[str, str]:
-        return {"PYTHONPATH": str(self.src) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+        return {"PYTHONPATH": str(self.src) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+                "FUNPAY_COORD_DB": str(coord_db_path(self.home.parent, self.demo))}
 
     @property
     def _cfg_path(self) -> Path:
@@ -133,10 +145,10 @@ class MannBotWorker(BotWorker):
     async def health(self) -> bool:
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
             async with s.get(f"{self.base_url}/api/ping") as r:
-                return r.status == 200 and "mannbot" in await r.text()
+                return r.status == 200 and self.package in await r.text()
 
     def _cookies(self) -> dict:
-        return {"mb_token": self.token()}
+        return {self.cookie: self.token()}
 
     async def summary(self) -> dict | None:
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
@@ -144,6 +156,9 @@ class MannBotWorker(BotWorker):
                 if r.status != 200:
                     return None
                 d = await r.json()
+        return self._summary(d)
+
+    def _summary(self, d: dict) -> dict:
         sm = d.get("summary") or {}
         return {
             "bot_state": d.get("state"), "paused": d.get("paused"), "dry_run": d.get("dry_run"),
@@ -164,7 +179,7 @@ class MannBotWorker(BotWorker):
         return unquote_plus(m.group(1)) if m else "команда отправлена"
 
     def alerts(self, limit: int = 50) -> list[dict]:
-        con = _read_only(self.home / ("demo" if self.demo else "") / "data" / "mannbot.sqlite3")
+        con = _read_only(self.home / ("demo" if self.demo else "") / "data" / f"{self.package}.sqlite3")
         if con is None:
             return []
         try:
@@ -176,6 +191,34 @@ class MannBotWorker(BotWorker):
             con.close()
         return [{"source": self.name, "id": r["id"], "ts": float(r["ts"] or 0), "level": str(r["level"] or "").lower(),
                  "code": r["code"], "message": r["text"], "acked": bool(r["acknowledged"])} for r in rows]
+
+
+# ====================================================================== StarsBot
+class StarsBotWorker(MannBotWorker):
+    """StarsBot (Python): Telegram Stars через fragment.com на том же аккаунте FunPay, что и MannBot.
+    Оба бота получают один FUNPAY_COORD_DB и не мешают друг другу в чатах и запросах к FunPay."""
+
+    name = "starsbot"
+    title = "StarsBot · Telegram Stars"
+    src = BOTS_DIR / "starsbot"
+    package = "starsbot"
+    cookie = "sb_token"
+    extra_modules = ("pytoniq_core", "nacl")
+
+    def _summary(self, d: dict) -> dict:
+        sm = d.get("summary") or {}
+        fr = d.get("fragment") or {}
+        w = d.get("wallet") or {}
+        session = {"ok": "активна", "expired": "истекла"}.get(fr.get("session"), "не проверена")
+        return {
+            "bot_state": d.get("state"), "paused": d.get("paused"), "dry_run": d.get("dry_run"),
+            "configured": d.get("configured"), "error": d.get("error"), "demo": d.get("demo"),
+            "kpi": {"Заказов за 24 ч": sm.get("orders"), "Звёзд выдано": sm.get("stars_sold"),
+                    "Выручка за 24 ч, ₽": sm.get("revenue"), "Прибыль за 24 ч, ₽": sm.get("profit"),
+                    "Активных заказов": sm.get("active"),
+                    "TON на кошельке": round(w["balance"], 3) if w.get("balance") is not None else None,
+                    "Звёзд хватит": w.get("capacity"), "Fragment": session},
+        }
 
 
 # ====================================================================== LisBot

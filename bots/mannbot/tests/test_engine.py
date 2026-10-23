@@ -122,3 +122,33 @@ def test_adopts_existing_offer_instead_of_double_send():
     o = db.get_order(oid)
     assert o["offer_id"] == "424242" and o["status"] == S.OFFER_SENT.value
     assert len([k for k, v in steam.offers.items() if v["to"] == str(888 + 76561197960265728)]) == 1
+
+
+def test_coexistence_with_starsbot(tmp_path):
+    """Чат, который ведёт StarsBot, и заказ, взятый StarsBot, MannBot не трогает (общий coord-файл Центра)."""
+    from mannbot.coord import Coordinator
+    db, notifier, fp, steam, engine, analytics = make()
+    engine.cfg.deal.message_rate_limit_seconds = 0
+    path = tmp_path / "coord.sqlite3"
+    engine.coord = Coordinator(path, "mannbot")
+    stars = Coordinator(path, "starsbot")
+
+    async def go():
+        await engine.funpay_poll()
+        mine = fp.buyer_pays("Kate", 31, 1)
+        taken = fp.buyer_pays("Leo", 32, 1)
+        stars.claim_order(taken)
+        stars.claim_chat("577", "STARS001")
+        await engine.funpay_poll()
+        fp.chat_users.update({"577": "Max", "578": "Nina"})
+        fp.buyer_says(77, "@my_telegram_name, давай в тг")   # покупатель звёзд — не наше дело
+        fp.buyer_says(78, "есть ключи?")                    # свободный чат — продавцу как обычно
+        await engine.funpay_poll()
+        return mine, taken
+    mine, taken = asyncio.run(go())
+    assert db.get_order(mine) is not None and db.get_order(taken) is None
+    assert engine.coord.order_owner(mine) == "mannbot"
+    assert stars.chat_is_foreign(db.get_order(mine)["chat_id"])          # MannBot отметил свой чат
+    assert not [t for ch, t in fp.outbox if ch == "577"]
+    texts = " ".join(t for _, t in notifier.sent)
+    assert "my_telegram_name" not in texts and "есть ключи?" in texts

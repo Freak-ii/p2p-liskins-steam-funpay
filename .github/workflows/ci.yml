@@ -15,6 +15,9 @@ jobs:
       - name: MannBot
         working-directory: bots/mannbot
         run: python -m pytest -q
+      - name: StarsBot
+        working-directory: bots/starsbot
+        run: python -m pytest -q
   lisbot:
     runs-on: ubuntu-latest
     defaults:

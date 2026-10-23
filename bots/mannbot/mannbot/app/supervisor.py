@@ -16,6 +16,7 @@ import yaml
 
 from mannbot.analytics.analytics import Analytics
 from mannbot.config import DEFAULTS, Section, load_config, validate_config
+from mannbot.coord import Coordinator
 from mannbot.core import messages as M
 from mannbot.core.engine import Engine
 from mannbot.crm.db import Database
@@ -139,15 +140,18 @@ class Supervisor:
     def _build(self) -> None:
         cfg = self.cfg
         self.notifier = Notifier(cfg.notifications, self.db)
+        # FUNPAY_COORD_DB задаёт Центр, когда на том же аккаунте FunPay работает StarsBot
+        coord = Coordinator.from_env("mannbot", cfg.funpay.get("coord_db") or None)
         if cfg.general.demo or self.demo:
             from mannbot.demo import FakeFunPay, FakeSteam
             fp, steam = FakeFunPay(), FakeSteam(keys=60)
         else:
             from mannbot.funpay.client import FunPayClient
             from mannbot.steam.client import SteamClient
-            fp = FunPayClient(cfg.funpay.golden_key, cfg.funpay.user_agent, dry_run=cfg.general.dry_run)
+            fp = FunPayClient(cfg.funpay.golden_key, cfg.funpay.user_agent, dry_run=cfg.general.dry_run,
+                              coordinator=coord)
             steam = SteamClient(cfg.steam, dry_run=cfg.general.dry_run)
-        self.engine = Engine(cfg, self.db, fp, steam, self.notifier)
+        self.engine = Engine(cfg, self.db, fp, steam, self.notifier, coord=coord)
         self.analytics = Analytics(cfg, self.db, self.notifier, self.engine)
         self.engine.analytics = self.analytics
 

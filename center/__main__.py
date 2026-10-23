@@ -77,11 +77,11 @@ async def run(home, host: str, port: int, *, demo: bool, open_browser: bool) -> 
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog="center", description="Центр перепродажи: LisBot (LIS-SKINS → Steam) + MannBot (FunPay)")
+    ap = argparse.ArgumentParser(prog="center", description="Центр перепродажи: LisBot (LIS-SKINS → Steam) + MannBot и StarsBot (FunPay)")
     ap.add_argument("--home", help="папка данных центра (по умолчанию ./center-data или $CENTER_HOME)")
     ap.add_argument("--host", default=None)
     ap.add_argument("--port", type=int, default=None)
-    ap.add_argument("--demo", action="store_true", help="MannBot в демо-режиме с эмуляцией FunPay и Steam")
+    ap.add_argument("--demo", action="store_true", help="MannBot и StarsBot в демо-режиме с эмуляцией FunPay, Steam, Fragment и TON")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args(argv)
 

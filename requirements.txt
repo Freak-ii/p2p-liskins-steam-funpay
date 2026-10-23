@@ -1,2 +1,3 @@
-# Центр и MannBot работают на одном Python (3.11+)
+# Центр, MannBot и StarsBot работают на одном Python (3.11+)
 -r bots/mannbot/requirements.txt
+-r bots/starsbot/requirements.txt

@@ -8,6 +8,7 @@ import re
 import time
 from typing import Any
 
+from mannbot.coord import Coordinator
 from mannbot.core import messages as M
 from mannbot.core.models import ChatMessage, FunPayOrder, OrderStatus as S, TradeOfferState as T
 from mannbot.core.risk import RiskEngine
@@ -27,8 +28,10 @@ BUYER_DATA_ERRORS = {"invalid_token", "cannot_trade", "trade_banned", "inventory
 
 
 class Engine:
-    def __init__(self, cfg, db: Database, funpay, steam, notifier: Notifier, analytics=None):
+    def __init__(self, cfg, db: Database, funpay, steam, notifier: Notifier, analytics=None, coord=None):
         self.cfg = cfg
+        # общий координатор с другими ботами аккаунта FunPay (StarsBot); без пути — выключен
+        self.coord = coord or Coordinator(None, "mannbot")
         self.db = db
         self.fp = funpay
         self.steam = steam
@@ -93,7 +96,10 @@ class Engine:
         if event:
             self.db.add_event(order_id, event, status=status.value if status else None,
                               **{k: v for k, v in fields.items() if k != "status"})
-        return self.db.get_order(order_id)
+        o = self.db.get_order(order_id)
+        if o is not None and status is not None and status.is_final:
+            self.coord.release_chat(o["chat_id"], order_id)
+        return o
 
     def enqueue(self, order_id: str) -> None:
         if order_id not in self._queued:
@@ -117,6 +123,8 @@ class Engine:
             if row is None:
                 if so.status != "paid" or not self._order_re.search(so.description or ""):
                     continue
+                if not self.coord.claim_order(so.order_id):
+                    continue                 # заказ уже ведёт другой бот аккаунта
                 await self.on_new_order(so, imported=first_run)
             elif row["fp_status"] != so.status:
                 await self.on_fp_status_change(row, so.status)
@@ -142,6 +150,7 @@ class Engine:
                                keys=keys)
         self.db.add_event(so.order_id, "created", price=so.price, keys=keys, imported=imported)
         o = self.db.get_order(so.order_id)
+        self.coord.claim_chat(o["chat_id"], so.order_id)
         if imported:
             # заказы, оплаченные до первого запуска бота, — только продавцу: их могли уже выдать вручную
             self._set(so.order_id, S.MANUAL, "imported_on_first_run")
@@ -262,8 +271,10 @@ class Engine:
             asyncio.create_task(self._fetch_review_later(oid, delay=5))
 
     async def on_buyer_message(self, chat_id: str, msg: ChatMessage) -> None:
-        self.db.log_message(chat_id, None, "in", msg.text)
         o = self.db.active_order_for_chat(chat_id)
+        if o is None and self.coord.chat_is_foreign(chat_id):
+            return                           # в чате идёт заказ другого бота (например, звёзды у StarsBot)
+        self.db.log_message(chat_id, None, "in", msg.text)
         if o is None and find_trade_url(msg.text):
             # покупатель прислал ссылку раньше, чем мы увидели оплату — синхронизируем заказы
             await self.sync_orders()

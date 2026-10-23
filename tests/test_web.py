@@ -19,7 +19,7 @@ def test_auth_overview_and_secrets(tmp_path):
             r = await c.get(f"/login?token={token}", allow_redirects=False)
             assert r.status == 302
             d = await (await c.get("/api/overview")).json()
-            assert {b["name"] for b in d["bots"]} == {"lisbot", "mannbot"}
+            assert {b["name"] for b in d["bots"]} == {"lisbot", "mannbot", "starsbot"}
             r = await c.post("/api/lisbot/secrets", json={"LIS_API_KEY": "abc", "STEAM_PASSWORD": "pw"})
             assert (await r.json())["ok"]
             s = await (await c.get("/api/lisbot/secrets")).json()

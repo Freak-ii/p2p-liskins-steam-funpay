@@ -9,7 +9,7 @@ import logging
 import time
 from pathlib import Path
 
-from center.bots import BotWorker, LisBotWorker, MannBotWorker
+from center.bots import BotWorker, LisBotWorker, MannBotWorker, StarsBotWorker
 from center.config import CenterConfig
 from center.events import EventStore
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
@@ -24,12 +24,14 @@ class Center:
         self.events = EventStore(self.home / "center.sqlite3")
         self.demo = demo
         restart = self.cfg["restart"]
-        wm, wl = self.cfg.worker("mannbot"), self.cfg.worker("lisbot")
+        wm, wl, ws = self.cfg.worker("mannbot"), self.cfg.worker("lisbot"), self.cfg.worker("starsbot")
         self.workers: dict[str, BotWorker] = {
             "lisbot": LisBotWorker(self.home / "lisbot", self.events, port=wl.get("port", 8802), restart=restart,
                                    executable=wl.get("node") or ""),
             "mannbot": MannBotWorker(self.home / "mannbot", self.events, port=wm.get("port", 8801), restart=restart,
                                      executable=wm.get("python") or "", demo=demo),
+            "starsbot": StarsBotWorker(self.home / "starsbot", self.events, port=ws.get("port", 8803),
+                                       restart=restart, executable=ws.get("python") or "", demo=demo),
         }
         self.summaries: dict[str, dict | None] = {n: None for n in self.workers}
         self.summary_at: dict[str, float] = {}

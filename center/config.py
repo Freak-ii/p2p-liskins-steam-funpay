@@ -6,6 +6,8 @@
     logs/<бот>.log       — вывод каждого бота
     lisbot/              — данные LisBot: config.json, secrets.env, data/
     mannbot/             — домашняя папка MannBot: config.yaml, data/
+    starsbot/            — домашняя папка StarsBot: config.yaml, data/
+    shared/              — общий файл координации ботов одного аккаунта FunPay
 """
 from __future__ import annotations
 
@@ -29,6 +31,8 @@ DEFAULTS: dict = {
     "workers": {
         "mannbot": {"enabled": True, "autostart": True, "port": 8801, "python": ""},
         "lisbot": {"enabled": True, "autostart": True, "port": 8802, "node": ""},
+        # процесс StarsBot = его панель; торговля начнётся только после мастера настройки (кошелёк TON, Fragment)
+        "starsbot": {"enabled": True, "autostart": True, "port": 8803, "python": ""},
     },
     "restart": {
         "backoff_start": 2,          # первая пауза перед перезапуском, с

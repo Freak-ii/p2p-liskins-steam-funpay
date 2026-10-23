@@ -22,6 +22,7 @@ DEFAULTS: dict[str, Any] = {
         "poll_interval": 6, "lots": [], "order_match_regex": r"(?i)(mann\s*co|ключ|key)",
         "auto_raise": True, "raise_interval_minutes": 240, "stock_sync": True,
         "max_display_amount": 500, "deactivate_when_empty": True,
+        "coord_db": "",                  # общий файл координации с StarsBot (обычно задаёт Центр)
     },
     "steam": {
         "username": "", "password": "", "shared_secret": "", "identity_secret": "", "steam_id": "",
