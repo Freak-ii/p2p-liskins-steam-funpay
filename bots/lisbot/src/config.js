@@ -52,10 +52,10 @@ export function loadConfig({ configPath, env, dataDir } = {}) {
 
   cfg.secrets = {
     lisApiKey: env.LIS_API_KEY || '',
-    steamAccountName: env.STEAM_ACCOUNT_NAME || '',
+    steamAccountName: (env.STEAM_ACCOUNT_NAME || '').trim(),
     steamPassword: env.STEAM_PASSWORD || '',
-    sharedSecret: env.STEAM_SHARED_SECRET || '',
-    identitySecret: env.STEAM_IDENTITY_SECRET || '',
+    sharedSecret: (env.STEAM_SHARED_SECRET || '').trim(),
+    identitySecret: (env.STEAM_IDENTITY_SECRET || '').trim(),
     tradeUrl: env.STEAM_TRADE_URL || '',
     telegramToken: env.TELEGRAM_BOT_TOKEN || '',
     telegramChatId: env.TELEGRAM_CHAT_ID || '',
@@ -65,6 +65,11 @@ export function loadConfig({ configPath, env, dataDir } = {}) {
   return cfg;
 }
 
+/** shared_secret/identity_secret из maFile: base64 от 20 байт. */
+export function isSteamSecret(v) {
+  return /^[A-Za-z0-9+/]{27}=$/.test(v || '');
+}
+
 /** Возвращает список проблем конфигурации. Пустой массив — всё ок. */
 export function validateConfig(cfg) {
   const errs = [];
@@ -72,6 +77,8 @@ export function validateConfig(cfg) {
   if (!s.lisApiKey) errs.push('LIS_API_KEY не задан');
   if (!s.steamAccountName || !s.steamPassword) errs.push('STEAM_ACCOUNT_NAME / STEAM_PASSWORD не заданы');
   if (!s.sharedSecret) errs.push('STEAM_SHARED_SECRET не задан (нужен для входа без ручного кода)');
+  else if (!isSteamSecret(s.sharedSecret)) errs.push('STEAM_SHARED_SECRET не похож на shared_secret из maFile SDA (28 символов base64, оканчивается на «=»). Возможно, maFile зашифрован или скопирован не тот ключ');
+  if (s.identitySecret && !isSteamSecret(s.identitySecret)) errs.push('STEAM_IDENTITY_SECRET не похож на identity_secret из maFile SDA (28 символов base64)');
   if (!s.identitySecret) errs.push('STEAM_IDENTITY_SECRET не задан (нужен для подтверждения лотов на ТП)');
   if (!cfg.trade) errs.push('STEAM_TRADE_URL не задан или некорректен');
   if (cfg.telegram.enabled && (!s.telegramToken || !s.telegramChatId)) errs.push('Telegram включён, но TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID не заданы');

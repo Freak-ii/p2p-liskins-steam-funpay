@@ -66,6 +66,7 @@ class Supervisor:
         self.task: asyncio.Task | None = None
         self._started_once = False
         self.quit_event: asyncio.Event | None = None     # выставляется кнопкой «Выход» в интерфейсе
+        self.tg_task: asyncio.Task | None = None
         self.engine: Engine
         self.analytics: Analytics
         self.notifier: Notifier
@@ -149,6 +150,7 @@ class Supervisor:
             fp = FunPayClient(cfg.funpay.golden_key, cfg.funpay.user_agent, dry_run=cfg.general.dry_run)
             steam = SteamClient(cfg.steam, dry_run=cfg.general.dry_run)
         self.engine = Engine(cfg, self.db, fp, steam, self.notifier)
+        self.engine.external_commands = True
         self.analytics = Analytics(cfg, self.db, self.notifier, self.engine)
         self.engine.analytics = self.analytics
 
@@ -212,6 +214,31 @@ class Supervisor:
 
     async def shutdown(self) -> None:
         await self.stop()
+        if self.tg_task:
+            self.tg_task.cancel()
+            await asyncio.gather(self.tg_task, return_exceptions=True)
+            await self._tg.close()
+
+    # ------------------------------------------------------------------ команды Telegram
+    def start_telegram(self) -> None:
+        """Команды Telegram слушаются всё время работы приложения, а не только пока бот вошёл в FunPay и Steam:
+        иначе при любой ошибке входа бот молчал бы, и узнать, что случилось, или запустить его было бы нельзя."""
+        if self.tg_task or self.demo or self.cfg.general.demo:
+            return
+        self._tg = Notifier(self.cfg.notifications, self.db)
+        self._tg.command_handler = self.handle_command
+        self.tg_task = asyncio.create_task(self._tg.poll_commands(lambda: self.cfg.notifications.telegram))
+
+    async def handle_command(self, cmd: str, args: list[str]) -> str:
+        if self.state == "running":
+            if cmd == "run":
+                return "Бот уже запущен"
+            return await self.engine.handle_command(cmd, args)
+        if cmd == "run":
+            return await self.start()
+        state = {"stopped": "остановлен", "starting": "запускается", "error": "остановился с ошибкой"}.get(self.state, self.state)
+        return (f"⏹ Бот {state}" + (f": {self.last_error}" if self.last_error else "") +
+                ("" if self.state == "starting" else "\n/run — запустить бота"))
 
     def status(self) -> dict:
         return {"state": self.state, "error": self.last_error, "configured": self.configured,
@@ -278,7 +305,13 @@ class Supervisor:
                         data = await r.json()
                         if not data.get("ok"):
                             return {"ok": False, "text": f"Telegram: {data.get('description')}"}
-            return {"ok": True, "text": "Тестовое сообщение отправлено в Telegram"}
+            saved = self.cfg.notifications.telegram
+            off = [n for ok, n in ((saved.enabled, "«Уведомления в Telegram»"),
+                                   (saved.commands, "«Управление командами из Telegram»")) if not ok]
+            if not saved.bot_token or not saved.admin_chat_ids:
+                off.insert(0, "сохранить токен и chat_id")
+            hint = f" Но уведомления и команды не заработают, пока не включено: {', '.join(off)}." if off else ""
+            return {"ok": True, "text": "Тестовое сообщение отправлено в Telegram." + hint}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "text": f"Telegram недоступен: {e}"}
         finally:

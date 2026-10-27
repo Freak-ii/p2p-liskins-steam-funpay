@@ -6,8 +6,8 @@ from aiohttp.test_utils import TestClient, TestServer
 from center.app import Center
 from center.web import make_app
 
-LIS = {"LIS_API_KEY": "k", "STEAM_ACCOUNT_NAME": "Trader", "STEAM_PASSWORD": "p", "STEAM_SHARED_SECRET": "s",
-       "STEAM_IDENTITY_SECRET": "i", "STEAM_TRADE_URL": "https://steamcommunity.com/tradeoffer/new/?partner=123&token=x",
+LIS = {"LIS_API_KEY": "k", "STEAM_ACCOUNT_NAME": "Trader", "STEAM_PASSWORD": "p", "STEAM_SHARED_SECRET": "ZGVtby1kZW1vLWRlbW8tZGVtbzE=",
+       "STEAM_IDENTITY_SECRET": "ZGVtby1kZW1vLWRlbW8tZGVtbzI=", "STEAM_TRADE_URL": "https://steamcommunity.com/tradeoffer/new/?partner=123&token=x",
        "TELEGRAM_BOT_TOKEN": "111:lis", "TELEGRAM_CHAT_ID": "5"}
 
 
@@ -205,4 +205,32 @@ def test_telegram_chat_id_is_bot_id(tmp_path):
     assert not r["ready"] and item["level"] == "fail" and "LisBot" in item["detail"] and "@userinfobot" in item["detail"]
     c.workers["lisbot"].save_secrets({**LIS, "TELEGRAM_CHAT_ID": "5"})
     assert "tg_chat_id" not in _levels(c.readiness.check())
+    c.events.close()
+
+
+def test_lisbot_steam_login_failed_is_not_ready(tmp_path):
+    c = Center(tmp_path)
+    c.workers["lisbot"].save_secrets(LIS)
+    _mann(c, "other")
+    c.summaries["lisbot"] = {"bot_state": "running", "steam_ready": True, "steam_error": ""}
+    assert "lis_steam_online" not in _levels(c.readiness.check())
+    c.summaries["lisbot"] = {"bot_state": "running", "steam_ready": False, "steam_error": ""}
+    assert _levels(c.readiness.check())["lis_steam_online"] == "info"          # ещё входит
+    c.summaries["lisbot"] = {"bot_state": "running", "steam_ready": False,
+                             "steam_error": "getaddrinfo ENOENT api.steampowered.com"}
+    r = c.readiness.check()
+    item = next(i for i in r["items"] if i["key"] == "lis_steam_online")
+    assert not r["ready"] and item["level"] == "fail" and "DNS" in item["detail"]
+    c.summaries["lisbot"] = {"bot_state": "halted", "steam_ready": False, "steam_error": "",
+                             "error": "Не удалось войти в Steam: Ошибка входа Steam: TwoFactorCodeMismatch"}
+    item = next(i for i in c.readiness.check()["items"] if i["key"] == "lis_steam_online")
+    assert item["level"] == "fail" and "shared_secret" in item["detail"]
+    c.events.close()
+
+
+def test_lisbot_secret_format(tmp_path):
+    c = Center(tmp_path)
+    c.workers["lisbot"].save_secrets({**LIS, "STEAM_SHARED_SECRET": "\"abc\""})
+    item = next(i for i in c.readiness.check()["items"] if i["key"] == "lis_secret_format")
+    assert item["level"] == "fail" and "shared_secret" in item["title"] and "identity" not in item["title"]
     c.events.close()

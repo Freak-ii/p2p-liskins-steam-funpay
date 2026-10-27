@@ -170,7 +170,13 @@ export class Bot {
       await this.session.syncTime();
       if (!initial) this.notify.send('ok', 'Сессия Steam восстановлена');
     } catch (e) {
-      this.guard.critical('STEAM_START', `Не удалось войти в Steam: ${errMsg(e)}`);
+      if (e.network) {
+        // сеть/DNS: Steam попытку не видел, останавливать бота незачем — повторим вход через пару минут
+        this.guard.warn('STEAM_NETWORK', `Нет связи со Steam, повтор входа через 2 мин: ${errMsg(e)}`);
+        clearTimeout(this.steamRetry);
+        this.steamRetry = setTimeout(() => this.ensureSteam(), 2 * 60_000);
+        this.steamRetry.unref?.();
+      } else this.guard.critical('STEAM_START', `Не удалось войти в Steam: ${errMsg(e)}`);
     } finally { this.loggingIn = false; }
   }
 
@@ -217,6 +223,7 @@ export class Bot {
   async stop(reason = 'завершение процесса') {
     if (this.stopped) return;
     this.stopped = true;
+    clearTimeout(this.steamRetry);
     this.ws?.stop();
     this.notify.stop();
     this.session?.stop();

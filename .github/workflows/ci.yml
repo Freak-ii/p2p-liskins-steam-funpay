@@ -1,7 +1,13 @@
 name: Tests
+# PR проверяется один раз (событие pull_request), а не дважды — ещё и пушем в ветку.
 on:
+  workflow_dispatch:
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   python:
     runs-on: ubuntu-latest

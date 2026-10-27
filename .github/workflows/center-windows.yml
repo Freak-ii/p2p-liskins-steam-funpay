@@ -1,16 +1,20 @@
 # Портативная сборка центра для Windows и её проверка на настоящей Windows (windows-latest):
 # тесты центра (DPAPI, мягкая остановка), запуск собранного zip в демо-режиме, значок в трее, выход.
-# Запуск: вкладка Actions → Center Windows → Run workflow, пуш тега center-v* или PR с изменениями центра.
+# Запуск: вкладка Actions → Center Windows → Run workflow, пуш тега center-v* или пуш коммита с пометкой [выпуск].
+# Минуты Windows в Actions считаются вдвое, поэтому на обычные пуши и PR эта сборка не запускается:
+# их проверяет «Tests» на Linux.
 name: Center Windows
 on:
   workflow_dispatch:
   push:
     tags: ["center-v*"]
-    branches: ["claude/center-platform-*", "claude/center-optimize-*", "claude/center-next-wave-*"]
-  pull_request:
-    paths: ["center/**", "packaging/**", "bots/**", "requirements.txt", ".github/workflows/center-windows.yml"]
+    branches: ["claude/center-*"]
+concurrency:
+  group: center-windows-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/center-v') || contains(github.event.head_commit.message, '[выпуск]')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,8 +25,9 @@ jobs:
       - run: pip install -r requirements.txt pystray Pillow
       - run: python packaging/build_center_windows.py
       - uses: actions/upload-artifact@v4
-        with: { name: Center-Windows-x64-portable, path: dist/Center-Windows-x64-portable.zip }
+        with: { name: Center-Windows-x64-portable, path: dist/Center-Windows-x64-portable.zip, retention-days: 3 }
   windows-tests:
+    needs: build
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

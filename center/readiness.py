@@ -15,6 +15,7 @@ from center.config import check_config
 
 STEAM64_BASE = 76561197960265728
 LEVELS = ("fail", "warn", "info", "ok")
+_STEAM_SECRET = re.compile(r"^[A-Za-z0-9+/]{27}=$")       # shared/identity_secret из maFile: base64 от 20 байт
 
 
 def _partner_steam64(trade_url: str) -> str:
@@ -68,9 +69,29 @@ class Readiness:
         miss = [n for k, n in (("STEAM_ACCOUNT_NAME", "логин"), ("STEAM_PASSWORD", "пароль"),
                                ("STEAM_SHARED_SECRET", "shared_secret"), ("STEAM_IDENTITY_SECRET", "identity_secret"))
                 if not lis.get(k)]
+        bad = [n for k, n in (("STEAM_SHARED_SECRET", "shared_secret"), ("STEAM_IDENTITY_SECRET", "identity_secret"))
+               if lis.get(k) and not _STEAM_SECRET.match(lis[k].strip())]
+        if bad:
+            add("lis_secret_format", "fail", f"LisBot: {', '.join(bad)} не похож на ключ из maFile",
+                "В maFile Steam Desktop Authenticator это строка из 28 символов, которая кончается на «=». "
+                "Если maFile зашифрован, снимите шифрование в SDA и скопируйте значение заново, без кавычек.",
+                "LisBot → «Подключения»")
         add("lis_steam", "fail" if miss else "ok",
             f"LisBot: Steam — не хватает: {', '.join(miss)}" if miss else "LisBot: вход в Steam настроен",
             where="LisBot → «Подключения»" if miss else "")
+        lsum = summaries.get("lisbot") or {}
+        if not miss and lsum.get("steam_ready") is False:
+            # настройки есть, но вход не удался: не показываем «готово», пока бот не в Steam
+            err = lsum.get("steam_error") or ("" if lsum.get("bot_state") == "running" else lsum.get("error") or "")
+            if not err:
+                add("lis_steam_online", "info", "LisBot: входит в Steam…")
+            else:
+                net = any(w in err for w in ("getaddrinfo", "ENOTFOUND", "ENOENT", "Нет связи"))
+                add("lis_steam_online", "fail", "LisBot: нет входа в Steam", err.rstrip(".") + ". " + (
+                    "Это ошибка сети или DNS на компьютере: проверьте интернет, VPN и антивирус. "
+                    "Бот повторяет вход сам и не тратит на это суточный лимит логинов." if net else
+                    "Если Steam отклонил код, проверьте shared_secret из maFile SDA и время на компьютере."),
+                    "LisBot → «Тревоги»")
         if not lis.get("STEAM_TRADE_URL"):
             add("lis_trade_url", "fail", "LisBot: не задана трейд-ссылка Steam", "На неё LIS-SKINS отправляет купленные предметы.",
                 "LisBot → «Подключения»")

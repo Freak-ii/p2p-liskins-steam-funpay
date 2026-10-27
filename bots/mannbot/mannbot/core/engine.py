@@ -36,6 +36,7 @@ class Engine:
         self.steam = steam
         self.notifier = notifier
         self.analytics = analytics
+        self.external_commands = False
         self.risk = RiskEngine(cfg.risk, db)
         self.rtba = RTBAEngine(cfg.rtba)
         self.queue: asyncio.Queue[str] = asyncio.Queue()
@@ -1073,8 +1074,9 @@ class Engine:
             self._loop("raise", 300, self.raise_lots),
             self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),
             self.deliver_worker(),
-            self.notifier.poll_commands(),
         ]
+        if not self.external_commands:      # в приложении команды Telegram слушает Supervisor, даже когда бот остановлен
+            loops.append(self.notifier.poll_commands())
         if self.analytics:
             loops.append(self._loop("analytics", 600, self.analytics.tick))
         self._tasks = [asyncio.create_task(c) for c in loops]
