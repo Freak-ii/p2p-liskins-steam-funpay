@@ -115,11 +115,16 @@
     <h3>Подключения LisBot</h3>
     <p class="muted small">Хранятся только на этом компьютере, в папке данных центра, в зашифрованном виде (secrets.dat).</p>
     <label>Ключ API LIS-SKINS</label><input name="LIS_API_KEY" autocomplete="off">
+    <label>maFile из Steam Desktop Authenticator (заполнит логин, shared_secret и identity_secret)</label>
+    <input type="file" id="lisMaFile" accept=".maFile,.json,application/json">
+    <div class="small" id="lisMaRes"></div>
     <label>Логин Steam</label><input name="STEAM_ACCOUNT_NAME" autocomplete="off">
     <label>Пароль Steam <span class="muted small" id="pwHint"></span></label><input name="STEAM_PASSWORD" type="password" autocomplete="new-password">
     <label>shared_secret (из maFile)</label><input name="STEAM_SHARED_SECRET" autocomplete="off">
     <label>identity_secret (из maFile)</label><input name="STEAM_IDENTITY_SECRET" autocomplete="off">
     <label>Трейд-ссылка Steam</label><input name="STEAM_TRADE_URL" autocomplete="off">
+    <div class="row" style="margin-top:6px"><button class="btn" type="button" onclick="lisSteamTest()">Проверить Steam</button></div>
+    <div class="small" id="lisSteamRes"></div>
     <label>Telegram: токен бота (необязательно)</label><input name="TELEGRAM_BOT_TOKEN" autocomplete="off">
     <label>Telegram: chat id — ваш id, его пришлёт @userinfobot (не id бота)</label><input name="TELEGRAM_CHAT_ID" autocomplete="off">
     <p class="muted small" style="margin:4px 0 0">Перед проверкой откройте своего бота в Telegram и нажмите Start. У MannBot должен быть другой бот.</p>
@@ -225,7 +230,7 @@ function switchLog(name) { logBot = name; logAfter = 0; $('#log').textContent = 
 async function openLis() {
   const s = await api('/api/lisbot/secrets');
   for (const el of $('#lisForm').elements) if (el.name) el.value = s[el.name] ?? '';
-  $('#lisTgRes').textContent = '';
+  $('#lisTgRes').textContent = ''; $('#lisSteamRes').textContent = ''; $('#lisMaRes').textContent = ''; $('#lisMaFile').value = '';
   $('#pwHint').textContent = s.STEAM_PASSWORD_SET ? '(сохранён — оставьте пустым, чтобы не менять)' : '';
   $('#lisDlg').showModal();
 }
@@ -236,6 +241,28 @@ async function lisTgTest() {
   const r = await api('/api/lisbot/telegram-test', { TELEGRAM_BOT_TOKEN: f.TELEGRAM_BOT_TOKEN.value, TELEGRAM_CHAT_ID: f.TELEGRAM_CHAT_ID.value });
   out.style.color = r.ok ? 'var(--ok)' : 'var(--bad)'; out.textContent = r.message || r.error || '';
 }
+async function lisSteamTest() {
+  const f = $('#lisForm').elements;
+  const out = $('#lisSteamRes');
+  out.style.color = ''; out.textContent = 'Проверяю…';
+  const r = await api('/api/lisbot/steam-test', { STEAM_SHARED_SECRET: f.STEAM_SHARED_SECRET.value, STEAM_IDENTITY_SECRET: f.STEAM_IDENTITY_SECRET.value });
+  out.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  out.innerHTML = esc(r.message || r.error || '') + (r.lines || []).map((l) => '<br>' + esc(l)).join('');
+}
+// maFile читается прямо в браузере: файл никуда не отправляется, поля заполняются и сохраняются кнопкой «Сохранить»
+$('#lisMaFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0]; const out = $('#lisMaRes'); const f = $('#lisForm').elements;
+  if (!file) return;
+  try {
+    const d = JSON.parse(await file.text());
+    if (!d.shared_secret || !d.identity_secret) throw new Error('в файле нет shared_secret/identity_secret — maFile зашифрован? Снимите шифрование в SDA');
+    f.STEAM_SHARED_SECRET.value = d.shared_secret; f.STEAM_IDENTITY_SECRET.value = d.identity_secret;
+    if (d.account_name) f.STEAM_ACCOUNT_NAME.value = d.account_name;
+    out.style.color = 'var(--ok)'; out.textContent = `maFile ${d.account_name || ''} прочитан. Нажмите «Проверить Steam», затем «Сохранить».`;
+  } catch (err) {
+    out.style.color = 'var(--bad)'; out.textContent = 'maFile не распознан: ' + (err.message || err);
+  }
+});
 $('#lisDlg').addEventListener('close', async () => {
   if ($('#lisDlg').returnValue !== 'save') return;
   const data = { restart: true };
