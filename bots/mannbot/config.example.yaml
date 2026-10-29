@@ -82,6 +82,9 @@ security:
   cancel_foreign_offers: false
   decline_incoming_requests: true   # отклонять входящие трейды, которые просят наши предметы
   inventory_drop_alert: true        # CRITICAL, если ключи пропали не через трейды бота
+  # «Мост ключей»: SteamID64 аккаунта LisBot. Его входящие обмены, где от нас ничего не просят
+  # и внутри только ключи Mann Co., принимаются автоматически (пополнение склада). Пусто = выкл.
+  accept_gifts_from: []
 
 # RTBA — Real-Time Bid Adjustment: автоматическое управление ценой лота
 rtba:

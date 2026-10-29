@@ -13,7 +13,7 @@ import time
 
 import aiohttp
 
-from center.analytics import _cached, _r, _rows
+from center.analytics import _cached, _median, _r, _rows
 from center.workers import RUNNING
 
 log = logging.getLogger("center.crm")
@@ -37,6 +37,9 @@ LIS_GROUP = {"sold": "done", "failed": "failed", "reversed": "failed", "dry_run"
 MANN_GROUP = {"delivered": "done", "completed": "done", "refunded": "failed", "blocked": "failed",
               "pending_approval": "attention", "manual": "attention"}
 SORTS = ("created_at", "closed_at", "amount", "profit")
+# сегменты покупателей FunPay (по давности и частоте покупок, как RFM): порядок — для вкладок панели
+SEGMENTS = {"vip": "VIP", "regular": "Постоянный", "new": "Новый", "sleeping": "Уснул", "lost": "Ушёл",
+            "risky": "Рискованный", "prospect": "Без покупок"}
 
 
 def _cur(v) -> str:
@@ -228,6 +231,7 @@ class Crm:
             "confirm_rate": _r(cnt("completed") / len(done) * 100, 1) if done else None,
             "reviews": len(stars), "avg_stars": _r(sum(stars) / len(stars), 1) if stars else None,
             "first_order": orders[0]["created_at"] if orders else None, "last_order": orders[-1]["created_at"] if orders else None,
+            "last_purchase": max(o["created_at"] for o in done) if done else None,
         }
 
     @staticmethod
@@ -267,17 +271,48 @@ class Crm:
         return {"score": score, "level": "high" if score >= 60 else "medium" if score >= 25 else "low",
                 "reasons": reasons, "shared_with": shared}
 
-    def _build(self, c: dict, orders: list[dict], steam_owners) -> dict:
+    def seg_cfg(self) -> dict:
+        return {"sleep_days": 30, "lost_days": 90, "vip_spent_rub": 5000, "vip_orders": 5,
+                **(self.center.cfg.data.get("crm") or {})}
+
+    @staticmethod
+    def _segment(st: dict, risk: dict, cfg: dict, now: float) -> dict:
+        """Сегмент покупателя: кому писать с предложением, кого беречь, с кем осторожнее."""
+        if risk["level"] == "high":
+            seg, why = "risky", "высокий риск по истории"
+        elif not st["delivered"]:
+            seg, why = "prospect", "ещё ничего не получил"
+        else:
+            days = (now - st["last_purchase"]) / DAY
+            if days > float(cfg["lost_days"]):
+                seg, why = "lost", f"последняя покупка {days:.0f} дн назад"
+            elif days > float(cfg["sleep_days"]):
+                seg, why = "sleeping", f"последняя покупка {days:.0f} дн назад, раньше покупал {st['delivered']} раз"
+            elif ((st["currency"] == "RUB" and float(cfg["vip_spent_rub"] or 0) and (st["spent"] or 0) >= float(cfg["vip_spent_rub"]))
+                  or st["delivered"] >= int(cfg["vip_orders"])):
+                seg, why = "vip", f"покупок {st['delivered']} на {st['spent']:.0f} {'₽' if st['currency'] == 'RUB' else '$'}"
+            elif st["delivered"] >= 2:
+                seg, why = "regular", f"покупок {st['delivered']}"
+            else:
+                seg, why = "new", "одна покупка"
+        return {"key": seg, "text": SEGMENTS[seg], "why": why}
+
+    def _build(self, c: dict, orders: list[dict], steam_owners, cfg: dict | None = None, now: float | None = None) -> dict:
         st = self._stats(c, orders)
+        risk = self._risk(c, st, orders, steam_owners)
         return {"funpay_id": c["funpay_id"], "username": c.get("username") or "", "first_seen": c.get("first_seen"),
                 "last_seen": c.get("last_seen"), "steam_ids": c["steam_ids"], "blacklisted": bool(c.get("blacklisted")),
-                "notes": c.get("notes") or "", "tags": c.get("tags") or "", "stats": st,
-                "risk": self._risk(c, st, orders, steam_owners)}
+                "notes": c.get("notes") or "", "tags": c.get("tags") or "", "stats": st, "risk": risk,
+                "segment": self._segment(st, risk, cfg or self.seg_cfg(), time.time() if now is None else now)}
 
-    def customers(self, *, q: str = "", risk: str = "", tag: str = "", sort: str = "last_order",
-                  limit: int = 200, offset: int = 0) -> dict:
+    def _all_customers(self, now: float | None = None) -> list[dict]:
         custs, orders, owners = self._customer_rows()
-        rows = [self._build(c, orders.get(c["funpay_id"], []), owners) for c in custs]
+        cfg = self.seg_cfg()
+        return [self._build(c, orders.get(c["funpay_id"], []), owners, cfg, now) for c in custs]
+
+    def customers(self, *, q: str = "", risk: str = "", tag: str = "", segment: str = "", sort: str = "last_order",
+                  limit: int = 200, offset: int = 0, now: float | None = None) -> dict:
+        rows = self._all_customers(now)
         if q:
             ql = q.lower()
             rows = [c for c in rows if ql in c["username"].lower() or ql in str(c["funpay_id"]) or ql in c["notes"].lower()
@@ -285,18 +320,83 @@ class Crm:
         levels = {lv: sum(1 for c in rows if c["risk"]["level"] == lv) for lv in ("low", "medium", "high")}
         if risk in levels:
             rows = [c for c in rows if c["risk"]["level"] == risk]
+        segments = {k: sum(1 for c in rows if c["segment"]["key"] == k) for k in SEGMENTS}
+        if segment in SEGMENTS:
+            rows = [c for c in rows if c["segment"]["key"] == segment]
         if tag:
             rows = [c for c in rows if tag.lower() in [t.strip().lower() for t in c["tags"].split(",")]]
         key = {"spent": lambda c: c["stats"]["spent"] or 0, "orders": lambda c: c["stats"]["orders"],
                "risk": lambda c: c["risk"]["score"]}.get(sort, lambda c: c["stats"]["last_order"] or c["last_seen"] or 0)
         rows.sort(key=key, reverse=True)
         tags = sorted({t.strip() for c in rows for t in c["tags"].split(",") if t.strip()})
-        return {"total": len(rows), "levels": levels, "tags": tags, "rows": rows[offset:offset + max(1, min(int(limit), 1000))]}
+        return {"total": len(rows), "levels": levels, "segments": segments, "segment_names": SEGMENTS, "tags": tags,
+                "rows": rows[offset:offset + max(1, min(int(limit), 1000))]}
+
+    def segments_brief(self, now: float | None = None) -> dict:
+        """Коротко для координатора и недельного отчёта: сколько в каждом сегменте и кого стоит вернуть."""
+        now = time.time() if now is None else now
+        rows = self._all_customers(now)
+        counts = {k: sum(1 for c in rows if c["segment"]["key"] == k) for k in SEGMENTS}
+        sleeping = sorted((c for c in rows if c["segment"]["key"] == "sleeping"), key=lambda c: -(c["stats"]["spent"] or 0))
+        new_week = sum(1 for c in rows if c["stats"]["first_order"] and now - c["stats"]["first_order"] <= 7 * DAY
+                       and c["stats"]["delivered"])
+        repeat = [c for c in rows if c["stats"]["delivered"]]
+        return {"total": len(rows), "counts": counts, "new_7d": new_week, "sleep_days": self.seg_cfg()["sleep_days"],
+                "repeat_rate": _r(sum(1 for c in repeat if c["stats"]["delivered"] >= 2) / len(repeat) * 100, 1) if repeat else None,
+                "sleeping_spent": _r(sum(c["stats"]["spent"] or 0 for c in sleeping if c["stats"]["currency"] == "RUB")),
+                "sleeping_top": [{"funpay_id": c["funpay_id"], "username": c["username"], "spent": c["stats"]["spent"],
+                                  "currency": c["stats"]["currency"], "purchases": c["stats"]["delivered"],
+                                  "days": _r((now - c["stats"]["last_purchase"]) / DAY, 0)} for c in sleeping[:5]]}
+
+    def segment_lines(self, now: float | None = None) -> list[str]:
+        b = self.segments_brief(now)
+        if not b["total"]:
+            return []
+        n = b["counts"]
+        line = (f"Покупатели FunPay: VIP {n['vip']}, постоянных {n['regular']}, новых за неделю {b['new_7d']}"
+                + (f", повторных покупок {b['repeat_rate']:.0f}%" if b["repeat_rate"] is not None else ""))
+        out = [line]
+        if n["sleeping"]:
+            names = ", ".join(c["username"] or str(c["funpay_id"]) for c in b["sleeping_top"][:3])
+            out.append(f"Уснули {n['sleeping']} (раньше потратили {b['sleeping_spent']:.0f} ₽): {names} — можно написать им в чат FunPay")
+        return out
+
+    def cohorts(self, months: int = 6, now: float | None = None) -> dict:
+        """Удержание покупателей FunPay: когорты по месяцу первой покупки и доля тех, кто покупал снова
+        в каждый следующий месяц. Выручка — сколько в среднем принёс покупатель когорты за всё время (только ₽)."""
+        now = time.time() if now is None else now
+        lt = time.localtime(now)
+        cur = lt.tm_year * 12 + lt.tm_mon - 1
+        months = max(2, min(int(months), 24))
+        mi = lambda ts: (lambda t: t.tm_year * 12 + t.tm_mon - 1)(time.localtime(ts))  # noqa: E731
+        _, orders, _ = self._customer_rows()
+        groups: dict[int, list[tuple[set[int], float]]] = {}
+        gaps: list[float] = []                      # дни между соседними покупками одного покупателя
+        for os_ in orders.values():
+            done = [o for o in os_ if o["delivered_at"] and o["status"] != "refunded"]
+            if not done:
+                continue
+            ts = sorted(o["created_at"] for o in done)
+            gaps += [(b - a) / DAY for a, b in zip(ts, ts[1:]) if b - a >= 3600]   # дозаказ в тот же час — не возврат
+            first = mi(min(o["created_at"] for o in done))
+            if first <= cur - months:
+                continue
+            spent = sum(float(o["price"] or 0) for o in done if _cur(o["currency"]) == "RUB")
+            groups.setdefault(first, []).append(({mi(o["created_at"]) for o in done}, spent))
+        rows = []
+        for m in range(cur - months + 1, cur + 1):
+            g = groups.get(m, [])
+            n = len(g)
+            ret = [(_r(sum(1 for ms, _ in g if m + k in ms) / n * 100, 1) if n else None) for k in range(1, cur - m + 1)]
+            rows.append({"month": f"{m // 12}-{m % 12 + 1:02d}", "new": n, "retention": ret,
+                         "repeat": _r(sum(1 for ms, _ in g if len(ms) > 1) / n * 100, 1) if n else None,
+                         "ltv": _r(sum(sp for _, sp in g) / n) if n else None})
+        return {"months": months, "rows": rows, "repeat_gap_days": _r(_median(gaps), 1), "repeat_gaps": len(gaps)}
 
     def customer_brief(self, funpay_id: int) -> dict | None:
         custs, orders, owners = self._customer_rows()
         c = next((x for x in custs if x["funpay_id"] == funpay_id), None)
-        return self._build(c, orders.get(funpay_id, []), owners) if c else None
+        return self._build(c, orders.get(funpay_id, []), owners, self.seg_cfg()) if c else None
 
     def customer(self, funpay_id: int) -> dict:
         custs, orders, owners = self._customer_rows()
@@ -304,7 +404,7 @@ class Crm:
         if c is None:
             raise CrmError("покупатель не найден", 404)
         mine = orders.get(funpay_id, [])
-        card = self._build(c, mine, owners)
+        card = self._build(c, mine, owners, self.seg_cfg())
         by_id = {x["funpay_id"]: x for x in custs}
         card["shared_with"] = [{"funpay_id": u, "username": by_id[u].get("username") or ""}
                                for u in card["risk"]["shared_with"] if u in by_id]
@@ -314,6 +414,9 @@ class Crm:
                            "delivered_at": o["delivered_at"], "completed_at": o["completed_at"]} for o in reversed(mine)]
         card["reviews"] = [{"order_id": o["order_id"], "stars": o["review_stars"], "ts": o["completed_at"] or o["delivered_at"]}
                            for o in reversed(mine) if o["review_stars"]]
+        if card["segment"]["key"] in ("sleeping", "lost"):
+            tpl = str(self.seg_cfg().get("winback_text") or "")
+            card["winback"] = tpl.replace("{name}", card["username"] or "")
         chats = sorted({o["chat_id"] for o in mine if o["chat_id"]})
         card["messages"] = [dict(m) for m in _rows(
             self.an.mann_db, f"SELECT order_id, direction, text, ts FROM messages WHERE chat_id IN ({','.join('?' * len(chats))}) "
@@ -382,4 +485,18 @@ class Crm:
             for k in ("created_at", "closed_at"):
                 d[k] = dt.datetime.fromtimestamp(d[k]).strftime("%Y-%m-%d %H:%M") if d[k] else ""
             out.append([d[k] for k, _ in self.EXPORT_COLS])
+        return out
+
+    def customer_export_rows(self, **filters) -> list[list]:
+        """Покупатели FunPay по тем же фильтрам, что и список в панели, — например, уснувшие для рассылки вручную."""
+        import datetime as dt
+        fmt = lambda ts: dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""  # noqa: E731
+        out = [["ID FunPay", "Ник", "Сегмент", "Заказов", "Подтверждено", "Возвратов", "Потратил", "Валюта", "Ключей",
+                "Первый заказ", "Последняя покупка", "Средняя оценка", "Риск", "Чёрный список", "Steam ID", "Теги", "Заметка"]]
+        for c in self.customers(**filters, limit=1000)["rows"]:
+            st = c["stats"]
+            out.append([c["funpay_id"], c["username"], c["segment"]["text"], st["orders"], st["completed"], st["refunded"],
+                        st["spent"], st["currency"], st["keys"], fmt(st["first_order"]), fmt(st["last_purchase"]),
+                        st["avg_stars"] if st["avg_stars"] is not None else "", c["risk"]["score"],
+                        "да" if c["blacklisted"] else "", " ".join(c["steam_ids"]), c["tags"], c["notes"]])
         return out

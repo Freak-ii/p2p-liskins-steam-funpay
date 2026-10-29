@@ -21,12 +21,17 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
+import shutil
 import time
 from collections import defaultdict
+from pathlib import Path
 
 import aiohttp
 from aiohttp import web
 
+from center import tgcheck
+from center.analytics import HOLD_BUCKETS, item_type
 from center.workers import BACKOFF, CRASHED, DISABLED, RUNNING, STATE_TEXT
 
 log = logging.getLogger("center.monitor")
@@ -56,9 +61,20 @@ CREATE TABLE IF NOT EXISTS monitor_kv (k TEXT PRIMARY KEY, v TEXT);
 # события журнала центра, о которых сообщаем всегда (плюс любые critical)
 NOTIFY_KINDS = {"worker.exit", "worker.crashed", "worker.spawn_failed", "worker.unhealthy", "worker.missing_deps",
                 "worker.not_configured", "monitor.unresponsive", "monitor.recovered", "center.unclean_stop",
-                "backup.failed", "backup.restored", "inventory.low_stock"}
+                "backup.failed", "backup.restored", "inventory.low_stock",
+                "inventory.low_balance", "monitor.low_disk", "monitor.auto_restart", "center.config",
+                "monitor.error_spike", "center.update"}
 ICONS = {"critical": "🔴", "error": "🔴", "warn": "🟠", "warning": "🟠", "info": "🟢", "ok": "🟢"}
 BOT_ALERT_SCAN = 100
+# строки вывода ботов, которые считаются ошибками: уровни логгеров LisBot и MannBot, трейсбеки Python и Node
+ERROR_LINE = re.compile(r"\b(ERROR|CRIT|CRITICAL|FATAL)\b|Traceback \(most recent call last\)|Unhandled(Promise)?Rejection")
+_NOISE = re.compile(r"^\S*\d{4}-\d\d-\d\d[T ][\d:.,Z]+\s*|\d+")
+
+
+def error_signature(text: str) -> str:
+    """Ошибка без времени и чисел: одинаковые ошибки с разными id и суммами считаются одной."""
+    s = _NOISE.sub(lambda m: "" if m.start() == 0 and not m.group(0).isdigit() else "#", text.strip())
+    return re.sub(r"\s+", " ", s)[:160]
 
 
 def parse_hhmm(s: str) -> int | None:
@@ -420,6 +436,96 @@ class Monitor:
             self.db.execute("DELETE FROM health WHERE ts < ?", (now - float(self.cfg.get("history_days") or 30) * 86400,))
             self.db.commit()
         self.kv_set("last_alive", now)
+        try:
+            await asyncio.to_thread(self.check_disk)
+        except Exception:  # noqa: BLE001
+            log.exception("проверка места на диске")
+        try:
+            self.check_errors()
+        except Exception:  # noqa: BLE001
+            log.exception("проверка ошибок в выводе ботов")
+
+    # ------------------------------------------------------------------ всплеск ошибок в выводе ботов
+    def errors(self, hours: float = 1) -> dict:
+        """Ошибки в выводе каждого бота за последние hours часов и самые частые из них."""
+        since = self.clock() - hours * 3600
+        out = {}
+        for name, w in self.center.workers.items():
+            by: dict[str, list] = {}
+            for ln in list(getattr(w, "lines", ())):
+                if ln["ts"] >= since and ln.get("stream") != "center" and ERROR_LINE.search(ln["text"]):
+                    by.setdefault(error_signature(ln["text"]), []).append(ln["text"])
+            top = sorted(by.items(), key=lambda kv: -len(kv[1]))[:3]
+            out[name] = {"n": sum(len(v) for v in by.values()),
+                         "top": [{"n": len(v), "text": v[-1][:300]} for _, v in top]}
+        return out
+
+    def check_errors(self) -> list[str]:
+        """Бот работает, но сыплет ошибками (нет сети, сменился API площадки, кончился лимит запросов) —
+        это видно раньше, чем пропадут сделки. Не чаще раза в 6 часов на бота."""
+        cfg = self.cfg.get("errors") or {}
+        limit = int(cfg.get("per_hour", 20) or 0)
+        if not limit:
+            return []
+        sent = []
+        for name, e in self.errors(1).items():
+            if e["n"] < limit:
+                continue
+            last = float(self.kv_get(f"error_spike:{name}") or 0)
+            if self.clock() - last < 6 * 3600:
+                continue
+            self.kv_set(f"error_spike:{name}", self.clock())
+            w = self.center.workers[name]
+            top = e["top"][0]
+            msg = (f"{w.title}: {e['n']} ошибок в выводе за последний час. Чаще всего ({top['n']} раз): «{top['text']}». "
+                   "Бот работает, но что-то идёт не так: посмотрите «Журнал работы ботов» в панели.")
+            self.events.add(name, "warn", "monitor.error_spike", msg)
+            sent.append(msg)
+        return sent
+
+    # ------------------------------------------------------------------ место на диске
+    def disk(self) -> dict:
+        """Свободное место там, где лежат базы ботов и центра, и в папке резервных копий (если она отдельно)."""
+        cfg = self.cfg.get("disk") or {}
+        warn = float(cfg.get("warn_gb", 2) or 0)
+        paths = [("данные центра", Path(self.center.home))]
+        b = getattr(self.center, "backup", None)
+        if b is not None:
+            paths.append(("резервные копии", b.dir))
+        out, seen = [], set()
+        for label, p in paths:
+            q = p
+            while not q.exists() and q != q.parent:      # папки копий ещё нет — меряем диск, где она появится
+                q = q.parent
+            try:
+                u = shutil.disk_usage(q)
+                key = q.stat().st_dev                    # тот же диск — не повторяем
+            except OSError:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            free = u.free / (1 << 30)
+            out.append({"label": label, "path": str(p), "free_gb": round(free, 2), "total_gb": round(u.total / (1 << 30), 1),
+                        "free_pct": round(u.free / u.total * 100, 1) if u.total else None, "low": bool(warn and free < warn)})
+        return {"warn_gb": warn, "disks": out, "low": any(d["low"] for d in out)}
+
+    def check_disk(self) -> str | None:
+        """Мало места — базы ботов перестанут записываться. Событие в журнал не чаще раза в сутки."""
+        d = self.disk()
+        low = [x for x in d["disks"] if x["low"]]
+        if not low:
+            return None
+        today = time.strftime("%Y-%m-%d", time.localtime(self.clock()))
+        if self.kv_get("low_disk_date") == today:
+            return None
+        self.kv_set("low_disk_date", today)
+        crit = any(x["free_gb"] < min(0.5, d["warn_gb"] / 2) for x in low)
+        msg = ("Мало места на диске: " + "; ".join(f"{x['label']} — свободно {x['free_gb']:.1f} ГБ из {x['total_gb']:.0f}"
+                                                  for x in low)
+               + ". Когда место кончится, боты не смогут записывать сделки. Освободите место или перенесите резервные копии.")
+        self.events.add("center", "critical" if crit else "warn", "monitor.low_disk", msg)
+        return msg
 
     async def _track_responsive(self, name: str, w, ok: bool | None) -> None:
         if ok is False:
@@ -428,6 +534,20 @@ class Monitor:
                 self._reported_down.add(name)
                 self.events.add(name, "critical", "monitor.unresponsive",
                                 f"{w.title} не отвечает {self._fails[name]} проверки подряд (процесс жив)")
+            limit = int(self.cfg.get("restart_unresponsive_after") or 0)
+            if limit and self._fails[name] >= limit:
+                last = float(self.kv_get(f"auto_restart:{name}") or 0)
+                if self.clock() - last >= 3600:          # не чаще раза в час: если не помогло — решает человек
+                    self.kv_set(f"auto_restart:{name}", self.clock())
+                    self._fails[name] = 0
+                    self.events.add(name, "critical", "monitor.auto_restart",
+                                    f"{w.title} завис: не отвечает {limit} проверок подряд — центр перезапускает его")
+                    try:
+                        await w.restart("бот завис")
+                    except Exception as e:  # noqa: BLE001
+                        log.exception("перезапуск зависшего бота")
+                        self.events.add(name, "critical", "monitor.auto_restart_failed",
+                                        f"{w.title}: перезапустить не удалось: {e}")
             return
         if ok:
             self._fails[name] = 0
@@ -527,6 +647,7 @@ class Monitor:
         now = self.clock()
         since = now - 86400
         h = self.history(24)
+        errors = self.errors(24)
         lines = [f"<b>📊 Отчёт центра за сутки</b> · {time.strftime('%d.%m.%Y %H:%M', time.localtime(now))}"]
         for name, w in self.center.workers.items():
             b = h["bots"][name]
@@ -540,6 +661,9 @@ class Monitor:
             lines.append(f"Аптайм {_pct(b['uptime'])} · перезапусков {b['restarts']} · падений {b['crashes']}"
                          + (f" · не отвечал {b['unresponsive']}" if b["unresponsive"] else "")
                          + (f" · ответ {b['latency_avg']:.0f} мс" if b["latency_avg"] is not None else ""))
+            errs = errors.get(name) or {}
+            if errs.get("n"):
+                lines.append(f"Ошибок в выводе: {errs['n']}, чаще всего: «{html.escape(errs['top'][0]['text'][:120])}» (/errors)")
             if alerts:
                 lines.append("Тревог: " + ", ".join(f"{k} {v}" for k, v in sorted(by_level.items()))
                              + (f" (не подтверждено {open_n})" if open_n else ""))
@@ -553,6 +677,12 @@ class Monitor:
             crit = self.db.execute("SELECT COUNT(*) FROM events WHERE ts >= ? AND level='critical'", (since,)).fetchone()[0]
             sent = self.db.execute("SELECT COUNT(*) FROM notifications WHERE ts >= ? AND status != 'duplicate'",
                                    (since,)).fetchone()[0]
+        try:
+            low = [x for x in self.disk()["disks"] if x["low"]]
+        except Exception:  # noqa: BLE001
+            low = []
+        if low:
+            lines += ["", "⚠ Мало места: " + "; ".join(f"{html.escape(x['label'])} {x['free_gb']:.1f} ГБ" for x in low)]
         inv = getattr(self.center, "inventory", None)
         if inv:
             try:
@@ -571,13 +701,68 @@ class Monitor:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ недельный отчёт
+    async def today_report(self) -> str:
+        """Сегодня с полуночи против вчера к этому же времени (/today в Telegram)."""
+        a = self.center.analytics
+        now = self.clock()
+        lt = time.localtime(now)
+        midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+        rate = (await a.usd_rub())["rate"]
+        deals = await asyncio.to_thread(a.deals, midnight - 86400)
+        rub = lambda v, d: a._conv(v, d["currency"], "RUB", rate) or 0  # noqa: E731
+
+        def stats(sel):
+            return {"n": len(sel), "rev": sum(rub(d["revenue"], d) for d in sel),
+                    "profit": sum(rub(d["profit"], d) for d in sel if d["profit"] is not None)}
+
+        def delta(cur, prev):
+            return f" (вчера {_num(round(prev))})" if prev else ""
+
+        cur = [d for d in deals if midnight <= d["sold_at"] <= now]
+        prev = [d for d in deals if midnight - 86400 <= d["sold_at"] <= now - 86400]
+        t, p = stats(cur), stats(prev)
+        lines = [f"<b>📅 Сегодня до {time.strftime('%H:%M', lt)}</b> · в скобках — вчера к этому времени",
+                 f"Сделок {t['n']}{delta(t['n'], p['n'])} · выручка {_num(round(t['rev']))} ₽{delta(t['rev'], p['rev'])}",
+                 f"<b>Прибыль {_num(round(t['profit']))} ₽</b>{delta(t['profit'], p['profit'])}"]
+        for name, w in self.center.workers.items():
+            b, bp = stats([d for d in cur if d["bot"] == name]), stats([d for d in prev if d["bot"] == name])
+            lines.append(f"• {html.escape(w.title)}: сделок {b['n']}, прибыль {_num(round(b['profit']))} ₽{delta(b['profit'], bp['profit'])}")
+        return "\n".join(lines)
+
     async def weekly_report(self) -> str:
         """Неделя против прошлой: сделки, выручка, прибыль по ботам в ₽, лучшие и худшие предметы LisBot,
         аптайм за 7 дней, склад."""
         now = self.clock()
+        return await self._compare_report(
+            f"<b>📅 Неделя центра</b> · {time.strftime('%d.%m', time.localtime(now - 7 * 86400))}–"
+            f"{time.strftime('%d.%m.%Y', time.localtime(now))}",
+            now - 7 * 86400, now, now - 14 * 86400, "к прошлой", "недели", now)
+
+    @staticmethod
+    def _month_bounds(now: float) -> tuple[float, float, float]:
+        """Начало прошлого календарного месяца, начало текущего и начало позапрошлого (местное время)."""
+        lt = time.localtime(now)
+        y, m = lt.tm_year, lt.tm_mon
+        cur = time.mktime((y, m, 1, 0, 0, 0, 0, 0, -1))
+        py, pm = (y, m - 1) if m > 1 else (y - 1, 12)
+        ppy, ppm = (py, pm - 1) if pm > 1 else (py - 1, 12)
+        return time.mktime((py, pm, 1, 0, 0, 0, 0, 0, -1)), cur, time.mktime((ppy, ppm, 1, 0, 0, 0, 0, 0, -1))
+
+    async def monthly_report(self) -> str:
+        """Прошлый календарный месяц против позапрошлого и итог по цели месяца."""
+        now = self.clock()
+        start, end, prev = self._month_bounds(now)
+        months = ("январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь",
+                  "ноябрь", "декабрь")
+        lt = time.localtime(start)
+        return await self._compare_report(f"<b>🗓 Итоги месяца</b> · {months[lt.tm_mon - 1]} {lt.tm_year}",
+                                          start, end, prev, "к прошлому месяцу", "месяца", now, month=True)
+
+    async def _compare_report(self, title: str, start: float, end: float, prev_start: float, vs: str, of: str,
+                              now: float, *, month: bool = False) -> str:
         a = self.center.analytics
         rate = (await a.usd_rub())["rate"]
-        deals = a.deals(now - 14 * 86400)
+        deals = await asyncio.to_thread(a.deals, prev_start)
         rub = lambda v, d: a._conv(v, d["currency"], "RUB", rate) or 0  # noqa: E731
 
         def stats(sel):
@@ -588,37 +773,67 @@ class Monitor:
             if not prev:
                 return ""
             ch = (cur - prev) / abs(prev) * 100
-            return f" ({'+' if ch >= 0 else '−'}{abs(ch):.0f}% к прошлой)"
+            return f" ({'+' if ch >= 0 else '−'}{abs(ch):.0f}% {vs})"
 
-        week = [d for d in deals if d["sold_at"] >= now - 7 * 86400]
-        prev = [d for d in deals if d["sold_at"] < now - 7 * 86400]
-        lines = [f"<b>📅 Неделя центра</b> · {time.strftime('%d.%m', time.localtime(now - 7 * 86400))}–"
-                 f"{time.strftime('%d.%m.%Y', time.localtime(now))}"]
-        tw, tp = stats(week), stats(prev)
+        cur = [d for d in deals if start <= d["sold_at"] < end]
+        prev = [d for d in deals if prev_start <= d["sold_at"] < start]
+        lines = [title]
+        tw, tp = stats(cur), stats(prev)
         lines.append(f"Сделок {tw['n']}{delta(tw['n'], tp['n'])} · выручка {_num(round(tw['rev']))} ₽"
                      f"{delta(tw['rev'], tp['rev'])}")
         lines.append(f"<b>Прибыль {_num(round(tw['profit']))} ₽</b>{delta(tw['profit'], tp['profit'])}")
         for name, w in self.center.workers.items():
-            bw, bp = stats([d for d in week if d["bot"] == name]), stats([d for d in prev if d["bot"] == name])
+            bw, bp = stats([d for d in cur if d["bot"] == name]), stats([d for d in prev if d["bot"] == name])
             lines.append(f"• {html.escape(w.title)}: сделок {bw['n']}, прибыль {_num(round(bw['profit']))} ₽"
                          f"{delta(bw['profit'], bp['profit'])}")
         items: dict[str, list[float]] = defaultdict(list)
-        for d in week:
+        for d in cur:
             if d["bot"] == "lisbot" and d["profit"] is not None:
                 items[d["name"]].append(d["profit"])
         ranked = sorted(((sum(v), len(v), k) for k, v in items.items()), reverse=True)
         if ranked:
-            lines += ["", "<b>LisBot, лучшие предметы недели</b>"]
+            lines += ["", f"<b>LisBot, лучшие предметы {of}</b>"]
             lines += [f"{i + 1}. {html.escape(k)} — {'+' if p >= 0 else '−'}${abs(p):.2f} за {n} шт" for i, (p, n, k) in enumerate(ranked[:3])]
             losers = [(p, n, k) for p, n, k in ranked if p < 0][-3:]
             if losers:
                 lines += ["<b>В минус</b>"] + [f"• {html.escape(k)} — −${abs(p):.2f} за {n} шт" for p, n, k in reversed(losers)]
-        g = await a.goal(now)
-        if g["goal"]:
-            lines.append(f"Цель месяца: {_num(round(g['profit']))} из {_num(round(g['goal']))} ₽ ({_pct(g['progress'] / 100)}), "
-                         f"прогноз {_num(round(g['forecast']))} ₽")
-        h = self.history(24 * 7, buckets=28)
-        lines += ["", "Аптайм за неделю: " + " · ".join(
+            types: dict[str, list[float]] = defaultdict(list)
+            for k, v in items.items():
+                types[item_type(k)] += v
+            if len(types) > 1:
+                tr = sorted(((sum(v), len(v), k) for k, v in types.items()), reverse=True)
+                lines.append("По типам: " + " · ".join(f"{k} {'+' if p >= 0 else '−'}${abs(p):.2f} ({n} шт)" for p, n, k in tr))
+            holds = []
+            for lo, hi, label in HOLD_BUCKETS:
+                ds = [d for d in cur if d["bot"] == "lisbot" and d["profit"] is not None and d.get("hold_days") is not None
+                      and d["hold_days"] >= lo and (hi is None or d["hold_days"] < hi)]
+                if ds:
+                    p = sum(d["profit"] for d in ds)
+                    holds.append(f"{label} {'+' if p >= 0 else '−'}${abs(p):.2f} ({len(ds)} шт)")
+            if len(holds) > 1:
+                lines.append("По сроку удержания: " + " · ".join(holds))
+        target = float((self.center.cfg.data.get("analytics") or {}).get("month_goal_rub") or 0)
+        if month:
+            if target:
+                ok = tw["profit"] >= target
+                lines.append(f"{'✅' if ok else '❌'} Цель месяца {_num(round(target))} ₽: "
+                             f"{'выполнена' if ok else 'не выполнена'}, {_pct(tw['profit'] / target)}")
+        else:
+            g = await a.goal(now)
+            if g["goal"]:
+                lines.append(f"Цель месяца: {_num(round(g['profit']))} из {_num(round(g['goal']))} ₽ ({_pct(g['progress'] / 100)}), "
+                             f"прогноз {_num(round(g['forecast']))} ₽")
+        days = 30 if month else 7
+        try:
+            probs = (await asyncio.to_thread(a.mannbot_details, days)).get("problems") or []
+        except Exception:  # noqa: BLE001
+            log.exception("проблемные заказы MannBot для отчёта")
+            probs = []
+        if probs:
+            lines.append("MannBot, не дошли до выдачи: " + " · ".join(
+                f"{html.escape(p['reason'])} — {p['n']} ({', '.join(f'{k} {v}' for k, v in p['statuses'].items())})" for p in probs[:3]))
+        h = self.history(24 * days, buckets=30 if month else 28)
+        lines += ["", f"Аптайм за {days} дней: " + " · ".join(
             f"{html.escape(self.center.workers[n].title.split(' ·')[0])} {_pct(b['uptime'])}, падений {b['crashes']}"
             for n, b in h["bots"].items())]
         inv = getattr(self.center, "inventory", None)
@@ -627,12 +842,35 @@ class Monitor:
                 lines += [html.escape(x) for x in inv.report_lines()]
             except Exception:  # noqa: BLE001
                 pass
+        crm = getattr(self.center, "crm", None)
+        if crm:
+            try:
+                seg = await asyncio.to_thread(crm.segment_lines, now)
+                if seg:
+                    lines += [""] + [html.escape(x) for x in seg]
+            except Exception:  # noqa: BLE001
+                log.exception("сегменты покупателей для отчёта")
         return "\n".join(lines)
 
     async def send_weekly_report(self) -> str:
         text = await self.weekly_report()
         self.events.add("center", "info", "monitor.weekly_report", "Недельный отчёт сформирован")
         return await self.notify("monitor:weekly_report", "info", text, force=True)
+
+    async def send_monthly_report(self) -> str:
+        text = await self.monthly_report()
+        self.events.add("center", "info", "monitor.monthly_report", "Отчёт за месяц сформирован")
+        return await self.notify("monitor:monthly_report", "info", text, force=True)
+
+    def monthly_due(self) -> bool:
+        mr = self.cfg.get("monthly_report") or {}
+        if not mr.get("enabled", True):
+            return False
+        at = parse_hhmm(mr.get("time") or "09:00")
+        lt = time.localtime(self.clock())
+        if at is None or lt.tm_mday != 1 or lt.tm_hour * 60 + lt.tm_min < at:
+            return False
+        return self.kv_get("monthly_report_month") != time.strftime("%Y-%m", lt)
 
     def weekly_due(self) -> bool:
         wr = self.cfg.get("weekly_report") or {}
@@ -671,6 +909,17 @@ class Monitor:
                 if self.weekly_due():
                     self.kv_set("weekly_report_date", time.strftime("%Y-%m-%d", time.localtime(self.clock())))
                     await self.send_weekly_report()
+                today = time.strftime("%Y-%m-%d", time.localtime(self.clock()))
+                if self.kv_get("events_pruned") != today:
+                    self.kv_set("events_pruned", today)
+                    days = float(self.cfg.get("events_days") or 0)
+                    if days:
+                        n = await asyncio.to_thread(self.events.prune, days, self.clock())
+                        if n:
+                            log.info("журнал центра: удалено %s записей старше %s дн", n, days)
+                if self.monthly_due():
+                    self.kv_set("monthly_report_month", time.strftime("%Y-%m", time.localtime(self.clock())))
+                    await self.send_monthly_report()
             except Exception:  # noqa: BLE001
                 log.exception("ежедневный отчёт")
             await asyncio.sleep(30)
@@ -686,6 +935,8 @@ class Monitor:
             "quiet_now": in_quiet_hours(self.cfg.get("quiet_hours") or "", self.clock()), "held": len(self._held),
             "daily_report": {"enabled": bool(dr.get("enabled", True)), "time": dr.get("time") or "09:00",
                              "last": self.kv_get("daily_report_date")},
+            "disk": self.disk(),
+            "errors": {k: v["n"] for k, v in self.errors(1).items()},
         }
 
 
@@ -711,14 +962,27 @@ def routes(center) -> list:
         return web.json_response(m.settings())
 
     async def test(request: web.Request):
+        token, ids, src = m.telegram_target()
+        if not token:
+            return web.json_response({"ok": False, "message": "Telegram не настроен: укажите токен и chat id"})
+        problems = tgcheck.static_problems(token, ids)
+        if problems:
+            return web.json_response({"ok": False, "message": "Telegram: " + "; ".join(problems)})
         status_ = await m.notify("monitor:test", "info", "<b>Центр перепродажи</b>\nПроверка уведомлений: всё работает.",
                                  force=True)
-        msg = {"sent": "Тестовое уведомление отправлено", "no_channel": "Telegram не настроен: укажите токен и chat id"}
-        return web.json_response({"ok": status_ == "sent", "message": msg.get(status_, "Telegram не принял сообщение, "
-                                                                                          "подробности в журнале центра")})
+        if status_ == "sent":
+            return web.json_response({"ok": True, "message": f"Тестовое уведомление отправлено (бот: {src})"})
+        return web.json_response(await tgcheck.check(token, ids, "Центр"))  # не дошло — выясняем почему
 
     async def report(request: web.Request):
-        week = request.query.get("period") == "week"
+        period = request.query.get("period")
+        if period == "month":
+            if request.method == "POST":
+                st = await m.send_monthly_report()
+                return web.json_response({"ok": st == "sent", "message": "Отчёт за месяц отправлен в Telegram" if st == "sent"
+                                          else "Отчёт сохранён в уведомлениях центра (Telegram не настроен или недоступен)"})
+            return web.json_response({"text": await m.monthly_report()})
+        week = period == "week"
         if week:
             if request.method == "POST":
                 st = await m.send_weekly_report()

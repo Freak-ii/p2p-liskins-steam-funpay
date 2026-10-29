@@ -91,9 +91,19 @@ def test_pnl_daily_details(tmp_path):
         red = next(i for i in ld["items"] if i["name"] == "AK-47 | Redline")
         assert red["sold"] == 2 and red["profit"] == 3.0 and red["roi"] == 15.0
         assert ld["forecast"]["n"] == 3 and ld["hold"]["median_days"] is not None
+        types = {t["type"]: t for t in ld["by_type"]}
+        assert red["type"] == "Винтовки" and "sold_spent" not in red
+        assert types["Винтовки"]["names"] == 2 and types["Винтовки"]["bought"] == 3 and types["Винтовки"]["profit"] == 3.0
+        assert types["Винтовки"]["roi"] == 15.0 and types["Снайперские"]["roi"] == -2.0
+        cut = {r["min_roi"]: r for r in ld["roi_cut"]}          # прогноз ROI: Redline 20%, Asiimov 10%
+        assert cut[0.0]["deals"] == 3 and cut[0.0]["losers"] == 1 and cut[0.0]["profit"] == 2.0
+        assert cut[0.15]["deals"] == 2 and cut[0.15]["losers"] == 0 and cut[0.15]["profit"] == 3.0 and cut[0.15]["roi"] == 15.0
+
+        assert ld["by_hold"] == [{"label": "до 8 дн", "deals": 3, "profit": 2.0, "losers": 1, "roi": 2.9}]   # 7, 7 и 4 дн
 
         md = a.mannbot_details(30)
         assert md["orders"] == 4 and md["funnel"][3]["n"] == 2 and md["confirm_rate"] == 50.0
+        assert sum(md["by_hour"]) == 4 and sum(md["by_weekday"]) == 4 and len(md["by_hour"]) == 24
         assert md["times"]["total"] == 600 and md["keys_sold"] == 3
         center.events.close()
     asyncio.run(go())
@@ -145,3 +155,23 @@ def test_api_and_export(tmp_path):
             assert "AWP | Asiimov" in sheet and "Прибыль, ₽" in sheet
         center.events.close()
     asyncio.run(go())
+
+
+def test_mannbot_problem_reasons(tmp_path):
+    seed(tmp_path)
+    con = sqlite3.connect(tmp_path / "mannbot" / "data" / "mannbot.sqlite3")
+    con.executescript("ALTER TABLE orders ADD COLUMN fail_reason TEXT DEFAULT ''; "
+                      "ALTER TABLE orders ADD COLUMN risk_reasons TEXT DEFAULT '[]';")
+    for oid, st, why, risk in (("P1", "manual", "out_of_stock", "[]"), ("P2", "manual", "out_of_stock", "[]"),
+                               ("P3", "blocked", "", '["Steam-аккаунт младше 30 дней"]'), ("P4", "manual", "trade_ban", "[]")):
+        con.execute("INSERT INTO orders(order_id,status,created_at,price,keys_qty,quantity,currency,fail_reason,risk_reasons) "
+                    "VALUES(?,?,?,200,1,1,'₽',?,?)", (oid, st, NOW - 3600, why, risk))
+    con.commit()
+    con.close()
+    c = Center(tmp_path)
+    probs = {p["reason"]: p for p in c.analytics.mannbot_details(30)["problems"]}
+    assert probs["нет ключей на складе"]["n"] == 2 and probs["нет ключей на складе"]["statuses"] == {"вручную": 2}
+    assert probs["антифрод: Steam-аккаунт младше 30 дней"]["n"] == 1
+    assert probs["trade_ban"]["n"] == 1 and probs["причина не записана"]["statuses"] == {"возврат": 1}   # A3 из seed
+    assert list(probs)[0] == "нет ключей на складе"
+    c.events.close()

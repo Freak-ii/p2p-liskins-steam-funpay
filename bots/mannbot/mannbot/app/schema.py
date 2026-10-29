@@ -77,6 +77,8 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("cancel_foreign_offers", "Отменять трейды, созданные не ботом", "bool", "Выключите, если сами торгуете с аккаунта"),
         ("decline_incoming_requests", "Отклонять входящие трейды, просящие ваши предметы", "bool", ""),
         ("inventory_drop_alert", "Тревога при пропаже ключей", "bool", ""),
+        ("accept_gifts_from", "Мост ключей: принимать ключи от SteamID64", "list",
+         "SteamID64 аккаунта LisBot, по одному в строке. Его обмены, где от вас ничего не просят и внутри только ключи, принимаются сами"),
     ]),
     ("notifications.telegram", [
         ("enabled", "Уведомления в Telegram", "bool", ""),

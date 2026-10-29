@@ -240,3 +240,91 @@ def test_stub_briefing_and_api(tmp_path):
         await client.close()
         c.events.close()
     asyncio.run(go())
+
+
+def test_stuck_orders_and_buy_stall_only_notify(tmp_path):
+    seed(tmp_path)
+    con = sqlite3.connect(tmp_path / "mannbot" / "data" / "mannbot.sqlite3")
+    con.execute("INSERT INTO orders(order_id,buyer_username,status,created_at,paid_at,offer_sent_at,price,keys_qty,quantity,currency) "
+                "VALUES('S1','slow','offer_sent',?,?,?,200,1,1,'₽')", (NOW - 4 * 3600, NOW - 4 * 3600, NOW - 3 * 3600))
+    con.execute("INSERT INTO orders(order_id,buyer_username,status,created_at,price,keys_qty,quantity,currency) "
+                "VALUES('S2','check','pending_approval',?,200,1,1,'₽')", (NOW - 2 * 3600,))
+    con.execute("INSERT INTO orders(order_id,buyer_username,status,created_at,offer_sent_at,price,keys_qty,quantity,currency) "
+                "VALUES('S3','fresh','offer_sent',?,?,200,1,1,'₽')", (NOW - 1800, NOW - 1800))
+    con.commit()
+    con.close()
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    for i in range(10):                                     # 10 покупок за неделю, последняя — 30 ч назад
+        t = int((NOW - 30 * 3600 - i * 12 * 3600) * 1000)
+        con.execute("INSERT INTO items(name,mode,status,dry_run,buy_price_usd,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                    ("Old", "rtba", "listed", 0, 1.0, t, t))
+    con.commit()
+    con.close()
+
+    async def go():
+        c, sent, calls = _center(tmp_path)
+        assert "lis_buy_stall" not in {a["code"] for a in c.coordinator.detect()}   # режим неизвестен — молчим
+        c.summaries["lisbot"] = {"dry_run": False}
+        found = {a["code"]: a for a in await c.coordinator.check()}
+        assert {"mann_stuck", "lis_buy_stall"} <= set(found)
+        assert "S1" in found["mann_stuck"]["reason"] and "S2" in found["mann_stuck"]["reason"]
+        assert "S3" not in found["mann_stuck"]["reason"] and found["mann_stuck"]["title"].startswith("MannBot: 2")
+        assert "30 ч назад" in found["lis_buy_stall"]["reason"]
+        assert [r["order_id"] for r in c.coordinator.stuck_orders()] == ["S1", "S2"]
+        (text, _), = await c.tg.handle_command("/orders")
+        assert "S1" in text and "трейд не принят" in text and "ждёт вашей проверки" in text
+        assert calls == [] and not c.coordinator.decisions(kind="proposal", status="proposed")   # ничего не делает сам
+        assert any("застряли" in t for t in sent) and any("перестал закупать" in t for t in sent)
+        n = len(sent)
+        await c.coordinator.check()
+        assert len(sent) == n                               # повтор не раньше cooldown
+        c.summaries["lisbot"] = {"dry_run": False, "paused": True}
+        assert "lis_buy_stall" not in {a["code"] for a in c.coordinator.detect()}   # на паузе — это нормально
+        c.events.close()
+    asyncio.run(go())
+
+
+def test_losing_item_type_recommendation():
+    async def go():
+        f = {"bots": [], "lis_types_30d": [{"type": "Ножи", "sold": 6, "profit": -12.5, "roi": -2.1, "names": 2, "bought": 6},
+                                           {"type": "Винтовки", "sold": 9, "profit": 4.0, "roi": 3.0, "names": 3, "bought": 9},
+                                           {"type": "Наклейки", "sold": 2, "profit": -1.0, "roi": -5.0, "names": 1, "bought": 2}]}
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps(f)}</facts>", {})
+        titles = [r["title"] for r in res["recommendations"]]
+        assert "Пересмотреть закупку LisBot: ножи" in titles
+        assert not any("винтовки" in t or "наклейки" in t for t in titles)     # в плюсе / мало продаж
+    asyncio.run(go())
+
+
+def test_raise_min_roi_recommendation():
+    async def go():
+        cut = [{"min_roi": 0.08, "deals": 20, "profit": 40.0, "losers": 5, "roi": 4.0, "current": True},
+               {"min_roi": 0.1, "deals": 16, "profit": 46.0, "losers": 1, "roi": 6.0, "current": False},
+               {"min_roi": 0.12, "deals": 10, "profit": 44.0, "losers": 0, "roi": 7.0, "current": False},
+               {"min_roi": 0.15, "deals": 19, "profit": 90.0, "losers": 0, "roi": 9.0, "current": False}]   # отсекает 1 — мало
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'lis_roi_cut_30d': cut})}</facts>", {})
+        r = next(r for r in res["recommendations"] if r["title"].startswith("Поднять минимальный ROI"))
+        assert r["title"] == "Поднять минимальный ROI LisBot до 10%" and r["tool"] == "change_strategy"
+        assert json.loads(r["args_json"]) == {"changes": {"strategy.minRoi": 0.1}} and "-6.00 $" in r["why"]
+        cut[1]["profit"] = cut[2]["profit"] = 30.0                       # выше порог — меньше прибыли: не советуем
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'lis_roi_cut_30d': cut})}</facts>", {})
+        assert not any(r["title"].startswith("Поднять минимальный ROI") for r in res["recommendations"])
+    asyncio.run(go())
+
+
+def test_restock_and_key_bridge_recommendations():
+    async def go():
+        inv = {"mannbot": {"level": "low", "stock": 2, "days_left": 1.0, "restock": 5, "target_days": 14, "bridge_coming": 3},
+               "bridge": {"enabled": True, "failed": 2}}
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'inventory': inv})}</facts>", {})
+        recs = {r["title"]: r for r in res["recommendations"]}
+        why = recs["Пополнить склад ключей MannBot"]["why"]
+        assert "Докупите 5 ключей" in why and "Ещё 3 ключей едут по мосту" in why and "включите мост" not in why
+        assert "accept_gifts_from" in recs["Проверить приём ключей MannBot"]["why"]
+        inv["bridge"] = {"enabled": False, "failed": 0}
+        inv["mannbot"]["bridge_coming"] = 0
+        res, _ = await StubBackend().complete(f"<facts>{json.dumps({'bots': [], 'inventory': inv})}</facts>", {})
+        recs = {r["title"]: r for r in res["recommendations"]}
+        assert "«Мост ключей» и покупку ключей" in recs["Пополнить склад ключей MannBot"]["why"]
+        assert "Проверить приём ключей MannBot" not in recs
+    asyncio.run(go())

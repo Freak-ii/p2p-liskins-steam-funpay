@@ -108,6 +108,17 @@ def test_budget_plan_is_only_applied_by_command(tmp_path):
         assert not center.rtba.save_plan({"plan": {"lisbot.min_roi": None}})
         assert "lisbot.min_roi" not in yaml.safe_load((tmp_path / "center.yaml").read_text(encoding="utf-8"))["budget"]["plan"]
         assert any(e["kind"] == "budget.apply" for e in center.events.recent(20))
+        # «Вернуть как было»: значения до применения уходят ботам, план не меняется, второй раз отменять нечего
+        last = (await center.rtba.plan())["last_apply"]
+        assert {r["key"]: r["previous"] for r in last["rows"]}["mannbot.min_margin_pct"] == 5.0
+        undo = await center.rtba.undo()
+        assert undo["ok"], undo
+        lis = json.loads((tmp_path / "lisbot" / "config.json").read_text(encoding="utf-8"))
+        assert lis["strategy"]["minRoi"] == 0.08
+        mann = yaml.safe_load((tmp_path / "mannbot" / "config.yaml").read_text(encoding="utf-8"))
+        assert mann["rtba"]["min_margin_pct"] == 5.0
+        assert not (await center.rtba.undo())["ok"] and center.rtba.last_apply() is None
+        assert any(e["kind"] == "budget.undo" for e in center.events.recent(20))
         center.events.close()
     asyncio.run(go())
 

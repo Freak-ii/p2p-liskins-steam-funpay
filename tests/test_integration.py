@@ -37,6 +37,8 @@ def test_demo_center_shows_lisbot_history(tmp_path):
         stale = inv["items"][0]
         assert stale["name"].startswith("Desert Eagle") and stale["value_source"] == "рынок"
         assert set(stale["flags"]) == {"долго лежит", "в минусе", "лимит перевыставлений"}
+        br = c.inventory.bridge()                        # история моста ключей для «Склада» (сам мост выключен)
+        assert (br["bought"], br["delivered"], br["in_offers"], br["enabled"]) == (18, 12, 3, False)
         assert c.coordinator.detect() == []            # демо-история не вызывает аномалий и автопаузы
         assert c.workers["lisbot"].alerts(5)
         c.events.close()
@@ -107,6 +109,7 @@ def test_fallback_port_skips_other_bots(tmp_path):
     ev = EventStore(tmp_path / "e.sqlite3")
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
+        busy.listen()                                    # порт по-настоящему занят, как сервером другой программы
         p = busy.getsockname()[1]
         w = MannBotWorker(tmp_path / "mannbot", ev, port=p)
         BotWorker.reserved_ports.add(p + 1)              # следующий порт принадлежит другому боту центра

@@ -14,10 +14,14 @@ from aiohttp import web
 from center.app import Center
 from center.bots import LIS_SECRET_KEYS, LisBotWorker, MannBotWorker, parse_mafile
 from center.crm import CrmError
+from center import steamcheck, tgcheck
 from center.backup import routes as backup_routes
 from center.coordinator import routes as coordinator_routes
 from center.inventory import routes as inventory_routes
+from center.readiness import routes as readiness_routes
+from center.updates import routes as update_routes
 from center.monitor import routes as monitor_routes
+from center.steamshare import routes as steamshare_routes
 
 STATIC = Path(__file__).resolve().parent / "static"
 COOKIE = "center_token"
@@ -33,7 +37,8 @@ def make_app(center: Center) -> web.Application:
 
     @web.middleware
     async def auth(request: web.Request, handler):
-        if request.path in ("/login", "/api/ping") or request.path.startswith("/static/"):
+        if request.path in ("/login", "/api/ping") or request.path.startswith(("/static/", "/api/steam-share/")):
+            # /api/steam-share/ — запросы ботов со своим токеном (center/steamshare.py)
             return await handler(request)
         if not authed(request):
             if request.path.startswith("/api/"):
@@ -119,7 +124,13 @@ def make_app(center: Center) -> web.Application:
         return web.json_response(center.alerts(int(request.query.get("limit", 100))))
 
     async def events(request: web.Request):
-        return web.json_response(center.events.recent(int(request.query.get("limit", 200)), request.query.get("source")))
+        q = request.query
+        try:
+            limit = max(1, min(int(q.get("limit", 200)), 1000))
+        except ValueError:
+            limit = 200
+        return web.json_response(center.events.recent(limit, q.get("source") or None, important=q.get("level") == "important",
+                                                      q=q.get("q", "").strip()[:100]))
 
     async def lis_secrets(request: web.Request):
         w: LisBotWorker = center.workers["lisbot"]  # type: ignore[assignment]
@@ -132,6 +143,21 @@ def make_app(center: Center) -> web.Application:
                 msg += ". " + await w.restart("новые подключения")
             return web.json_response({"ok": True, "message": msg})
         return web.json_response(w.masked_secrets())
+
+    async def lis_telegram_test(request: web.Request):
+        """Проверка Telegram LisBot: значения из формы, а пустые поля — из сохранённых подключений."""
+        data = await request.json()
+        saved = center.workers["lisbot"].secrets()
+        token = str(data.get("TELEGRAM_BOT_TOKEN") or saved.get("TELEGRAM_BOT_TOKEN") or "")
+        chats = str(data.get("TELEGRAM_CHAT_ID") or saved.get("TELEGRAM_CHAT_ID") or "")
+        return web.json_response(await tgcheck.check(token, chats, "LisBot"))
+
+    async def lis_steam_test(request: web.Request):
+        """Проверка Steam для LisBot без входа: DNS, часы, код SDA. Пустые поля — из сохранённых подключений."""
+        data = await request.json()
+        saved = center.workers["lisbot"].secrets()
+        keys = ("STEAM_SHARED_SECRET", "STEAM_IDENTITY_SECRET")
+        return web.json_response(await steamcheck.check({k: data.get(k) or saved.get(k) or "" for k in keys}))
 
     async def mann_settings(request: web.Request):
         w: MannBotWorker = center.workers["mannbot"]  # type: ignore[assignment]
@@ -231,12 +257,25 @@ def make_app(center: Center) -> web.Application:
         return web.Response(body=body, content_type="text/csv", charset="utf-8",
                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
+    async def crm_customers_export(request: web.Request):
+        q = request.query
+        rows = await asyncio.to_thread(lambda: center.crm.customer_export_rows(
+            q=q.get("q", "").strip()[:200], risk=q.get("risk", ""), tag=q.get("tag", ""), segment=q.get("segment", ""),
+            sort=q.get("sort", "last_order")))
+        name = f"crm-customers-{time.strftime('%Y%m%d')}.csv"
+        return web.Response(body=center.analytics.to_csv(rows), content_type="text/csv", charset="utf-8",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
     async def crm_customers(request: web.Request):
         q = request.query
         return web.json_response(await asyncio.to_thread(
             lambda: center.crm.customers(q=q.get("q", "").strip()[:200], risk=q.get("risk", ""), tag=q.get("tag", ""),
+                                         segment=q.get("segment", ""),
                                          sort=q.get("sort", "last_order"), limit=crm_int(request, "limit", 200),
                                          offset=crm_int(request, "offset", 0))))
+
+    async def crm_cohorts(request: web.Request):
+        return web.json_response(await asyncio.to_thread(center.crm.cohorts, crm_int(request, "months", 6)))
 
     async def crm_customer(request: web.Request):
         cid = int(request.match_info["cid"])
@@ -267,6 +306,12 @@ def make_app(center: Center) -> web.Application:
             asyncio.ensure_future(center.refresh(name))
         return web.json_response(res, status=200 if res["ok"] else 502)
 
+    async def rtba_undo(request: web.Request):
+        res = await center.rtba.undo()
+        for name in center.workers:
+            asyncio.ensure_future(center.refresh(name))
+        return web.json_response(res, status=200 if res["ok"] else 409)
+
     async def rtba_backtest(request: web.Request):
         data = await request.json()
         variants = [v for v in (data.get("variants") or []) if isinstance(v, dict)][:6]
@@ -296,6 +341,8 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/workers/{name}/logs", worker_logs), web.get("/open/{name}", open_panel),
         web.get("/api/alerts", alerts), web.get("/api/events", events),
         web.get("/api/lisbot/secrets", lis_secrets), web.post("/api/lisbot/secrets", lis_secrets),
+        web.post("/api/lisbot/telegram-test", lis_telegram_test),
+        web.post("/api/lisbot/steam-test", lis_steam_test),
         web.get("/api/mannbot/settings", mann_settings), web.post("/api/mannbot/settings", mann_settings),
         web.post("/api/quit", quit_center),
         web.get("/api/analytics/pnl", an_pnl), web.get("/api/analytics/daily", an_daily),
@@ -305,14 +352,18 @@ def make_app(center: Center) -> web.Application:
         web.get("/api/crm/deals", crm_deals), web.get("/api/crm/deals.csv", crm_export),
         web.get("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal), web.post("/api/crm/deals/{bot:lisbot|mannbot}/{ref}", crm_deal),
         web.get("/api/crm/customers", crm_customers),
+        web.get("/api/crm/cohorts", crm_cohorts), web.get("/api/crm/customers.csv", crm_customers_export),
         web.get("/api/crm/customers/{cid:-?\\d+}", crm_customer), web.post("/api/crm/customers/{cid:-?\\d+}", crm_customer),
         web.get("/rtba", rtba_page), web.get("/api/rtba", rtba_status), web.get("/api/rtba/budget", rtba_budget), web.post("/api/rtba/budget", rtba_budget),
-        web.post("/api/rtba/apply", rtba_apply), web.post("/api/rtba/backtest", rtba_backtest),
+        web.post("/api/rtba/apply", rtba_apply), web.post("/api/rtba/undo", rtba_undo), web.post("/api/rtba/backtest", rtba_backtest),
     ])
     app.add_routes(monitor_routes(center))
     app.add_routes(coordinator_routes(center))
     app.add_routes(backup_routes(center))
     app.add_routes(inventory_routes(center))
+    app.add_routes(readiness_routes(center))
+    app.add_routes(update_routes(center))
+    app.add_routes(steamshare_routes(center))
     app.router.add_static("/static/", STATIC)
     return app
 

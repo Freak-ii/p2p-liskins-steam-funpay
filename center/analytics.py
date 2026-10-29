@@ -118,6 +118,36 @@ def _day(ts: float) -> str:
     return dt.date.fromtimestamp(ts).isoformat()
 
 
+# коды fail_reason MannBot (core/engine.py) по-русски; остальные (ошибки Steam) показываются как есть
+MANN_FAIL = {"out_of_stock": "нет ключей на складе", "too_many_keys": "слишком много ключей в заказе",
+             "confirm_failed": "обмен не подтвердился в Steam", "offer_mismatch": "обмен не совпал с заказом",
+             "refund": "возврат", "rate_limit": "Steam ограничил запросы", "network": "нет связи со Steam"}
+HOLD_BUCKETS = ((0, 8, "до 8 дн"), (8, 10, "8–10 дн"), (10, 14, "10–14 дн"), (14, 21, "14–21 дн"), (21, None, "21+ дн"))
+MANN_STATUS_RU = {"refunded": "возврат", "blocked": "заблокирован", "manual": "вручную"}
+
+WEAPON_TYPES = (
+    ("Винтовки", ("AK-47", "M4A4", "M4A1-S", "FAMAS", "Galil AR", "AUG", "SG 553")),
+    ("Снайперские", ("AWP", "SSG 08", "SCAR-20", "G3SG1")),
+    ("Пистолеты", ("Glock-18", "USP-S", "P2000", "Desert Eagle", "P250", "Five-SeveN", "Tec-9", "CZ75-Auto",
+                   "Dual Berettas", "R8 Revolver")),
+    ("Пистолеты-пулемёты", ("MP9", "MAC-10", "MP7", "MP5-SD", "UMP-45", "P90", "PP-Bizon")),
+    ("Тяжёлое", ("Nova", "XM1014", "Sawed-Off", "MAG-7", "M249", "Negev")),
+)
+
+
+def item_type(name: str) -> str:
+    """Тип предмета CS2 по рыночному названию (StatTrak™ и Souvenir не мешают): для аналитики по категориям."""
+    n = (name or "").replace("StatTrak™ ", "").replace("Souvenir ", "")
+    if n.startswith("★"):
+        return "Перчатки" if "Gloves" in n or "Hand Wraps" in n else "Ножи"
+    if n.startswith("Sticker |"):
+        return "Наклейки"
+    if "|" not in n and any(k in n for k in ("Case", "Capsule", "Package")):
+        return "Кейсы и капсулы"
+    weapon = n.split(" | ")[0].strip()
+    return next((title for title, keys in WEAPON_TYPES if weapon in keys), "Другое")
+
+
 class Analytics:
     def __init__(self, center):
         self.center = center
@@ -379,28 +409,64 @@ class Analytics:
             SELECT name, COUNT(*) bought, SUM(status='sold') sold,
                    COALESCE(SUM(buy_price_usd),0) spent,
                    COALESCE(SUM(CASE WHEN status='sold' THEN profit_usd END),0) profit,
+                   COALESCE(SUM(CASE WHEN status='sold' THEN buy_price_usd END),0) sold_spent,
                    AVG(CASE WHEN status='sold' AND buy_price_usd>0 THEN profit_usd / buy_price_usd END) * 100 roi,
                    AVG(CASE WHEN status='sold' THEN (sold_at - COALESCE(received_at, created_at)) / 86400000.0 END) hold_days,
                    AVG(CASE WHEN status='sold' AND expected_net_usd>0 THEN sold_usd / expected_net_usd END) * 100 accuracy,
                    SUM(status IN ({','.join('?' * len(LIS_HELD))})) open
             FROM items WHERE dry_run=0 AND status<>'failed' AND created_at>=? GROUP BY name
             ORDER BY profit DESC""", (*LIS_HELD, since_ms))]
+        types: dict[str, dict] = {}
         for it in items:
+            t = types.setdefault(item_type(it["name"]), {"type": item_type(it["name"]), "bought": 0, "sold": 0, "spent": 0.0,
+                                                         "profit": 0.0, "sold_spent": 0.0, "names": 0})
+            t["names"] += 1
+            for k in ("bought", "sold", "spent", "profit", "sold_spent"):
+                t[k] += it[k] or 0
+            it["type"] = t["type"]
             for k in ("spent", "profit", "roi", "hold_days", "accuracy"):
                 it[k] = _r(it[k], 1 if k in ("roi", "hold_days", "accuracy") else 2)
+            del it["sold_spent"]
+        by_type = sorted(types.values(), key=lambda t: -t["profit"])
+        for t in by_type:
+            t["roi"] = _r(t["profit"] / t["sold_spent"] * 100, 1) if t["sold_spent"] else None
+            t["spent"], t["profit"] = _r(t["spent"]), _r(t["profit"])
+            del t["sold_spent"]
         acc = _rows(self.lis_db, "SELECT sold_usd, expected_net_usd FROM items WHERE dry_run=0 AND status='sold' AND "
                     "expected_net_usd>0 AND sold_at>=?", (since_ms,))
         ratios = [r["sold_usd"] / r["expected_net_usd"] for r in acc if r["sold_usd"] is not None]
         mape = statistics.mean(abs(x - 1) for x in ratios) * 100 if ratios else None
-        holds = [d["hold_days"] for d in self.lis_deals(since_ms / 1000)]
+        deals = self.lis_deals(since_ms / 1000)
+        holds = [d["hold_days"] for d in deals]
+        # сколько держали предмет (от получения до продажи, вместе с 7 днями Trade Protection) и что это дало
+        by_hold = []
+        for lo, hi, label in HOLD_BUCKETS:
+            ds = [d for d in deals if d["hold_days"] is not None and d["hold_days"] >= lo and (hi is None or d["hold_days"] < hi)]
+            if ds:
+                spent, profit = sum(d["cost"] for d in ds), sum(d["profit"] for d in ds)
+                by_hold.append({"label": label, "deals": len(ds), "profit": _r(profit), "losers": sum(1 for d in ds if d["profit"] < 0),
+                                "roi": _r(profit / spent * 100, 1) if spent else None})
         by_mode = [dict(r) for r in _rows(self.lis_db, """
             SELECT COALESCE(mode,'—') mode, COUNT(*) n, SUM(status='sold') sold, COALESCE(SUM(buy_price_usd),0) spent,
                    COALESCE(SUM(CASE WHEN status='sold' THEN profit_usd END),0) profit
             FROM items WHERE dry_run=0 AND status<>'failed' AND created_at>=? GROUP BY mode""", (since_ms,))]
         funnel = {r["status"]: r["n"] for r in _rows(self.lis_db, "SELECT status, COUNT(*) n FROM items WHERE dry_run=0 "
                                                      "AND created_at>=? GROUP BY status", (since_ms,))}
+        # что было бы с другим порогом strategy.minRoi: проданные сделки, у которых прогноз ROI при покупке был не ниже порога
+        sold = [(r["expected_net_usd"] / r["buy_price_usd"] - 1, r["profit_usd"] or 0.0, r["buy_price_usd"]) for r in _rows(
+            self.lis_db, "SELECT buy_price_usd, expected_net_usd, profit_usd FROM items WHERE dry_run=0 AND status='sold' "
+            "AND buy_price_usd>0 AND expected_net_usd>0 AND created_at>=?", (since_ms,))]
+        min_roi = (self.lis_config().get("strategy") or {}).get("minRoi")
+        roi_cut = []
+        for t in sorted({0.0, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2, *([float(min_roi)] if min_roi is not None else [])}):
+            kept = [x for x in sold if x[0] >= t - 1e-9]
+            spent = sum(x[2] for x in kept)
+            roi_cut.append({"min_roi": t, "deals": len(kept), "profit": _r(sum(x[1] for x in kept)),
+                            "losers": sum(1 for x in kept if x[1] < 0), "roi": _r(sum(x[1] for x in kept) / spent * 100, 1) if spent else None,
+                            "current": min_roi is not None and abs(t - float(min_roi)) < 1e-9})
         return {
-            "items": items, "by_mode": by_mode, "funnel": funnel,
+            "items": items, "by_mode": by_mode, "by_type": by_type, "by_hold": by_hold, "funnel": funnel,
+            "roi_cut": roi_cut if sold else [],
             "forecast": {"n": len(ratios), "fact_to_forecast": _r(statistics.mean(ratios) * 100, 1) if ratios else None,
                          "mean_abs_error": _r(mape, 1)},
             "hold": {"median_days": _r(_median(holds), 1), "avg_days": _r(statistics.mean([h for h in holds if h is not None]), 1)
@@ -428,7 +494,34 @@ class Analytics:
         statuses: dict[str, int] = {}
         for r in rows:
             statuses[r["status"]] = statuses.get(r["status"], 0) + 1
+        # когда покупают (местное время): по часам и дням недели — для тихих часов, поднятия лотов и пополнения склада
+        by_hour, by_wday = [0] * 24, [0] * 7
+        for r in rows:
+            if r["created_at"]:
+                lt = time.localtime(r["created_at"])
+                by_hour[lt.tm_hour] += 1
+                by_wday[lt.tm_wday] += 1
+        # почему заказы не дошли до выдачи: возвраты, блокировки антифродом, ручной разбор — по причинам
+        problems: dict[str, dict] = {}
+        for r in rows:
+            if r["status"] not in ("refunded", "blocked", "manual"):
+                continue
+            keys = r.keys()
+            why = str(r["fail_reason"] or "").strip() if "fail_reason" in keys else ""
+            if not why and r["status"] == "blocked" and "risk_reasons" in keys:
+                try:
+                    reasons = json.loads(r["risk_reasons"] or "[]")
+                except ValueError:
+                    reasons = []
+                why = "антифрод: " + str(reasons[0]) if reasons else ""
+            why = MANN_FAIL.get(why, why) or "причина не записана"
+            p = problems.setdefault(why, {"reason": why, "n": 0, "statuses": {}})
+            p["n"] += 1
+            st = MANN_STATUS_RU.get(r["status"], r["status"])
+            p["statuses"][st] = p["statuses"].get(st, 0) + 1
         return {
+            "problems": sorted(problems.values(), key=lambda p: -p["n"])[:8],
+            "by_hour": by_hour, "by_weekday": by_wday,
             "orders": n, "funnel": [{"stage": s, "n": v, "pct": _r(v / n * 100, 1) if n else None} for s, v in funnel],
             "statuses": statuses,
             "times": {"link": med("paid_at", "link_received_at", rows), "offer": med("link_received_at", "offer_sent_at", rows),

@@ -60,6 +60,8 @@ class BotWorker(Worker):
             if p != self.port and p in BotWorker.reserved_ports:
                 continue
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: иначе bind иногда проходит на занятый порт
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
                 try:
                     s.bind(("127.0.0.1", p))
                 except OSError:
@@ -599,10 +601,15 @@ class LisBotWorker(BotWorker):
         today = d.get("today") or {}
         sold = d.get("sold") or {}
         state = "halted" if g.get("halted") else "paused" if g.get("paused") else "running"
+        steam = (d.get("runtime") or {}).get("steam") or {}
+        steam_ready = steam.get("ready") if "ready" in steam else None
+        flags = [t for k, t in (("buyPaused", "закупка на паузе"), ("sellPaused", "продажа на паузе")) if g.get(k)]
+        if steam_ready is False:
+            flags.append("нет входа в Steam")
         return {
             "bot_state": state, "paused": bool(g.get("paused")), "dry_run": d.get("dryRun"), "demo": bool(d.get("demo")),
-            "error": g.get("haltReason") or "", "configured": True,
-            "flags": [t for k, t in (("buyPaused", "закупка на паузе"), ("sellPaused", "продажа на паузе")) if g.get(k)],
+            "error": g.get("haltReason") or "", "configured": True, "flags": flags,
+            "steam_ready": steam_ready, "steam_error": steam.get("lastError") or "",
             "kpi": {"Баланс LIS, $": d.get("balance"), "В товаре, $": d.get("exposure"),
                     "Куплено сегодня": today.get("bought"), "Потрачено сегодня, $": today.get("spent"),
                     "Прибыль сегодня": today.get("profit"), "Продано всего": sold.get("n"),

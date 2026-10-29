@@ -18,6 +18,8 @@
 <main>
   <div id="flash"></div>
   <div class="grid" id="bots"></div>
+  <div id="update"></div>
+  <div id="readiness"></div>
 
   <h2>ИИ-координатор</h2>
   <div id="coordinator"></div>
@@ -61,11 +63,20 @@
         <select id="crmTag"><option value="">все теги</option></select>
         <select id="crmCsort"><option value="last_order">Сначала недавние</option><option value="spent">Больше потратил</option>
           <option value="orders">Больше заказов</option><option value="risk">Выше риск</option></select>
+        <span class="spacer" style="flex:1"></span><a class="btn" id="crmCustCsv" href="/api/crm/customers.csv">CSV</a>
       </div>
+      <div class="tabs" id="crmSeg"></div>
       <div class="tabs" id="crmRisk"></div>
       <div class="tablewrap"><table id="crmCustTable" class="crm"></table></div>
       <div class="muted small" style="margin-top:6px">Риск-скоринг центра считается по всей истории покупателя: возвраты, блокировки антифродом,
-        общие Steam-аккаунты, неподтверждённые заказы, низкие отзывы. Наведите на значок, чтобы увидеть причины.</div>
+        общие Steam-аккаунты, неподтверждённые заказы, низкие отзывы. Наведите на значок, чтобы увидеть причины.
+        Сегмент: VIP и постоянные — берегите; «Уснул» — давно не покупал, стоит написать; сроки и пороги — раздел <code>crm</code> в center.yaml.</div>
+    </div>
+    <div class="card" id="crmCoh" hidden>
+      <div class="small" id="crmCohGap" style="margin-bottom:8px"></div>
+      <div class="tablewrap"><table id="crmCohTable" class="crm"></table></div>
+      <div class="muted small" style="margin-top:6px">Когорта — покупатели FunPay, впервые купившие ключи в этом месяце. «Через N мес» — сколько из них
+        купили снова в N-й месяц после первого; «Вернулись» — купили хотя бы ещё раз; «Принёс» — средняя выручка с покупателя за всё время, в ₽.</div>
     </div>
   </section>
 
@@ -86,6 +97,11 @@
   </div>
 
   <h2>События центра</h2>
+  <div class="row filters" style="margin-bottom:8px">
+    <input id="evSearch" type="search" placeholder="Поиск по событиям">
+    <select id="evSource"><option value="">все источники</option><option value="center">центр</option><option value="lisbot">LisBot</option><option value="mannbot">MannBot</option></select>
+    <select id="evLevel"><option value="">все</option><option value="important">только предупреждения и ошибки</option></select>
+  </div>
   <div class="card tablewrap"><table><thead><tr><th>Время</th><th>Источник</th><th>Событие</th></tr></thead><tbody id="events"></tbody></table></div>
 </main>
 
@@ -99,13 +115,21 @@
     <h3>Подключения LisBot</h3>
     <p class="muted small">Хранятся только на этом компьютере, в папке данных центра, в зашифрованном виде (secrets.dat).</p>
     <label>Ключ API LIS-SKINS</label><input name="LIS_API_KEY" autocomplete="off">
+    <label>maFile из Steam Desktop Authenticator (заполнит логин, shared_secret и identity_secret)</label>
+    <input type="file" id="lisMaFile" accept=".maFile,.json,application/json">
+    <div class="small" id="lisMaRes"></div>
     <label>Логин Steam</label><input name="STEAM_ACCOUNT_NAME" autocomplete="off">
     <label>Пароль Steam <span class="muted small" id="pwHint"></span></label><input name="STEAM_PASSWORD" type="password" autocomplete="new-password">
     <label>shared_secret (из maFile)</label><input name="STEAM_SHARED_SECRET" autocomplete="off">
     <label>identity_secret (из maFile)</label><input name="STEAM_IDENTITY_SECRET" autocomplete="off">
     <label>Трейд-ссылка Steam</label><input name="STEAM_TRADE_URL" autocomplete="off">
+    <div class="row" style="margin-top:6px"><button class="btn" type="button" onclick="lisSteamTest()">Проверить Steam</button></div>
+    <div class="small" id="lisSteamRes"></div>
     <label>Telegram: токен бота (необязательно)</label><input name="TELEGRAM_BOT_TOKEN" autocomplete="off">
-    <label>Telegram: chat id</label><input name="TELEGRAM_CHAT_ID" autocomplete="off">
+    <label>Telegram: chat id — ваш id, его пришлёт @userinfobot (не id бота)</label><input name="TELEGRAM_CHAT_ID" autocomplete="off">
+    <p class="muted small" style="margin:4px 0 0">Перед проверкой откройте своего бота в Telegram и нажмите Start. У MannBot должен быть другой бот.</p>
+    <div class="row" style="margin-top:6px"><button class="btn" type="button" onclick="lisTgTest()">Проверить Telegram</button></div>
+    <div class="small" id="lisTgRes"></div>
     <div class="row" style="margin-top:14px">
       <button class="btn primary" value="save">Сохранить и перезапустить</button>
       <button class="btn" value="cancel" formnovalidate>Отмена</button>
@@ -163,13 +187,28 @@ function botCard(b) {
   </div>`;
 }
 
+// журнал событий: без фильтров — последние 30 из /api/overview, с фильтрами — поиск по всему журналу
+const evFiltered = () => $('#evSearch').value.trim() || $('#evSource').value || $('#evLevel').value;
+function renderEvents(list) {
+  $('#events').innerHTML = list.map((e) => `<tr><td>${fmtTs(e.ts)}</td><td>${esc(e.source)}</td><td class="lv-${esc(e.level)}">${esc(e.message)}</td></tr>`).join('')
+    || `<tr><td colspan="3" class="muted">${evFiltered() ? 'Ничего не найдено' : 'Событий пока нет'}</td></tr>`;
+}
+let evTimer = null;
+async function loadEvents() {
+  if (!evFiltered()) return renderEvents(state?.events || []);
+  const p = new URLSearchParams({ q: $('#evSearch').value.trim(), source: $('#evSource').value, level: $('#evLevel').value, limit: 200 });
+  try { renderEvents(await api(`/api/events?${p}`)); } catch { /* сеть */ }
+}
+for (const id of ['#evSource', '#evLevel']) $(id).addEventListener('change', loadEvents);
+$('#evSearch').addEventListener('input', () => { clearTimeout(evTimer); evTimer = setTimeout(loadEvents, 300); });
+
 async function refresh() {
   try { state = await api('/api/overview'); } catch { return; }
   $('#hdr').textContent = `работает ${fmtDur(state.uptime) || 'меньше минуты'}${state.demo ? ' · демо' : ''}`;
   $('#alertsBadge').innerHTML = state.open_alerts ? `<span class="badge s-crashed">тревог: ${state.open_alerts}</span>` : '';
   $('#bots').innerHTML = state.bots.map(botCard).join('');
   $('#alerts').innerHTML = state.alerts.map((a) => `<tr style="${a.acked ? 'opacity:.55' : ''}"><td>${fmtTs(a.ts)}</td><td>${esc(a.source)}</td><td class="lv-${esc(a.level)}">${esc(a.level)}</td><td>${esc(a.message)}</td><td>${a.acked ? '' : `<button class="btn small" title="Подтвердить тревогу в боте" onclick="ackAlert('${esc(a.source)}',${Number(a.id)})">✓</button>`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Тревог нет</td></tr>';
-  $('#events').innerHTML = state.events.map((e) => `<tr><td>${fmtTs(e.ts)}</td><td>${esc(e.source)}</td><td class="lv-${esc(e.level)}">${esc(e.message)}</td></tr>`).join('');
+  if (!evFiltered()) renderEvents(state.events);
   $('#logTabs').innerHTML = state.bots.map((b) => `<button class="btn ${b.name === logBot ? 'on' : ''}" onclick="switchLog('${b.name}')">${esc(b.title)}</button>`).join('');
 }
 
@@ -191,9 +230,39 @@ function switchLog(name) { logBot = name; logAfter = 0; $('#log').textContent = 
 async function openLis() {
   const s = await api('/api/lisbot/secrets');
   for (const el of $('#lisForm').elements) if (el.name) el.value = s[el.name] ?? '';
+  $('#lisTgRes').textContent = ''; $('#lisSteamRes').textContent = ''; $('#lisMaRes').textContent = ''; $('#lisMaFile').value = '';
   $('#pwHint').textContent = s.STEAM_PASSWORD_SET ? '(сохранён — оставьте пустым, чтобы не менять)' : '';
   $('#lisDlg').showModal();
 }
+async function lisTgTest() {
+  const f = $('#lisForm').elements;
+  const out = $('#lisTgRes');
+  out.style.color = ''; out.textContent = 'Проверяю…';
+  const r = await api('/api/lisbot/telegram-test', { TELEGRAM_BOT_TOKEN: f.TELEGRAM_BOT_TOKEN.value, TELEGRAM_CHAT_ID: f.TELEGRAM_CHAT_ID.value });
+  out.style.color = r.ok ? 'var(--ok)' : 'var(--bad)'; out.textContent = r.message || r.error || '';
+}
+async function lisSteamTest() {
+  const f = $('#lisForm').elements;
+  const out = $('#lisSteamRes');
+  out.style.color = ''; out.textContent = 'Проверяю…';
+  const r = await api('/api/lisbot/steam-test', { STEAM_SHARED_SECRET: f.STEAM_SHARED_SECRET.value, STEAM_IDENTITY_SECRET: f.STEAM_IDENTITY_SECRET.value });
+  out.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  out.innerHTML = esc(r.message || r.error || '') + (r.lines || []).map((l) => '<br>' + esc(l)).join('');
+}
+// maFile читается прямо в браузере: файл никуда не отправляется, поля заполняются и сохраняются кнопкой «Сохранить»
+$('#lisMaFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0]; const out = $('#lisMaRes'); const f = $('#lisForm').elements;
+  if (!file) return;
+  try {
+    const d = JSON.parse(await file.text());
+    if (!d.shared_secret || !d.identity_secret) throw new Error('в файле нет shared_secret/identity_secret — maFile зашифрован? Снимите шифрование в SDA');
+    f.STEAM_SHARED_SECRET.value = d.shared_secret; f.STEAM_IDENTITY_SECRET.value = d.identity_secret;
+    if (d.account_name) f.STEAM_ACCOUNT_NAME.value = d.account_name;
+    out.style.color = 'var(--ok)'; out.textContent = `maFile ${d.account_name || ''} прочитан. Нажмите «Проверить Steam», затем «Сохранить».`;
+  } catch (err) {
+    out.style.color = 'var(--bad)'; out.textContent = 'maFile не распознан: ' + (err.message || err);
+  }
+});
 $('#lisDlg').addEventListener('close', async () => {
   if ($('#lisDlg').returnValue !== 'save') return;
   const data = { restart: true };
@@ -217,6 +286,7 @@ setInterval(refresh, 5000); setInterval(pollLog, 2000);
 <script src="/static/inventory.js"></script>
 <script src="/static/crm.js"></script>
 <script src="/static/monitor.js"></script>
+<script src="/static/readiness.js"></script>
 <script src="/static/backup.js"></script>
 <script src="/static/coordinator.js"></script>
 </body>

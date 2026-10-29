@@ -82,17 +82,20 @@ async function refreshMonitor() {
   const hb = st.heartbeat.ok == null ? `<span class="muted">сторожевой пинг: ${esc(st.heartbeat.info)}</span>`
     : st.heartbeat.ok ? `<span class="lv-ok">✓ сторожевой пинг</span> <span class="muted">${fmtTs(st.heartbeat.at)}</span>` : `<span class="lv-critical">✗ сторожевой пинг: ${esc(st.heartbeat.info)}</span>`;
   const quiet = st.quiet_hours ? `тихие часы ${esc(st.quiet_hours)}${st.quiet_now ? ` (сейчас, отложено ${st.held})` : ''}` : 'без тихих часов';
+  const disk = (st.disk?.disks || []).map((x) => `<span class="${x.low ? 'lv-warn' : 'muted'}" title="${esc(x.path)}">${x.low ? '⚠ ' : ''}${esc(x.label)}: свободно ${x.free_gb.toLocaleString('ru-RU')} ГБ</span>`).join(' · ');
+  const errs = Object.entries(st.errors || {}).filter(([, n]) => n).map(([b, n]) => `<span class="lv-warn">${esc(BOT_T[b] || b)}: ${n} ошибок за час</span>`).join(' · ');
   const rep = st.daily_report.enabled ? `отчёт в ${esc(st.daily_report.time)}` : 'отчёт выключен';
   const tabs = [[24, '24 ч'], [168, '7 дней'], [720, '30 дней']].map(([h, t]) => `<button class="btn ${h === monHours ? 'on' : ''}" onclick="monHours=${h};refreshMonitor()">${t}</button>`).join('');
   const notes = st.notifications.map((x) => `<tr><td>${fmtTs(x.ts)}</td><td class="lv-${esc(x.level)}">${esc(NOTE_STATUS[x.status] || x.status)}</td><td>${esc(stripTags(x.text)).replace(/\n/g, ' · ')}</td></tr>`).join('')
     || '<tr><td colspan="3" class="muted">Уведомлений пока не было</td></tr>';
   $('#monitor').innerHTML = `
-    <div class="card"><div class="row small">${tg} · ${hb} · <span class="muted">${quiet} · ${rep}</span>
+    <div class="card"><div class="row small">${tg} · ${hb} · <span class="muted">${quiet} · ${rep}</span>${disk ? ` · ${disk}` : ''}${errs ? ` · ${errs}` : ''}
       <span class="spacer" style="flex:1"></span>
       <button class="btn" onclick="openMonSettings()">Настройки уведомлений</button>
       <button class="btn" onclick="monTest()">Проверить</button>
       <button class="btn" onclick="openReport()">Отчёт за сутки</button>
-      <button class="btn" onclick="openReport('week')">За неделю</button></div></div>
+      <button class="btn" onclick="openReport('week')">За неделю</button>
+      <button class="btn" onclick="openReport('month')">За месяц</button></div></div>
     <div class="tabs" style="margin-top:10px">${tabs}</div>
     <div class="grid" id="monCharts">${Object.entries(monHist.bots).map(([n, b]) => botChart(n, b, monHist)).join('')}</div>
     <details class="card" style="margin-top:14px"><summary>Уведомления центра (${st.notifications.length})</summary>
@@ -106,7 +109,7 @@ let repPeriod = '';
 async function openReport(period = '') {
   repPeriod = period;
   const r = await api(`/api/monitor/report${period ? '?period=' + period : ''}`);
-  $('#repTitle').textContent = period === 'week' ? 'Отчёт центра за неделю' : 'Отчёт центра за сутки';
+  $('#repTitle').textContent = { week: 'Отчёт центра за неделю', month: 'Итоги прошлого месяца' }[period] || 'Отчёт центра за сутки';
   $('#repText').innerHTML = esc(r.text).replace(/&lt;(\/?)(b|i|code)&gt;/g, '<$1$2>');
   $('#repDlg').showModal();
 }
@@ -135,7 +138,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <label>Токен Telegram-бота <span class="muted small" id="monTokHint"></span></label><input name="telegram_token" autocomplete="off">
   <label>Chat id (можно несколько через запятую)</label><input name="telegram_chat_id" autocomplete="off">
   <label><input type="checkbox" name="telegram_commands" style="width:auto"> Команды и кнопки одобрения в Telegram <span class="muted small" id="monCmdHint"></span></label>
-  <p class="muted small" style="margin:2px 0 0">Работают со своим Telegram-ботом центра (не тем, что у LisBot) и только из указанных chat id: /status, /report, /stock, /proposals, /pause, /resume, /buypause, /buyresume, /backup.</p>
+  <p class="muted small" style="margin:2px 0 0">Работают со своим Telegram-ботом центра (не тем, что у LisBot) и только из указанных chat id: /status, /report, /stock, /proposals, /pause, /resume, /buypause, /buyresume, /backup, /goal, /ready, /orders, /errors, /today, /month.</p>
   <label>Не повторять одинаковое уведомление чаще, чем раз в N минут</label><input name="dedup_minutes" type="number" min="0">
   <label>Тихие часы, например 23:00-08:00 (пусто — без тихих часов)</label><input name="quiet_hours" placeholder="23:00-08:00">
   <label><input type="checkbox" name="quiet_allow_critical" style="width:auto"> Критичное приходит и в тихие часы</label>

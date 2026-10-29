@@ -51,15 +51,34 @@ class EventStore:
                 pass
         return eid
 
-    def recent(self, limit: int = 200, source: str | None = None) -> list[dict]:
-        sql, args = "SELECT * FROM events", []
+    def recent(self, limit: int = 200, source: str | None = None, *, important: bool = False, q: str = "") -> list[dict]:
+        """Последние события; important — только предупреждения и ошибки, q — поиск по тексту и виду события."""
+        where, args = [], []
         if source:
-            sql += " WHERE source=?"
+            where.append("source=?")
             args.append(source)
-        sql += " ORDER BY id DESC LIMIT ?"
-        args.append(limit)
+        if important:
+            where.append("level IN ('warn','warning','error','critical')")
+        sql = "SELECT * FROM events" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
+        args.append(20000 if q else limit)       # LIKE в SQLite не различает регистр только для латиницы — ищем в Python
         with self._lock:
-            return [dict(r) for r in self.db.execute(sql, args).fetchall()]
+            rows = [dict(r) for r in self.db.execute(sql, args).fetchall()]
+        if q:
+            ql = q.lower()
+            rows = [r for r in rows if ql in (r["message"] or "").lower() or ql in (r["kind"] or "").lower()][:limit]
+        return rows
+
+    def prune(self, days: float, now: float | None = None) -> int:
+        """Удалить события старше days дней (и решения координатора того же возраста, кроме неразобранных
+        предложений). Журнал не растёт бесконечно; копии старых событий остаются в резервных копиях."""
+        cut = (time.time() if now is None else now) - days * 86400
+        with self._lock:
+            n = self.db.execute("DELETE FROM events WHERE ts < ?", (cut,)).rowcount
+            has = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='coord_decisions'").fetchone()
+            if has:
+                n += self.db.execute("DELETE FROM coord_decisions WHERE ts < ? AND status <> 'proposed'", (cut,)).rowcount
+            self.db.commit()
+        return n
 
     def close(self) -> None:
         with self._lock:

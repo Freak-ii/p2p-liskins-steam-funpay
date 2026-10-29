@@ -72,6 +72,7 @@ class Worker:
         self._want_running = False
         self.soft_stopped = False        # последняя остановка прошла через команду боту, а не kill
         self.adopted = False             # процесс запущен не этим центром, а подхвачен от прошлого запуска
+        self.extra_env = None            # функция -> dict: переменные от центра (реестр обменов Steam)
         self._supervise_task: asyncio.Task | None = None
         self._readers: list[asyncio.Task] = []
         self._log_path: Path | None = self.home.parent / "logs" / f"{self.name}.log"
@@ -189,7 +190,8 @@ class Worker:
 
     async def _spawn(self) -> None:
         self.prepare()
-        env = {**os.environ, **self.env(), "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+        env = {**os.environ, **(self.extra_env() if self.extra_env else {}), **self.env(),
+               "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
         kwargs = {}
         if sys.platform == "win32":
             kwargs["creationflags"] = 0x08000000      # CREATE_NO_WINDOW: без лишних консольных окон

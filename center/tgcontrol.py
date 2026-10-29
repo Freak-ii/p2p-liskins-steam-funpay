@@ -24,8 +24,10 @@ BOT_NAMES = {"lisbot": "lisbot", "lis": "lisbot", "mannbot": "mannbot", "mann": 
 PANEL_ONLY = {"set_live_mode", "withdraw"}          # деньги и боевой режим — только из панели
 HELP = ("<b>Центр перепродажи</b>\n"
         "/status — состояние ботов и тревоги\n"
-        "/report — отчёт за сутки, /week — за неделю\n"
-        "/stock — склад LisBot и ключи MannBot\n"
+        "/today — сегодня против вчера, /report — отчёт за сутки, /week — за неделю, /month — итоги прошлого месяца\n"
+        "/stock — склад LisBot и ключи MannBot, /goal — цель месяца\n"
+        "/ready — готовность к боевому режиму, /orders — застрявшие заказы MannBot\n"
+        "/errors — частые ошибки в выводе ботов за 24 ч\n"
         "/proposals — предложения координатора с кнопками\n"
         "/pause lisbot|mannbot — пауза торговли, /resume — продолжить\n"
         "/buypause, /buyresume — закупки LisBot\n"
@@ -104,6 +106,36 @@ class TelegramControl:
             return [(self._status_text(), None)]
         if cmd == "/report":
             return [(c.monitor.daily_report(), None)]
+        if cmd == "/goal":
+            g = await c.analytics.goal()
+            if not g["goal"]:
+                return [(f"Прибыль с начала месяца {g['profit']:,.0f} ₽, прогноз {g['forecast']:,.0f} ₽. "
+                         "Цель задаётся в панели: «Аналитика» → «Цель месяца».".replace(",", " "), None)]
+            return [((f"🎯 {g['profit']:,.0f} из {g['goal']:,.0f} ₽ ({g['progress']}%), прогноз {g['forecast']:,.0f} ₽"
+                      + (f", нужно {g['need_per_day']:,.0f} ₽ в день" if g["need_per_day"] else "")).replace(",", " "), None)]
+        if cmd == "/orders":
+            rows = c.coordinator.stuck_orders()
+            if not rows:
+                return [("Застрявших заказов MannBot нет", None)]
+            return [("<b>Заказы MannBot без выдачи</b>\n" + "\n".join(
+                f"• {html.escape(str(r['order_id']))} — {html.escape(r['buyer'] or '?')}, {r['status_text']}, {r['hours']:.0f} ч"
+                for r in rows[:20]), None)]
+        if cmd == "/errors":
+            out = []
+            for name, e in c.monitor.errors(24).items():
+                title = html.escape(c.workers[name].title)
+                if not e["n"]:
+                    out.append(f"<b>{title}</b>: ошибок нет")
+                    continue
+                out.append(f"<b>{title}</b>: {e['n']} ошибок")
+                out += [f"• {t['n']}× {html.escape(t['text'][:200])}" for t in e["top"]]
+            return [("\n".join(out) or "Боты не запущены", None)]
+        if cmd == "/ready":
+            return [("\n".join(html.escape(x) for x in c.readiness.lines()), None)]
+        if cmd == "/today":
+            return [(await c.monitor.today_report(), None)]
+        if cmd == "/month":
+            return [(await c.monitor.monthly_report(), None)]
         if cmd == "/week":
             return [(await c.monitor.weekly_report(), None)]
         if cmd == "/stock":

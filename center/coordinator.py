@@ -274,7 +274,7 @@ class StubBackend:
         for w in (p7.get("warnings") or [])[:2]:
             reco("Проверить настройки MannBot", w)
         inv = f.get("inventory") or {}
-        il, im = inv.get("lisbot") or {}, inv.get("mannbot") or {}
+        il, im, br = inv.get("lisbot") or {}, inv.get("mannbot") or {}, inv.get("bridge") or {}
         if il.get("n"):
             hi.append(f"Склад LisBot: {il['n']} шт на ${_n(il.get('cost'), 2)}, по рынку {_n(il.get('pnl'), 2)} $")
         if il.get("losing") or il.get("old"):
@@ -284,7 +284,44 @@ class StubBackend:
         if im.get("level") in ("low", "empty"):
             reco("Пополнить склад ключей MannBot",
                  f"На складе {im.get('stock')} ключей" + (f", хватит примерно на {_n(im.get('days_left'), 1)} дн."
-                                                          if im.get("days_left") is not None else "."))
+                                                          if im.get("days_left") is not None else ".")
+                 + (f" Докупите {im['restock']} ключей, чтобы хватило на {_n(im.get('target_days'), 0)} дн." if im.get("restock") else "")
+                 + ((f" Ещё {im['bridge_coming']} ключей куплены с кошелька и ждут 7 дней блокировки." if br.get("same_account")
+                     else f" Ещё {im['bridge_coming']} ключей едут по мосту от LisBot.") if im.get("bridge_coming") else "")
+                 + ("" if br.get("enabled") else " Ключи можно покупать за кошелёк Steam: включите в настройках LisBot "
+                    "«Мост ключей» и покупку ключей на ТП Steam."))
+        if br.get("enabled") and br.get("failed") and not br.get("same_account"):
+            reco("Проверить приём ключей MannBot",
+                 f"MannBot не принял {br['failed']} ключей из моста (обмены отклонены или истекли), они вернулись к LisBot. "
+                 "Проверьте, что в MannBot в security.accept_gifts_from указан SteamID аккаунта LisBot и MannBot запущен.")
+        rd = f.get("readiness") or {}
+        if rd.get("problems"):
+            reco("Доделать настройку перед боевым режимом", "Не готово: " + "; ".join(rd["problems"][:4])
+                 + (f" и ещё {len(rd['problems']) - 4}" if len(rd["problems"]) > 4 else "") + ". Подробности — карточка под ботами или /ready.")
+        types = f.get("lis_types_30d") if isinstance(f.get("lis_types_30d"), list) else []
+        for t in [t for t in types if (t.get("sold") or 0) >= 5 and t.get("roi") is not None and t["roi"] < 0][:2]:
+            reco(f"Пересмотреть закупку LisBot: {t['type'].lower()}",
+                 f"За 30 дней продано {t['sold']} шт, итог {_n(t['profit'], 2)} $ (ROI {_n(t['roi'], 1)}%). Уберите эти предметы "
+                 "из закупки или поднимите для них минимальный ROI (аналитика → LisBot · предметы).")
+        cut = f.get("lis_roi_cut_30d") if isinstance(f.get("lis_roi_cut_30d"), list) else []
+        cur = next((r for r in cut if r.get("current")), None)
+        if cur and not any(r["title"].startswith("Поднять минимальный ROI LisBot") for r in recs):
+            # порог выше нынешнего, который отсёк бы 3+ сделки, в сумме убыточные: прибыль только выросла бы
+            better = [(r["profit"] - cur["profit"], r) for r in cut if r["min_roi"] > cur["min_roi"]
+                      and cur["deals"] - r["deals"] >= 3 and r["profit"] > cur["profit"]]
+            if better:
+                gain, r = max(better, key=lambda x: x[0])
+                reco(f"Поднять минимальный ROI LisBot до {_n(r['min_roi'] * 100, 0)}%",
+                     f"За 30 дней сделки с прогнозом ROI от {_n(cur['min_roi'] * 100, 0)}% до {_n(r['min_roi'] * 100, 0)}% "
+                     f"({cur['deals'] - r['deals']} шт) в сумме дали {_n(-gain, 2)} $. С порогом {_n(r['min_roi'] * 100, 0)}% "
+                     f"прибыль была бы {_n(r['profit'], 2)} $ вместо {_n(cur['profit'], 2)} $ (аналитика → «Если бы минимальный ROI был другим»).",
+                     "change_strategy", {"changes": {"strategy.minRoi": r["min_roi"]}})
+        cu = f.get("customers") or {}
+        if (cu.get("counts") or {}).get("sleeping"):
+            names = ", ".join(x["username"] or str(x["funpay_id"]) for x in cu.get("sleeping_top", [])[:3])
+            reco("Вернуть уснувших покупателей FunPay",
+                 f"Не покупают дольше {_n(cu.get('sleep_days'), 0)} дн: {cu['counts']['sleeping']} покупателей"
+                 + (f" ({names})" if names else "") + ". Напишите им в чат FunPay или сделайте скидку (вкладка CRM → «Уснул»).")
         for a in f.get("anomalies_24h", [])[:3]:
             hi.append(f"Аномалия: {a}")
         bad = [b["title"] for b in f.get("bots", []) if b["state"] != RUNNING]
@@ -535,6 +572,12 @@ class Coordinator:
             return await self._lis_settings(args["changes"])
         if tool == "set_live_mode":
             if args["bot"] == "lisbot":
+                rd = getattr(self.center, "readiness", None)
+                if args["live"] and rd is not None and not self.center.demo:
+                    blockers = [i["title"] for i in rd.check()["items"] if i["level"] == "fail"
+                                and (i["key"].startswith("lis_") or i["key"] in ("steam_separate", "tg_separate"))]
+                    if blockers:
+                        raise ToolError("боевой режим не включён — сначала исправьте: " + "; ".join(blockers))
                 return await self._lis_settings({"dryRun": not args["live"]})
             raise ToolError("режим MannBot переключается в его панели (настройки → тестовый режим)")
         raise ToolError("этот инструмент центр не выполняет — только вручную")
@@ -641,6 +684,21 @@ class Coordinator:
     def _mann_db(self):
         return self.center.analytics.mann_db
 
+    def stuck_orders(self) -> list[dict]:
+        """Оплаченные заказы MannBot, которые ждут выдачи дольше mann_stuck_hours или вашей проверки дольше mann_approval_hours."""
+        a = self.cfg.get("anomaly") or {}
+        now = self.clock()
+        stuck_h, appr_h = float(a.get("mann_stuck_hours") or 2), float(a.get("mann_approval_hours") or 1)
+        st_text = {"ready_to_send": "готовим обмен", "offer_sent": "трейд не принят", "manual": "ждёт вас",
+                   "pending_approval": "ждёт вашей проверки"}
+        rows = _rows(self._mann_db(), "SELECT order_id, buyer_username, status, created_at, "
+                     "COALESCE(offer_sent_at, paid_at, created_at) t FROM orders WHERE "
+                     "(status IN ('ready_to_send','offer_sent','manual') AND COALESCE(offer_sent_at, paid_at, created_at)<?) "
+                     "OR (status='pending_approval' AND created_at<?) ORDER BY created_at",
+                     (now - stuck_h * 3600, now - appr_h * 3600))
+        return [{"order_id": r["order_id"], "buyer": r["buyer_username"], "status": r["status"],
+                 "status_text": st_text.get(r["status"], r["status"]), "hours": (now - r["t"]) / 3600} for r in rows]
+
     def detect(self) -> list[dict]:
         """Правила без ИИ. Каждое: code, title, reason, tool, args, auto (явная аномалия → можно действовать самому)."""
         a = self.cfg.get("anomaly") or {}
@@ -686,7 +744,48 @@ class Coordinator:
                         "title": f"LisBot: «{r['name']}» в минусе",
                         "reason": f"«{r['name']}»: {r['n']} продаж за {days:.0f} дн, итог −${-r['p']:.2f}. "
                                   "Предлагаю перестать его закупать (уже купленное продаётся как обычно)."})
-        # 5. бот упал окончательно — центр перестал его перезапускать
+        # 5. заказы MannBot застряли: покупатель оплатил, а ключи не выдаются (портит рейтинг на FunPay)
+        stuck = self.stuck_orders()
+        if stuck:
+            lst = ", ".join(f"{r['order_id']} ({r['buyer'] or '?'}, {r['status_text']}, {r['hours']:.0f} ч)" for r in stuck[:5])
+            out.append({"code": "mann_stuck", "auto": False, "tool": None, "args": {},
+                        "title": f"MannBot: {len(stuck)} заказ(ов) застряли",
+                        "reason": f"Оплаченные заказы без выдачи ключей: {lst}"
+                                  + (f" и ещё {len(stuck) - 5}" if len(stuck) > 5 else "")
+                                  + ". Проверьте их в панели MannBot, иначе покупатели оставят плохой отзыв."})
+        # 6. LisBot в боевом режиме перестал закупать, хотя обычно покупает каждый день
+        s = self.center.summaries.get("lisbot") or {}
+        w = self.center.workers.get("lisbot")
+        stall_h = float(a.get("lis_stall_hours") or 24)
+        if (stall_h and w is not None and w.state == RUNNING and s and s.get("dry_run") is False and not s.get("demo")
+                and not self._buy_paused()):
+            week = [r["created_at"] for r in rows if r["created_at"] >= (now - 7 * 86400) * 1000]
+            last = max((r["created_at"] for r in rows), default=None)
+            per_day = len(week) / 7
+            if per_day >= 1 and last is not None and now - last / 1000 > stall_h * 3600:
+                out.append({"code": "lis_buy_stall", "auto": False, "tool": None, "args": {},
+                            "title": "LisBot перестал закупать",
+                            "reason": f"Последняя покупка {(now - last / 1000) / 3600:.0f} ч назад, а за неделю обычно "
+                                      f"{per_day:.1f} в день. Проверьте баланс LIS-SKINS, лимиты, подключение к LIS "
+                                      "и журнал LisBot."})
+        # 7. рынок пошёл вниз: купленные предметы LisBot подешевели больше порога (по свежей оценке цены)
+        drop = float(a.get("lis_drop_pct") or 0)
+        inv = getattr(self.center, "inventory", None)
+        if drop and inv is not None:
+            try:
+                fallen = [i for i in inv.lisbot()["items"] if i["value_source"] == "рынок" and i["pnl_pct"] is not None
+                          and i["pnl_pct"] <= -drop]
+            except Exception:  # noqa: BLE001
+                fallen = []
+            if fallen:
+                loss = -sum(i["pnl"] for i in fallen)
+                lst = ", ".join(f"{i['name']} {i['pnl_pct']:.0f}%" for i in sorted(fallen, key=lambda i: i["pnl_pct"])[:5])
+                out.append({"code": "lis_market_drop", "auto": False, "tool": None, "args": {},
+                            "title": f"LisBot: {len(fallen)} предмет(ов) подешевели больше чем на {drop:.0f}%",
+                            "reason": f"По рынку сейчас −${loss:.2f}: {lst}" + (f" и ещё {len(fallen) - 5}" if len(fallen) > 5 else "")
+                                      + ". Решите, держать или продавать (аналитика → «Склад»); если падает весь рынок, "
+                                        "поставьте закупки на паузу."})
+        # 8. бот упал окончательно — центр перестал его перезапускать
         for name, w in self.center.workers.items():
             if w.state == CRASHED:
                 out.append({"code": f"{name}_crashed", "auto": False, "tool": "restart_bot", "args": {"bot": name},
@@ -706,8 +805,12 @@ class Coordinator:
             if now - last < cooldown:
                 continue
             self.kv_set(f"anomaly:{an['code']}", now)
-            self._add("anomaly", "info", an["title"], tool=an["tool"], args=an["args"], reason=an["reason"],
+            self._add("anomaly", "info", an["title"], tool=an["tool"] or "none", args=an["args"], reason=an["reason"],
                       source=f"rule:{an['code']}")
+            if an["tool"] is None:                       # действовать нечем — только сообщить
+                await self._notify(f"coord:anomaly:{an['code']}", "warn",
+                                   f"<b>🤖 Координатор: {html.escape(an['title'])}</b>\n{html.escape(an['reason'])}")
+                continue
             if an["tool"] == "pause_buying" and self._buy_paused():
                 await self._notify(f"coord:anomaly:{an['code']}", "warn",
                                    f"<b>🤖 Координатор: {html.escape(an['title'])}</b>\n{html.escape(an['reason'])}\n"
@@ -758,6 +861,23 @@ class Coordinator:
             out["inventory"] = c.inventory.brief()
         except Exception as e:  # noqa: BLE001
             out["inventory"] = {"error": str(e)}
+        rd = getattr(c, "readiness", None)
+        if rd is not None and not c.demo:
+            try:
+                r = rd.check()
+                out["readiness"] = {"ready": r["ready"], "problems": [i["title"] for i in r["items"] if i["level"] == "fail"],
+                                    "warnings": [i["title"] for i in r["items"] if i["level"] == "warn"]}
+            except Exception as e:  # noqa: BLE001
+                out["readiness"] = {"error": str(e)}
+        try:
+            ld = await asyncio.to_thread(c.analytics.lisbot_details, 30)
+            out["lis_types_30d"], out["lis_roi_cut_30d"] = ld["by_type"], ld.get("roi_cut") or []
+        except Exception as e:  # noqa: BLE001
+            out["lis_types_30d"] = {"error": str(e)}
+        try:
+            out["customers"] = await asyncio.to_thread(c.crm.segments_brief, self.clock())
+        except Exception as e:  # noqa: BLE001
+            out["customers"] = {"error": str(e)}
         out["events_24h"] = crit
         out["open_proposals"] = [{"id": p["id"], "title": p["title"], "tool": p["tool"], "args": p["args"]}
                                  for p in self.decisions(20, kind="proposal", status="proposed")]

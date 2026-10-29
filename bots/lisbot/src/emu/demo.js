@@ -28,7 +28,7 @@ function merge(dst, src) {
 export function demoConfig(cfg) {
   merge(cfg, structuredClone(DEMO_OVERRIDES));
   Object.assign(cfg.secrets, {
-    lisApiKey: 'demo', steamAccountName: 'demo', steamPassword: 'demo', sharedSecret: 'demo', identitySecret: 'demo',
+    lisApiKey: 'demo', steamAccountName: 'demo', steamPassword: 'demo', sharedSecret: 'ZGVtby1kZW1vLWRlbW8tZGVtbzE=', identitySecret: 'ZGVtby1kZW1vLWRlbW8tZGVtbzE=',
     tradeUrl: 'https://steamcommunity.com/tradeoffer/new/?partner=1&token=demo',
   });
   cfg.trade = { partner: '1', token: 'demo' };

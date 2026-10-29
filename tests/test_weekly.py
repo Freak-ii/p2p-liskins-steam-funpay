@@ -67,3 +67,58 @@ def test_month_goal_progress_and_forecast(tmp_path):
         assert "Цель месяца" in await c.monitor.weekly_report()
         c.events.close()
     asyncio.run(go())
+
+
+def test_monthly_report_and_due(tmp_path):
+    seed(tmp_path)
+    now = time.time()
+    lt = time.localtime(now)
+    y, m = (lt.tm_year, lt.tm_mon + 1) if lt.tm_mon < 12 else (lt.tm_year + 1, 1)
+    first_10 = time.mktime((y, m, 1, 10, 0, 0, 0, 0, -1))           # 1-е число следующего месяца, 10:00
+
+    if lt.tm_mday <= 2:                                              # сделки сида могли попасть в позапрошлый месяц
+        return
+
+    async def go():
+        c = Center(tmp_path)
+        c.monitor.clock = lambda: first_10
+        c.analytics.save_goal(300)
+        text = await c.monitor.monthly_report()
+        assert "Итоги месяца" in text and "Сделок 4" in text and "Прибыль 360 ₽" in text
+        assert "✅ Цель месяца 300 ₽: выполнена" in text and "Аптайм за 30 дней" in text
+        c.analytics.save_goal(1000)
+        assert "❌ Цель месяца 1 000 ₽: не выполнена" in (await c.monitor.monthly_report()).replace(" ", " ")
+        token = c.cfg.ensure_token()
+        async with TestClient(TestServer(make_app(c))) as cl:
+            await cl.get(f"/login?token={token}", allow_redirects=False)
+            r = await (await cl.get("/api/monitor/report?period=month")).json()
+            assert "Итоги месяца" in r["text"]
+        assert c.monitor.monthly_due()
+        c.monitor.kv_set("monthly_report_month", time.strftime("%Y-%m", time.localtime(first_10)))
+        assert not c.monitor.monthly_due()
+        c.monitor.clock = lambda: first_10 + 86400                   # 2-е число
+        c.monitor.kv_set("monthly_report_month", "")
+        assert not c.monitor.monthly_due()
+        c.events.close()
+    asyncio.run(go())
+
+
+def test_weekly_report_by_item_type(tmp_path):
+    import sqlite3
+    from tests.test_analytics import DAY, NOW
+    seed(tmp_path)
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    con.execute("INSERT INTO items(name,mode,status,dry_run,buy_price_usd,expected_net_usd,received_at,sold_at,sold_usd,profit_usd,"
+                "created_at,updated_at) VALUES('★ Karambit | Doppler','rtba','sold',0,500,520,?,?,505,5,?,?)",
+                tuple(int((NOW - d * DAY) * 1000) for d in (12, 1, 13, 13)))
+    con.commit()
+    con.close()
+
+    async def go():
+        c = Center(tmp_path)
+        text = await c.monitor.weekly_report()
+        assert "По типам: Ножи +$5.00 (1 шт) · Винтовки +$3.00 (2 шт)" in text
+        assert "По сроку удержания: до 8 дн +$3.00 (2 шт) · 10–14 дн +$5.00 (1 шт)" in text
+        assert "MannBot, не дошли до выдачи: причина не записана — 1 (возврат 1)" in text      # A3 из seed
+        c.events.close()
+    asyncio.run(go())

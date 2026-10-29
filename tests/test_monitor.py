@@ -241,3 +241,65 @@ def test_bot_ack_calls_bot_api(tmp_path):
         await srv.close()
         c.events.close()
     asyncio.run(go())
+
+
+def test_hung_bot_is_restarted_once_an_hour(tmp_path):
+    async def go():
+        c, sent = _center(tmp_path, {"unresponsive_after": 2, "restart_unresponsive_after": 3})
+        w = c.workers["lisbot"]
+        w.proc, w.state, w._want_running = _FakeProc(), RUNNING, True
+        restarts = []
+
+        async def health():
+            return False
+
+        async def restart(reason="панель"):
+            restarts.append(reason)
+            return "перезапущен"
+        w.health, w.restart = health, restart
+        for _ in range(3):
+            await c.monitor.sample()
+        assert restarts == ["бот завис"]
+        kinds = [e["kind"] for e in c.events.recent(10)]
+        assert "monitor.auto_restart" in kinds and "monitor.unresponsive" in kinds
+        for _ in range(6):                                          # после перезапуска опять завис — второй раз за час нельзя
+            await c.monitor.sample()
+        assert restarts == ["бот завис"]
+        c.monitor.kv_set("auto_restart:lisbot", time.time() - 3700)
+        await c.monitor.sample()
+        assert len(restarts) == 2
+        c.events.close()
+    asyncio.run(go())
+
+
+def test_events_pruned(tmp_path):
+    c = Center(tmp_path)
+    c.events.add("center", "info", "old", "старое")
+    c.events.db.execute("UPDATE events SET ts=? WHERE kind='old'", (time.time() - 200 * 86400,))
+    c.coordinator._add("anomaly", "info", "давнее", source="t")
+    pid = c.coordinator._add("proposal", "proposed", "ждёт решения", source="t")
+    c.events.db.execute("UPDATE coord_decisions SET ts=?", (time.time() - 200 * 86400,))
+    c.events.db.commit()
+    c.events.add("center", "info", "new", "свежее")
+    assert c.events.prune(180) == 2
+    kinds = [e["kind"] for e in c.events.recent(10)]
+    assert "old" not in kinds and "new" in kinds
+    assert [d["id"] for d in c.coordinator.decisions(10)] == [pid]               # неразобранное предложение остаётся
+    c.events.close()
+
+
+def test_events_filter_api(tmp_path):
+    async def go():
+        c = Center(tmp_path)
+        c.events.add("lisbot", "info", "x.ok", "Всё хорошо")
+        c.events.add("mannbot", "warn", "x.warn", "Заказ ждёт проверки")
+        c.events.add("center", "critical", "x.crit", "Бот упал")
+        assert [e["kind"] for e in c.events.recent(10, important=True)][:2] == ["x.crit", "x.warn"]
+        assert [e["kind"] for e in c.events.recent(10, q="заказ")] == ["x.warn"]
+        token = c.cfg.ensure_token()
+        async with TestClient(TestServer(make_app(c))) as cl:
+            await cl.get(f"/login?token={token}", allow_redirects=False)
+            r = await (await cl.get("/api/events?source=mannbot&level=important&q=проверки&limit=x")).json()
+            assert [e["kind"] for e in r] == ["x.warn"]
+        c.events.close()
+    asyncio.run(go())

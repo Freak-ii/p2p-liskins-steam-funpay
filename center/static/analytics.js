@@ -89,11 +89,23 @@ function anLis(d) {
   $('#anLis').innerHTML = `<h3><span class="swatch" style="background:var(--s-lisbot)"></span>LisBot · предметы</h3>
     <div class="stat">${st(pct(f.fact_to_forecast), 'факт / прогноз цены')}${st(pct(f.mean_abs_error), 'ошибка прогноза')}
       ${st(d.hold.median_days == null ? '—' : d.hold.median_days + ' дн', 'медиана удержания')}${st(open, 'в работе сейчас')}</div>
+    ${(d.by_type || []).length > 1 ? `<table class="pnl" style="margin-bottom:12px"><thead><tr><th>Тип</th><th>Предметов</th><th>Куплено</th><th>Продано</th><th>Прибыль</th><th title="Прибыль к цене покупки проданных">ROI</th></tr></thead><tbody>
+      ${d.by_type.map((t) => `<tr><td>${esc(t.type)}</td><td>${t.names}</td><td>${t.bought}</td><td>${t.sold || 0}</td><td>${signed(t.profit, 'USD')}</td><td>${pct(t.roi)}</td></tr>`).join('')}</tbody></table>` : ''}
     <div class="scroll"><table class="pnl"><thead><tr><th>Предмет</th><th>Куплено</th><th>Продано</th><th>Прибыль</th><th>ROI</th><th>Удерж.</th><th>Прогноз</th></tr></thead><tbody>
     ${d.items.map((i) => `<tr><td title="${esc(i.name)}">${esc(i.name.length > 34 ? i.name.slice(0, 33) + '…' : i.name)}</td><td>${i.bought}</td><td>${i.sold || 0}</td>
       <td>${signed(i.profit, 'USD')}</td><td>${pct(i.roi)}</td><td>${i.hold_days == null ? '—' : i.hold_days + ' дн'}</td><td>${pct(i.accuracy)}</td></tr>`).join('')
       || '<tr><td colspan="7" class="muted">Сделок пока нет</td></tr>'}</tbody></table></div>
-    <div class="muted small" style="margin-top:6px">Суммы в $. «Прогноз» — фактическая выручка в % от оценки при покупке.</div>`;
+    <div class="muted small" style="margin-top:6px">Суммы в $. «Прогноз» — фактическая выручка в % от оценки при покупке.</div>
+    ${(d.by_hold || []).length > 1 ? `<h3 style="margin-top:14px">Сколько держали до продажи</h3>
+    <table class="pnl"><thead><tr><th>Удержание</th><th>Сделок</th><th>В минус</th><th>Прибыль</th><th>ROI</th></tr></thead><tbody>
+      ${d.by_hold.map((h) => `<tr><td>${esc(h.label)}</td><td>${h.deals}</td><td class="${h.losers ? 'neg' : ''}">${h.losers}</td>
+        <td>${signed(h.profit, 'USD')}</td><td>${pct(h.roi)}</td></tr>`).join('')}</tbody></table>
+    <div class="muted small" style="margin-top:6px">От получения предмета до продажи, вместе с 7 днями Trade Protection. Если долгие сделки уходят в минус, стоит раньше снижать цену или не брать медленные предметы.</div>` : ''}
+    ${(d.roi_cut || []).length ? `<h3 style="margin-top:14px">Если бы минимальный ROI был другим</h3>
+    <table class="pnl"><thead><tr><th>Мин. ROI</th><th>Сделок</th><th>В минус</th><th>Прибыль</th><th>ROI</th></tr></thead><tbody>
+      ${d.roi_cut.map((r) => `<tr${r.current ? ' style="font-weight:600"' : ''}><td>${Math.round(r.min_roi * 100)}%${r.current ? ' · сейчас' : ''}</td><td>${r.deals}</td>
+        <td class="${r.losers ? 'neg' : ''}">${r.losers}</td><td>${signed(r.profit, 'USD')}</td><td>${pct(r.roi)}</td></tr>`).join('')}</tbody></table>
+    <div class="muted small" style="margin-top:6px">Проданные сделки, у которых прогноз ROI при покупке был не ниже порога (strategy.minRoi LisBot). Поднимать порог стоит, если при этом уходят в основном убыточные сделки.</div>` : ''}`;
 }
 
 function anMann(d) {
@@ -104,7 +116,22 @@ function anMann(d) {
       ${st(pct(d.refund_rate), 'возвратов')}${st(dur(t.total), 'оплата → выдача')}${st(dur(t.confirm), 'выдача → подтверждение')}</div>
     <table><tbody>${d.funnel.map((f) => `<tr><td style="width:40%">${esc(f.stage)}</td><td style="width:15%">${f.n}</td>
       <td><div class="bar" style="width:${f.pct || 0}%" title="${pct(f.pct)}"></div></td><td style="width:12%" class="muted">${pct(f.pct)}</td></tr>`).join('')}</tbody></table>
-    <div class="muted small" style="margin-top:6px">Медианы: ссылка ${dur(t.link)} · трейд ${dur(t.offer)} · принятие ${dur(t.accept)}.</div>`;
+    <div class="muted small" style="margin-top:6px">Медианы: ссылка ${dur(t.link)} · трейд ${dur(t.offer)} · принятие ${dur(t.accept)}.</div>
+    ${(d.problems || []).length ? `<h4 style="margin:12px 0 4px">Почему заказы не дошли до выдачи</h4><table><tbody>
+      ${d.problems.map((p) => `<tr><td>${esc(p.reason)}</td><td style="width:12%">${p.n}</td><td class="muted small">${Object.entries(p.statuses).map(([k, v]) => `${esc(k)} ${v}`).join(', ')}</td></tr>`).join('')}</tbody></table>` : ''}
+    ${d.orders ? whenBuy(d.by_hour, d.by_weekday) : ''}`;
+}
+
+// Когда покупают: столбики по часам суток и дням недели (местное время компьютера с центром)
+function whenBuy(hours, days) {
+  const bars = (arr, labels) => {
+    const mx = Math.max(1, ...arr);
+    return `<div class="when">${arr.map((n, i) => `<div title="${labels[i]}: ${n}"><i style="height:${Math.round(n / mx * 100)}%"></i><span>${labels[i]}</span></div>`).join('')}</div>`;
+  };
+  const top = hours.map((n, h) => [n, h]).sort((a, b) => b[0] - a[0]).slice(0, 3).filter(([n]) => n).map(([, h]) => `${h}:00`);
+  return `<h4 style="margin:12px 0 4px">Когда покупают</h4>
+    ${bars(hours, hours.map((_, h) => String(h)))}${bars(days, ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'])}
+    <div class="muted small">${top.length ? `Больше всего заказов в ${top.join(', ')}. Держите ключи на складе и не ставьте на эти часы тихие часы.` : ''}</div>`;
 }
 
 async function anLoad() {

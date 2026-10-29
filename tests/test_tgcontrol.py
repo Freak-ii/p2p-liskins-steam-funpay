@@ -93,3 +93,70 @@ def test_proposal_buttons_and_confirm_tier(tmp_path):
         assert co.get(lim["id"])["status"] == "failed"                            # LisBot не запущен — выполнение честно не удалось
         c.events.close()
     asyncio.run(go())
+
+
+def test_goal_command(tmp_path):
+    async def go():
+        c, calls = _center(tmp_path)
+        c._updates = [_msg(1, "/goal")]
+        await c.tg.poll_once()
+        assert "Цель задаётся в панели" in calls[-1][1]["text"]
+        c.analytics.save_goal(50000)
+        c._updates = [_msg(2, "/goal")]
+        await c.tg.poll_once()
+        assert "из 50 000 ₽" in calls[-1][1]["text"]
+        c._updates = [_msg(3, "/ready")]
+        await c.tg.poll_once()
+        assert "не задан ключ API LIS-SKINS" in calls[-1][1]["text"]
+        c.events.close()
+    asyncio.run(go())
+
+
+def test_errors_command_and_daily_report(tmp_path):
+    import time
+
+    async def go():
+        c, calls = _center(tmp_path)
+        c._updates = [_msg(1, "/errors")]
+        await c.tg.poll_once()
+        assert "Steam</b>: ошибок нет" in calls[-1][1]["text"]
+        w = c.workers["mannbot"]
+        for i in range(3):
+            w.seq += 1
+            w.lines.append({"n": w.seq, "ts": time.time() - 60, "stream": "stderr",
+                            "text": f"2026-10-18 10:00:0{i} ERROR   funpay   <timeout> order {i}"})
+        c._updates = [_msg(2, "/errors")]
+        await c.tg.poll_once()
+        text = calls[-1][1]["text"]
+        assert "FunPay</b>: 3 ошибок" in text and "3× " in text and "&lt;timeout&gt;" in text
+        assert "Ошибок в выводе: 3" in c.monitor.daily_report()
+        c.events.close()
+    asyncio.run(go())
+
+
+def test_today_command(tmp_path):
+    import sqlite3
+    import time
+    from tests.test_analytics import seed
+    seed(tmp_path)
+    lt = time.localtime(time.time() + 30 * 86400)      # через месяц: сделки seed() не попадают ни в сегодня, ни во вчера
+    noon = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 12, 0, 0, 0, 0, -1))
+    con = sqlite3.connect(tmp_path / "lisbot" / "data" / "bot.sqlite")
+    for name, sold, profit in (("T1", noon - 3600, 2.0), ("Y1", noon - 86400 - 3600, 1.0), ("Y2", noon - 86400 + 3600, 5.0)):
+        ms = int(sold * 1000)
+        con.execute("INSERT INTO items(name,mode,status,dry_run,buy_price_usd,expected_net_usd,received_at,sold_at,sold_usd,"
+                    "profit_usd,created_at,updated_at) VALUES(?,'rtba','sold',0,10,12,?,?,?,?,?,?)",
+                    (name, ms - 9 * 86400000, ms, 10 + profit, profit, ms - 10 * 86400000, ms))
+    con.commit()
+    con.close()
+
+    async def go():
+        c, calls = _center(tmp_path)
+        c.monitor.clock = lambda: noon
+        c._updates = [_msg(1, "/today")]
+        await c.tg.poll_once()
+        text = calls[-1][1]["text"]
+        # курс seed — 90 ₽/$: сегодня +2 $ = 180 ₽, вчера к полудню +1 $ = 90 ₽ (Y2 продан вчера после полудня — не в счёт)
+        assert "Сегодня до 12:00" in text and "Прибыль 180 ₽</b> (вчера 90)" in text and "Сделок 1 (вчера 1)" in text
+        c.events.close()
+    asyncio.run(go())
