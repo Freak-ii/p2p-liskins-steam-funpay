@@ -136,13 +136,21 @@ def requirement_lines() -> list[str]:
     return out
 
 
+PURE_SDISTS = ["pyaes==1.6.1"]
+
+
 def install_packages(site: Path, reqs: list[str]) -> list[str]:
     wheels = CACHE / f"wheels-{PY_MINOR}"
     shutil.rmtree(wheels, ignore_errors=True)
     wheels.mkdir(parents=True)
+    # чисто-питоновские пакеты, которые на PyPI есть только исходниками (pyaes для telethon):
+    # собираем из них универсальный wheel локально, pip download найдёт его через --find-links
+    for sdist in PURE_SDISTS:
+        run([sys.executable, "-m", "pip", "wheel", "--disable-pip-version-check", "--no-deps",
+             "-w", str(wheels), sdist])
     run([sys.executable, "-m", "pip", "download", "--disable-pip-version-check", "--only-binary=:all:",
          "--platform", "win_amd64", "--python-version", PY_MINOR, "--implementation", "cp",
-         "-d", str(wheels), *reqs])
+         "--find-links", str(wheels), "-d", str(wheels), *reqs])
     site.mkdir(parents=True, exist_ok=True)
     names = []
     for whl in sorted(wheels.glob("*.whl")):
