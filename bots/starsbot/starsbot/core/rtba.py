@@ -104,8 +104,11 @@ class RTBAEngine:
 
     def decide(self, lots: list[CompetitorLot], *, offer_id: str, stars: int, own_offer_ids: set[str],
                own_username: str, current_lot_price: float | None, cost_per_star_rub: float | None,
-               fee_pct: float = 0.0, now: float | None = None) -> PriceDecision:
-        cfg = self.cfg
+               fee_pct: float = 0.0, now: float | None = None, overrides: dict | None = None) -> PriceDecision:
+        """overrides — настройки конкретного лота: своя позиция (strategy/target_position) и способ (method_filter)."""
+        from starsbot.config import Section
+        cfg = Section({**self.cfg, **overrides}) if overrides else self.cfg
+        self._cur = cfg
         now = now or time.time()
         markup = self.markup.get(offer_id, 1.0)
         comps = filter_competitors(lots, cfg, stars, own_offer_ids, own_username)
@@ -147,7 +150,7 @@ class RTBAEngine:
 
     def _finish(self, d: PriceDecision, offer_id: str, markup: float, current: float | None, floor: float,
                 ceil: float | None, now: float) -> PriceDecision:
-        cfg = self.cfg
+        cfg = getattr(self, "_cur", None) or self.cfg
         t = max(d.target_lot_price or floor, floor)
         if ceil:
             t = min(t, ceil)

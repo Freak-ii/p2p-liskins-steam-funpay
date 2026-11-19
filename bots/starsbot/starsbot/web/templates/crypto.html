@@ -1,0 +1,73 @@
+{% extends "base.html" %}{% block title %}Крипта{% endblock %}
+{% block body %}
+<h1>Крипта: кошелёк GRAM (TON) и автопилот</h1>
+{% set wd = acfg.withdraw or {} %}
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ winfo.balance|ton if winfo.balance is not none else '—' }}</div><div class="l">GRAM (TON) на кошельке бота{% if rate %} · ≈ {{ ((winfo.balance or 0) * rate)|money }} ₽{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ winfo.capacity if winfo.capacity is not none else '—' }} ⭐</div><div class="l">хватит на звёзды (Fragment)</div></div>
+  <div class="card kpi"><div class="v">{{ ap.get('funpay_balance')|money if ap.get('funpay_balance') is not none else '—' }} ₽</div><div class="l">баланс FunPay{% if ap.get('funpay_balance_at') %} · {{ ap.get('funpay_balance_at')|ts }}{% endif %}</div></div>
+  <div class="card kpi"><div class="v {{ 'c-green' if ap.enabled else 'c-gray' }}">{{ 'включён' if ap.enabled else 'выключен' }}</div><div class="l">автопилот · вывод {{ 'вкл' if ap.withdraw else 'выкл' }}</div></div>
+</div>
+
+<div class="card">
+  <h2>Цикл автопилота</h2>
+  <div class="row" style="gap:6px;flex-wrap:wrap">
+    <span class="chip">1. Заказ на FunPay</span>→<span class="chip">2. Выдача: Fragment (по username) или подарки</span>→<span class="chip">3. Просьба подтвердить, одно напоминание</span>→<span class="chip">4. Молчит — файл в поддержку</span>→<span class="chip">5. Деньги на балансе FunPay</span>→<span class="chip">6. Вывод на кошелёк, когда GRAM мало</span>→<span class="chip">7. Звёзды на аккаунт для подарков через Fragment</span>→<span class="chip">↺</span>
+  </div>
+  <div class="help" style="margin-top:6px">Когда выдавать нечем (мало GRAM и звёзд, сессия Fragment истекла, Telegram-аккаунт отключён), бот сам выключает соответствующие лоты и включает их снова, когда ресурсы появились.</div>
+</div>
+
+{% if is_admin %}
+<form method="post" autocomplete="off">
+<div class="cols">
+<div class="card">
+  <h2>Кошелёк Tonkeeper</h2>
+  <div class="help">Сид-фраза: {{ 'задана' if mnemonic_set else 'не задана' }}{% if key_kind %} · формат {{ 'BIP39 (12 слов)' if key_kind == 'bip39' else 'TON' }}{% endif %}. Адрес: <code>{{ w.friendly_address }}</code> ({{ w.version or ton.version }}).</div>
+  <label class="f">Новая сид-фраза (12 или 24 слова, через пробел)</label>
+  <textarea name="mnemonic" rows="2" placeholder="оставьте пустым, чтобы не менять" style="min-height:48px"></textarea>
+  <div class="cols">
+    <div><label class="f">Адрес (необязательно)</label><input type="text" name="address" value="{{ ton.address }}" placeholder="пусто — вычислить из фразы"></div>
+    <div><label class="f">Версия / формат</label><div class="row"><select name="version">{% for v in ['v5r1','v4r2'] %}<option value="{{v}}" {{ 'selected' if ton.version==v }}>{{v}}</option>{% endfor %}</select>
+      <select name="mnemonic_type">{% for k, t in [('auto','формат: авто'),('bip39','BIP39 (12 слов)'),('ton','TON (24 слова)')] %}<option value="{{k}}" {{ 'selected' if (ton.mnemonic_type or 'auto')==k }}>{{t}}</option>{% endfor %}</select></div></div>
+  </div>
+  <label class="f">Предупреждать, когда GRAM меньше</label><input type="number" step="0.1" name="low_balance_ton" value="{{ ton.low_balance_ton }}" style="max-width:120px">
+  {% if rec.known %}<div class="help" style="margin-top:6px">Сверка: по учёту {{ rec.expected|ton }}, в сети {{ rec.actual|ton }} ({{ '%+.3f'|format(rec.diff or 0) }}).</div>{% endif %}
+</div>
+<div class="card">
+  <h2>Автопилот</h2>
+  <label><input type="checkbox" name="enabled" {{ 'checked' if acfg.enabled }}> Включить автопилот (напоминания, файлы для поддержки, вывод)</label>
+  <div class="cols">
+    <div><label class="f">Напомнить о подтверждении через, ч</label><input type="number" name="confirm_reminder_hours" value="{{ acfg.confirm_reminder_hours }}"><div class="help">0 — не напоминать. Напоминание одно на заказ.</div></div>
+    <div><label class="f">Файл в поддержку через, ч</label><input type="number" name="support_after_hours" value="{{ acfg.support_after_hours }}"></div>
+  </div>
+  <h2 style="margin-top:12px">Вывод с FunPay на кошелёк</h2>
+  <label><input type="checkbox" name="w_enabled" {{ 'checked' if wd.enabled }}> Выводить автоматически, когда GRAM мало</label>
+  <div class="cols">
+    <div><label class="f">Когда на кошельке меньше, GRAM</label><input type="number" step="0.1" name="min_wallet_ton" value="{{ wd.min_wallet_ton }}"></div>
+    <div><label class="f">И на FunPay не меньше, ₽</label><input type="number" name="min_funpay_rub" value="{{ wd.min_funpay_rub }}"></div>
+  </div>
+  <div class="cols">
+    <div><label class="f">Оставлять на FunPay, ₽</label><input type="number" name="keep_rub" value="{{ wd.keep_rub }}"></div>
+    <div><label class="f">Не больше в сутки, ₽</label><input type="number" name="max_per_day_rub" value="{{ wd.max_per_day_rub }}"></div>
+  </div>
+  <label class="f">Способ вывода</label>
+  <select name="method"><option value="">{{ 'авто: TON/GRAM, если есть в списке FunPay' }}</option>
+    {% for v, t in (ap.get('withdraw_methods') or []) %}<option value="{{v}}" {{ 'selected' if wd.method == v }}>{{t}}</option>{% endfor %}
+    {% if wd.method and wd.method not in (ap.get('withdraw_methods') or [])|map('first')|list %}<option value="{{wd.method}}" selected>{{wd.method}}</option>{% endif %}</select>
+  <div class="help">Список берётся со страницы баланса FunPay — нажмите «Проверить баланс FunPay». Если TON там нет, выберите USDT и пополняйте кошелёк вручную через обменник.</div>
+  <label class="f">Куда выводить (пусто — адрес кошелька бота)</label><input type="text" name="wallet" value="{{ wd.wallet }}">
+  <label style="margin-top:6px;display:block"><input type="checkbox" name="require_approval" {{ 'checked' if wd.require_approval is not defined or wd.require_approval }}> Каждый вывод — только после моей кнопки (рекомендуется)</label>
+</div>
+</div>
+<div class="row"><button class="primary" name="action" value="save">Сохранить</button>
+<button name="action" value="balance">Проверить баланс FunPay</button>
+<button name="action" value="withdraw_now" onclick="return confirm('Создать заявку на вывод с FunPay сейчас?')">💸 Вывести сейчас</button>
+<a href="/money" class="btn">Деньги и учёт пополнений →</a></div>
+</form>
+{% endif %}
+
+<div class="card tw" style="margin-top:14px"><h2>Выводы с FunPay</h2><table><tr><th>#</th><th>Время</th><th>Сумма</th><th>Способ</th><th>Куда</th><th>Состояние</th><th></th></tr>
+{% for x in withdrawals %}<tr><td>{{x.id}}</td><td>{{x.ts|ts}}</td><td>{{x.amount_rub|money}} ₽</td><td>{{x.method}}</td><td><code>{{ x.wallet[:12] }}…</code></td><td>{{x.state}}{% if x.detail %} · {{x.detail}}{% endif %}</td>
+<td>{% if x.state == 'pending' and is_admin %}<form method="post" class="row"><input type="hidden" name="wid" value="{{x.id}}"><button name="action" value="approve">✔ Вывести</button><button name="action" value="cancel">✖</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="7" class="muted">пока не было</td></tr>{% endfor %}</table></div>
+{% endblock %}

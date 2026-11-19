@@ -206,7 +206,7 @@ def test_db_backup_and_health(tmp_path):
     assert len(list(folder.glob("*.sqlite3"))) == 2
 
     sup, e, fp, wallet = make(tmp_path / "bot")
-    e.last_ok.update(funpay_poll=time.time(), ton_watch=time.time(), wallet=time.time())
+    e.last_ok.update(funpay_poll=time.time(), ton_watch=time.time(), wallet=time.time(), tg_gifts=time.time())
     e._fragment_state(session="ok", kyc="verified")
     assert e.health()["ok"]
     e.last_ok["funpay_poll"] = time.time() - 3600

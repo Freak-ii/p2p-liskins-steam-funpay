@@ -38,7 +38,7 @@ class Analytics:
     # ------------------------------------------------------------------ KPI
     def summary(self, days: float = 7) -> dict:
         since = time.time() - days * DAY
-        rows = self.db.q("SELECT * FROM orders WHERE created_at>=?", (since,))
+        rows = self.db.q("SELECT * FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND created_at>=?", (since,))
         delivered = [r for r in rows if r["delivered_at"]]
         completed = [r for r in rows if r["status"] == S.COMPLETED.value]
         refunded = [r for r in rows if r["status"] == S.REFUNDED.value]
@@ -70,7 +70,7 @@ class Analytics:
             if delivered else 0,
             "t_username": t_user, "t_purchase": t_buy, "t_chain": t_chain, "t_total": t_total, "t_confirm": t_confirm,
             "active": len(self.db.active_orders()), "balance": w.get("balance"), "capacity": w.get("capacity"),
-            "avg_review": self.db.scalar("SELECT AVG(review_stars) FROM orders WHERE review_stars IS NOT NULL "
+            "avg_review": self.db.scalar("SELECT AVG(review_stars) FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND review_stars IS NOT NULL "
                                          "AND created_at>=?", (since,), None),
         }
 
@@ -81,7 +81,7 @@ class Analytics:
 
     def funnel(self, days: float = 7) -> list[tuple[str, int]]:
         since = time.time() - days * DAY
-        q = lambda cond: int(self.db.scalar(f"SELECT COUNT(*) FROM orders WHERE created_at>=? AND {cond}", (since,)))
+        q = lambda cond: int(self.db.scalar(f"SELECT COUNT(*) FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND created_at>=? AND {cond}", (since,)))
         return [("Оплачено", q("1=1")), ("Username получен", q("username_at IS NOT NULL")),
                 ("Оплачено на Fragment", q("sent_at IS NOT NULL")), ("Звёзды выданы", q("delivered_at IS NOT NULL")),
                 ("Подтверждено", q("status='completed'"))]
@@ -100,7 +100,7 @@ class Analytics:
         since = time.time() - days * DAY
         return [dict(r) for r in self.db.q(
             "SELECT stars_per_unit stars, COUNT(*) orders, SUM(quantity) units, SUM(price) revenue, "
-            "SUM(ton_amount) ton FROM orders WHERE created_at>=? AND status<>'refunded' GROUP BY stars_per_unit "
+            "SUM(ton_amount) ton FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND created_at>=? AND status<>'refunded' GROUP BY stars_per_unit "
             "ORDER BY stars_per_unit", (since,))]
 
     def daily_series(self, days: int = 30) -> list[dict]:
@@ -109,7 +109,7 @@ class Analytics:
         for i in range(days - 1, -1, -1):
             d = today - dt.timedelta(days=i)
             start = dt.datetime.combine(d, dt.time()).timestamp()
-            rows = self.db.q("SELECT price, stars, status, delivered_at, ton_amount FROM orders WHERE created_at>=? AND "
+            rows = self.db.q("SELECT price, stars, status, delivered_at, ton_amount FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND created_at>=? AND "
                              "created_at<?", (start, start + DAY))
             out.append({"date": d.isoformat(), "orders": len(rows),
                         "revenue": round(sum(r["price"] or 0 for r in rows if r["status"] != "refunded"), 2),
@@ -120,7 +120,7 @@ class Analytics:
     def hourly_heatmap(self, days: int = 30) -> list[int]:
         since = time.time() - days * DAY
         hours = [0] * 24
-        for r in self.db.q("SELECT created_at FROM orders WHERE created_at>=?", (since,)):
+        for r in self.db.q("SELECT created_at FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND created_at>=?", (since,)):
             hours[dt.datetime.fromtimestamp(r["created_at"]).hour] += 1
         return hours
 
@@ -143,7 +143,7 @@ class Analytics:
     def sales_velocity(self, days: float = 3) -> float:
         """Звёзд в сутки за последние N дней."""
         since = time.time() - days * DAY
-        stars = self.db.scalar("SELECT SUM(stars) FROM orders WHERE delivered_at>=?", (since,), 0)
+        stars = self.db.scalar("SELECT SUM(stars) FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND delivered_at>=?", (since,), 0)
         return stars / days
 
     # ------------------------------------------------------------------ рекомендации
@@ -195,8 +195,8 @@ class Analytics:
         if on_floor >= 10:
             recs.append(("price_war", "WARNING", "Конкуренты долго демпингуют ниже вашей себестоимости. Не "
                          "опускайтесь — держите скорость выдачи; ищите TON дешевле."))
-        no_sales = time.time() - float(self.db.scalar("SELECT MAX(created_at) FROM orders", (), 0) or 0)
-        if self.db.scalar("SELECT COUNT(*) FROM orders") and no_sales > 2 * DAY and (cap or 0) > 0:
+        no_sales = time.time() - float(self.db.scalar("SELECT MAX(created_at) FROM orders WHERE COALESCE(channel,'funpay')<>'internal'", (), 0) or 0)
+        if self.db.scalar("SELECT COUNT(*) FROM orders WHERE COALESCE(channel,'funpay')<>'internal'") and no_sales > 2 * DAY and (cap or 0) > 0:
             recs.append(("no_sales", "WARNING", f"Нет продаж {no_sales / DAY:.1f} дн. Проверьте, активны ли лоты, их "
                          "позицию и цену; включите RTBA и автоподнятие."))
         if not self.cfg.rtba.enabled:

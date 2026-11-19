@@ -114,6 +114,42 @@ TEMPLATES: dict[str, dict[str, str]] = {
         ),
         "faq_premium": "В этом лоте продаются только Telegram Stars (звёзды). Telegram Premium здесь не продаётся.",
         "faq_where": "Звёзды видны в Telegram → Настройки → «Мои звёзды» (Telegram Stars) на аккаунте получателя.",
+        "greeting_need_username_gift": (
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
+            "🎁 Товар: {stars} ⭐ подарками Telegram\n"
+            "🤖 Выдача автоматическая: бот отправит подарки на ваш аккаунт, обычно за 1–5 минут.\n\n"
+            "👉 Пришлите в этот чат ваш username в Telegram, например: @username\n{last_hint}"
+            "Найти его: Telegram → Настройки → «Имя пользователя».\n\n"
+            "ℹ️ Username нужен только для отправки подарков: мы не пишем вам в Telegram, всё общение — здесь, "
+            "в чате FunPay. Пожалуйста, подтверждайте заказ только после того, как подарки придут."
+        ),
+        "greeting_with_username_gift": (
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
+            "🎁 {stars} ⭐ подарками → @{username}{name_part}\n"
+            "🤖 Отправляю автоматически, обычно 1–5 минут. Если username с ошибкой — сразу напишите правильный.\n"
+            "Пожалуйста, подтверждайте заказ только после того, как подарки придут."
+        ),
+        "username_ok_gift": "✅ Аккаунт найден: @{username}{name_part}. Отправляю подарки ({gifts})…",
+        "delivered_gift": (
+            "🎉 Готово! Подарки отправлены на @{username} (заказ #{order_id}): {gifts}.\n"
+            "Получить звёзды: откройте профиль → «Подарки» → нажмите на подарок → «Конвертировать в звёзды» — "
+            "всего {value} ⭐.\n\n"
+            "Огромное спасибо за покупку, {buyer} ❤️\n"
+            "Пожалуйста, подтвердите выполнение заказа кнопкой «Подтвердить выполнение заказа» на странице "
+            "заказа — и, если не сложно, оставьте отзыв. Это очень помогает нам!"
+        ),
+        "faq_gift_gift": (
+            "Звёзды приходят подарками Telegram на ваш аккаунт. Каждый подарок можно оставить в профиле или "
+            "конвертировать в звёзды: профиль → «Подарки» → подарок → «Конвертировать в звёзды»."
+        ),
+        "after_delivery_gift": (
+            "Подарки по заказу #{order_id} уже отправлены на @{username} ✅ Они в профиле → «Подарки». "
+            "Если что-то не так — напишите, продавец ответит здесь."
+        ),
+        "confirm_reminder": (
+            "{buyer}, подскажите, пожалуйста: всё ли пришло по заказу #{order_id}? Если да — подтвердите, "
+            "пожалуйста, выполнение заказа на его странице. Если есть проблема — напишите, разберёмся здесь в чате."
+        ),
         "review_reply": "Спасибо за отзыв, {buyer}! Рады, что {stars} ⭐ дошли быстро. Будем рады видеть вас снова 🙌",
     },
     "en": {
@@ -173,6 +209,21 @@ TEMPLATES: dict[str, dict[str, str]] = {
                        "don't confirm the order until it's resolved."),
         "faq_premium": "This listing sells Telegram Stars only, not Telegram Premium.",
         "faq_where": "Stars are shown in Telegram → Settings → My Stars on the recipient account.",
+        "greeting_need_username_gift": ("Hi {buyer}! {returning}Thanks for paying for order #{order_id} 🎉\n"
+                                        "🎁 {stars} ⭐ as Telegram gifts. Delivery is automatic, 1–5 minutes.\n"
+                                        "👉 Please send your Telegram username here, e.g. @username\n{last_hint}"
+                                        "Please confirm the order only after the gifts arrive."),
+        "greeting_with_username_gift": ("Hi {buyer}! {returning}Thanks for paying for order #{order_id} 🎉\n"
+                                        "🎁 {stars} ⭐ as gifts → @{username}{name_part}. Sending automatically.\n"
+                                        "Please confirm the order only after the gifts arrive."),
+        "username_ok_gift": "✅ Account found: @{username}{name_part}. Sending gifts ({gifts})…",
+        "delivered_gift": ("🎉 Done! Gifts sent to @{username} (order #{order_id}): {gifts}.\n"
+                           "To get stars: profile → Gifts → tap a gift → Convert to Stars — {value} ⭐ in total.\n"
+                           "Please confirm the order on its page and leave a review if you can. Thank you ❤️"),
+        "faq_gift_gift": "Stars arrive as Telegram gifts; each gift can be converted to stars in your profile → Gifts.",
+        "after_delivery_gift": "The gifts for #{order_id} were sent to @{username} ✅ See profile → Gifts.",
+        "confirm_reminder": ("{buyer}, did everything arrive for order #{order_id}? If yes, please confirm the order "
+                             "on its page. If there's a problem, write here and we'll sort it out."),
         "review_reply": "Thank you for the review, {buyer}! Glad your {stars} ⭐ arrived quickly. See you again 🙌",
     },
 }
@@ -221,6 +272,7 @@ TEMPLATE_VARS = {
     "reason": "аккаунт не найден", "attempt": 1, "max_attempts": 3, "status_text": "ждём username",
     "denominations": "50, 75, 100", "status_hint": "", "returning": "Рады видеть вас снова 🙌 ",
     "last_hint": "Прошлый заказ вы получали на @durov — если аккаунт тот же, просто пришлите его ещё раз.\n",
+    "gifts": "2×🏆100⭐", "value": 170,
 }
 
 

@@ -33,6 +33,8 @@ class FakeFunPay:
         self.refunds: list[str] = []
         self.reviews: dict[str, int] = {}
         self.review_replies: dict[str, str] = {}
+        self.balance_rub = 15000.0
+        self.withdrawals: list[tuple] = []
 
     async def login(self):
         return None
@@ -45,11 +47,11 @@ class FakeFunPay:
 
     # --- симуляция действий покупателя
     def buyer_pays(self, buyer: str, buyer_id: int, stars: int, qty: int = 1, username: str | None = None,
-                   price_per_star: float = 1.45) -> str:
+                   price_per_star: float = 1.45, method: str = "По username") -> str:
         oid = "".join(random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
         chat = str(500 + buyer_id)
         self.chat_users[chat] = buyer
-        desc = f"{stars} звёзд, По username"
+        desc = f"{stars} звёзд, {method}"
         self.sales[oid] = FunPayOrder(order_id=oid, buyer_username=buyer, buyer_id=buyer_id, description=desc,
                                       price=round(qty * stars * price_per_star, 2), quantity=qty, status="paid",
                                       chat_id=chat)
@@ -126,6 +128,36 @@ class FakeFunPay:
 
     async def raise_lots(self, game_id, node_id):
         return True, "Предложения подняты"
+
+    # --- выставление лотов и баланс (эмуляция форм FunPay)
+    async def get_lot_form(self, node_id, offer_id=0):
+        qty = [("1", "50 звёзд"), ("2", "75 звёзд"), ("3", "100 звёзд"), ("4", "13 звёзд"), ("5", "21 звезда"),
+               ("6", "43 звезды"), ("7", "85 звёзд"), ("8", "150 звёзд"), ("9", "250 звёзд"), ("10", "350 звёзд"),
+               ("11", "500 звёзд"), ("99", "Другое количество")]
+        method = [("1", "По username"), ("2", "Подарком"), ("3", "С заходом на аккаунт")]
+        base = {"offer_id": str(offer_id or 0), "node_id": str(node_id), "fields[quantity]": "", "fields[method]": "",
+                "fields[desc][ru]": "", "price": "", "amount": "", "active": "on"}
+        return base, {"fields[quantity]": qty, "fields[method]": method}
+
+    async def create_lot(self, fields):
+        new_id = str(1000 + len(self.lots) + 1)
+        self.lots[new_id] = {**fields, "offer_id": new_id}
+        return new_id
+
+    async def get_own_lots(self, node_id):
+        return []
+
+    async def get_balance(self):
+        from starsbot.funpay.parsers import BalanceInfo
+        return BalanceInfo(total_rub=self.balance_rub, available_rub=self.balance_rub, form_action="/withdraw/withdraw",
+                           fields={"currency_id": "rub"}, methods=[("card_rub", "Банковская карта"),
+                                                                   ("ton", "Toncoin (TON)")],
+                           method_field="ext_currency_id", amount_field="amount_int", wallet_field="wallet")
+
+    async def withdraw(self, info, method, wallet, amount):
+        self.withdrawals.append((method, wallet, amount))
+        self.balance_rub -= amount
+        return "Заявка на вывод создана"
 
     async def get_public_lots(self, node_id, filter_regex=None):
         out = []
@@ -218,7 +250,7 @@ class FakeFragment:
     def __init__(self, wallet: FakeWallet, ton_per_star: float = DEMO_TON_PER_STAR):
         self.wallet = wallet
         self.ton_per_star = ton_per_star
-        self.users = {"durov": "Pavel Durov", "alice_tg": "Alice", "bob_real": "Bob", "carol_star": "Carol",
+        self.users = {"my_shop_account": "Магазин (аккаунт подарков)", "durov": "Pavel Durov", "alice_tg": "Alice", "bob_real": "Bob", "carol_star": "Carol",
                       "dave_d": "Dave", "eve_e": "Eve", "greg_big": "Greg", "helen_h": "Helen"}
         self.requests: dict[str, dict] = {}
         self.logged_in = True
@@ -346,3 +378,32 @@ async def run_scenario(engine, fp: FakeFunPay, wallet: FakeWallet, verbose: bool
     if engine.analytics:
         await engine.analytics.tick()
     return {"orders": [a, b, c, d, e, g]}
+
+
+async def run_gift_demo(engine, fp: FakeFunPay, wallet: FakeWallet) -> list[str]:
+    """Заказы «Подарком»: username в заказе, username в чате, пополнение звёзд аккаунта через Fragment."""
+    async def drain() -> None:
+        for _ in range(3):
+            await engine.funpay_poll()
+            while not engine.queue.empty():
+                oid = engine.queue.get_nowait()
+                engine._queued.discard(oid)
+                await engine.purchase(oid)
+                wallet.tick()
+                await engine.watch_purchases()
+            wallet.tick()
+            await engine.watch_purchases()
+
+    if engine.gifts is None or not engine.gifts.enabled:
+        return []
+    fp.users_note = "gifts"
+    a = fp.buyer_pays("Kira", 31, 85, method="Подарком", username="kira_tg", price_per_star=1.7)
+    b = fp.buyer_pays("Leo", 32, 13, method="Подарком", price_per_star=1.9)
+    await drain()
+    fp.buyer_says(32, "@leo_gifts")
+    await drain()
+    await drain()
+    fp.buyer_confirms(a)
+    await drain()
+    await engine.gifts.watch()
+    return [a, b]

@@ -12,7 +12,9 @@
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 header{background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:5}
-header .logo{font-weight:700;color:var(--accent)}header nav{display:flex;gap:14px;flex-wrap:wrap}header nav a.active{color:var(--text);font-weight:600}
+header .logo{font-weight:700;color:var(--accent)}header nav{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.navgroup{display:inline-flex;gap:10px;align-items:center;padding:2px 8px;border-radius:8px}.navgroup:has(.navlabel){background:var(--chip)}
+.navlabel{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}header nav a.active{color:var(--text);font-weight:600}
 .btn-mini{padding:2px 10px;margin-left:8px;background:#fff;color:#222;border:0;border-radius:6px;cursor:pointer;font:inherit;font-size:13px}
 .flash{max-width:1200px;margin:12px auto 0;padding:10px 16px;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px}
 label.f{display:block;margin:10px 0 3px;font-weight:600}.help{color:var(--muted);font-size:12px;margin-top:2px}
@@ -55,9 +57,13 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
 <header>
   <span class="logo">⭐ StarsBot</span>
   <nav>
-    {% for href, name in [('/', 'Дашборд'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/money', 'Деньги'), ('/pricing', 'Цены / RTBA'), ('/analytics', 'Аналитика'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else []) + ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')] %}
-    <a href="{{href}}" class="{{ 'active' if path == href else '' }}">{{name}}</a>{% endfor %}
-    <a href="/alerts" class="{{ 'active' if path == '/alerts' else '' }}">Алерты{% if alerts_open %} <span class="chip c-red">{{alerts_open}}</span>{% endif %}</a>
+    {% set groups = [('', [('/', 'Дашборд'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/analytics', 'Аналитика')]),
+                     ('Юзеры / Подарки', [('/gifts', 'Подарки')]),
+                     ('FunPay / Fragment', [('/funpay', 'Лоты и поддержка'), ('/pricing', 'Цены / RTBA'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else [])),
+                     ('Крипта', [('/crypto', 'Кошелёк и автопилот'), ('/money', 'Деньги')]),
+                     ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')])] %}
+    {% for gname, items in groups %}<span class="navgroup">{% if gname %}<span class="navlabel">{{gname}}</span>{% endif %}
+    {% for href, name in items %}<a href="{{href}}" class="{{ 'active' if path == href else '' }}">{{name}}</a>{% endfor %}</span>{% endfor %}
   </nav>
   <div class="row" style="margin-left:auto">
     {% set st = state_text[app.state] %}

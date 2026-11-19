@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS orders (
     review_stars INTEGER, notes TEXT DEFAULT '', fail_reason TEXT DEFAULT '',
     created_at REAL, paid_at REAL, username_at REAL, purchase_started_at REAL, sent_at REAL,
     delivered_at REAL, completed_at REAL, last_buyer_msg_at REAL, updated_at REAL,
-    channel TEXT DEFAULT 'funpay', payout REAL
+    channel TEXT DEFAULT 'funpay', payout REAL,
+    delivery TEXT DEFAULT 'fragment', gift_plan TEXT, gift_cost INTEGER, support_file TEXT, confirm_reminded INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
@@ -74,6 +75,16 @@ CREATE TABLE IF NOT EXISTS cashflow (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, rub REAL DEFAULT 0, ton REAL DEFAULT 0, note TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS gift_sends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT, seq INTEGER, gift_id INTEGER, stars INTEGER,
+    convert_stars INTEGER, recipient_id INTEGER, state TEXT, error TEXT, created_at REAL, updated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_gift_sends_order ON gift_sends(order_id);
+CREATE TABLE IF NOT EXISTS stars_history (ts REAL, stars INTEGER);
+CREATE TABLE IF NOT EXISTS withdrawals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, amount_rub REAL, method TEXT, wallet TEXT, state TEXT,
+    detail TEXT, updated_at REAL
+);
 """
 
 ORDER_COLUMNS = {
@@ -83,11 +94,13 @@ ORDER_COLUMNS = {
     "tx_hash", "tx_fee_ton", "fragment_ref", "purchase_attempts", "risk_score", "risk_reasons", "approved", "reminded",
     "admin_alerted", "lang", "review_stars", "notes", "fail_reason", "created_at", "paid_at", "username_at",
     "purchase_started_at", "sent_at", "delivered_at", "completed_at", "last_buyer_msg_at",
-    "channel", "payout",
+    "channel", "payout", "delivery", "gift_plan", "gift_cost", "support_file", "confirm_reminded",
 }
 
 # Колонки, добавленные после первых версий: в старых базах их создаёт миграция в Database.__init__
-MIGRATIONS = {"orders": [("channel", "TEXT DEFAULT 'funpay'"), ("payout", "REAL")]}
+MIGRATIONS = {"orders": [("channel", "TEXT DEFAULT 'funpay'"), ("payout", "REAL"),
+                          ("delivery", "TEXT DEFAULT 'fragment'"), ("gift_plan", "TEXT"), ("gift_cost", "INTEGER"),
+                          ("support_file", "TEXT"), ("confirm_reminded", "INTEGER DEFAULT 0")]}
 
 
 class Database:
@@ -223,7 +236,16 @@ class Database:
         waiting = (OrderStatus.NEW, OrderStatus.AWAITING_USERNAME, OrderStatus.PENDING_APPROVAL, OrderStatus.READY,
                    OrderStatus.PURCHASING)
         marks = ",".join("?" * len(waiting))
-        return int(self.scalar(f"SELECT SUM(stars) FROM orders WHERE status IN ({marks})", [s.value for s in waiting], 0))
+        return int(self.scalar(f"SELECT SUM(stars) FROM orders WHERE status IN ({marks}) AND "
+                               "COALESCE(delivery,'fragment')='fragment'", [s.value for s in waiting], 0))
+
+    def gift_stars_committed(self) -> int:
+        """Звёзды аккаунта Telegram, которые уйдут на подарки активным заказам (по стоимости набора)."""
+        waiting = (OrderStatus.NEW, OrderStatus.AWAITING_USERNAME, OrderStatus.PENDING_APPROVAL, OrderStatus.READY,
+                   OrderStatus.PURCHASING)
+        marks = ",".join("?" * len(waiting))
+        return int(self.scalar(f"SELECT SUM(COALESCE(gift_cost, stars)) FROM orders WHERE status IN ({marks}) AND "
+                               "delivery='gift'", [s.value for s in waiting], 0))
 
     # ------------------------------------------------------------ purchases
     def add_purchase(self, **fields: Any) -> int:

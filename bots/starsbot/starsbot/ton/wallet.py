@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import aiohttp
 from pytoniq_core import Address, Builder, Cell, ExternalMsgInfo, InternalMsgInfo, MessageAny, StateInit, begin_cell, CurrencyCollection
-from pytoniq_core.crypto.keys import mnemonic_to_private_key
+from starsbot.ton import mnemonic as MN
 from nacl.bindings import crypto_sign, crypto_sign_BYTES
 
 from starsbot.core.models import SentTx, TonMessage
@@ -45,6 +45,7 @@ class WalletState:
     active: bool
     code_b64: str = ""
     data_b64: str = ""
+    deploy: bool = False          # кошелёк ещё не развёрнут: первая транзакция несёт StateInit (как делает Tonkeeper)
 
 
 def to_nano(ton: float) -> int:
@@ -141,19 +142,61 @@ class Toncenter:
 
 
 class TonWallet:
-    def __init__(self, mnemonic: str | list[str], address: str, *, version: str = "v4r2",
-                 api: Toncenter | None = None, dry_run: bool = False):
-        words = mnemonic.split() if isinstance(mnemonic, str) else list(mnemonic)
-        if len(words) not in (12, 24):
-            raise TonError("сид-фраза кошелька должна содержать 24 слова", "config")
-        self.public_key, self._secret = mnemonic_to_private_key(words)
+    def __init__(self, mnemonic: str | list[str], address: str = "", *, version: str = "v5r1",
+                 api: Toncenter | None = None, dry_run: bool = False, mnemonic_type: str = "auto"):
+        try:
+            self._cands = MN.candidates(mnemonic, mnemonic_type or "auto")
+        except MN.MnemonicError as e:
+            raise TonError(str(e), "config") from e
         if version not in ("v4r2", "v5r1"):
             raise TonError(f"неизвестная версия кошелька {version} (поддерживаются v4r2 и v5r1)", "config")
         self.version = version
-        self.address = Address(address)
+        self.auto_address = not str(address or "").strip()
+        key = self._cands[0]
+        if not self.auto_address:
+            try:
+                self.address = Address(address.strip())
+            except Exception as e:  # noqa: BLE001
+                raise TonError(f"адрес кошелька не распознан: {e}", "config") from e
+            found = MN.match_address(mnemonic, address.strip(), mnemonic_type or "auto")
+            if found:                                  # адрес — стандартный кошелёк этой фразы: версию знаем точно
+                key, self.version = found
+        else:
+            self.address = key.address(version)
+        self._use(key)
         self.api = api or Toncenter()
         self.dry_run = dry_run
         self.state: WalletState | None = None
+        self._resolved = not self.auto_address
+
+    def _use(self, key: "MN.KeyCandidate") -> None:
+        self.key_kind = key.kind
+        self.public_key, self._secret = key.public_key, key.secret
+
+    async def resolve_address(self) -> None:
+        """Адрес не введён: перебираем адреса фразы (BIP39/TON × W5/v4r2) и берём тот, где есть кошелёк."""
+        if self._resolved:
+            return
+        best = None
+        for c in self._cands:
+            for v in (self.version, "v4r2" if self.version == "v5r1" else "v5r1"):
+                addr = c.address(v)
+                try:
+                    info = await self.api.address_info(addr.to_str(is_user_friendly=False))
+                except TonError:
+                    continue
+                score = (2 if info.get("state") == "active" else 0) + (1 if int(info.get("balance") or 0) > 0 else 0)
+                if best is None or score > best[0]:
+                    best = (score, c, v, addr)
+                if score >= 2:
+                    break
+            if best and best[0] >= 2:
+                break
+        if best is not None:
+            _, c, v, addr = best
+            self._use(c)
+            self.version, self.address = v, addr
+        self._resolved = True
 
     @property
     def raw_address(self) -> str:
@@ -168,18 +211,45 @@ class TonWallet:
 
     # ------------------------------------------------------------------ состояние
     async def refresh(self) -> WalletState:
+        await self.resolve_address()
         info = await self.api.address_info(self.raw_address)
         balance = int(info.get("balance") or 0)
         active = info.get("state") == "active"
         if not active or not info.get("data"):
-            self.state = WalletState(balance, 0, 0, b"", False)
-            raise TonError("кошелёк не активен (не развёрнут). Отправьте с него хотя бы одну транзакцию из "
-                           "Tonkeeper и повторите.", "inactive")
+            own = next((c for c in self._cands for v in (self.version,) if c.address(v) == self.address), None)
+            if own is None:
+                for c in self._cands:
+                    for v in ("v5r1", "v4r2"):
+                        if c.address(v) == self.address:
+                            own, self.version = c, v
+            if own is None:
+                self.state = WalletState(balance, 0, 0, b"", False)
+                raise TonError("кошелёк не активен, а адрес не совпадает с сид-фразой. Проверьте адрес или "
+                               "отправьте с кошелька хотя бы одну транзакцию из Tonkeeper.", "inactive")
+            self._use(own)
+            si = MN.wallet_state_init(self.public_key, self.version)
+            wid = MN.V5R1_WALLET_ID if self.version == "v5r1" else MN.V4R2_WALLET_ID
+            self.state = WalletState(balance, 0, wid, self.public_key, False,
+                                     base64.b64encode(si.code.to_boc()).decode(),
+                                     base64.b64encode(si.data.to_boc()).decode(), deploy=True)
+            return self.state
         data = Cell.one_from_boc(base64.b64decode(info["data"]))
         seqno, wallet_id, pub = parse_wallet_data(data, self.version)
         if pub != self.public_key:
-            raise TonError("сид-фраза не подходит к этому адресу или выбрана не та версия кошелька "
-                           f"({self.version}). Проверьте адрес и версию (v4r2 / v5r1 — видно в Tonkeeper).", "key_mismatch")
+            other = next((c for c in self._cands if c.public_key == pub), None)
+            if other is None:
+                alt = "v4r2" if self.version == "v5r1" else "v5r1"
+                try:
+                    s2, w2, p2 = parse_wallet_data(data, alt)
+                except Exception:  # noqa: BLE001
+                    p2 = b""
+                other = next((c for c in self._cands if c.public_key == p2), None)
+                if other is not None:
+                    self.version, seqno, wallet_id, pub = alt, s2, w2, p2
+            if other is None:
+                raise TonError("сид-фраза не подходит к этому адресу. Проверьте адрес (Tonkeeper → Получить) и "
+                               "слова фразы — 12 или 24, по порядку.", "key_mismatch")
+            self._use(other)
         self.state = WalletState(balance, seqno, wallet_id, pub, True, info.get("code", ""), info["data"])
         return self.state
 
@@ -238,7 +308,10 @@ class TonWallet:
 
     def build_external(self, body: Cell) -> Cell:
         info = ExternalMsgInfo(src=None, dest=self.address, import_fee=0)
-        return MessageAny(info=info, init=None, body=body).serialize()
+        init = None
+        if self.state is not None and self.state.deploy:      # первая транзакция кошелька разворачивает контракт
+            init = MN.wallet_state_init(self.public_key, self.version)
+        return MessageAny(info=info, init=init, body=body).serialize()
 
     async def transfer(self, messages: list[TonMessage], valid_until: int, *, on_signed=None) -> SentTx:
         """Подписывает и отправляет перевод. on_signed(seqno, valid_until, msg_hash) вызывается ДО отправки в

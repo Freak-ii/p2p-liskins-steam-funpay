@@ -18,12 +18,18 @@
 <div class="card">
   <h2>Шаг 2 · Кошелёк TON бота</h2>
   <div class="help" style="margin-bottom:6px">Отдельный кошелёк только для бота (Tonkeeper/MyTonWallet). Держите на нём сумму на 1–3 дня продаж. Сид-фраза хранится только в config.yaml на этом компьютере.</div>
-  <label class="f">Сид-фраза (24 слова)</label>
-  <input type="password" name="mnemonic" id="mnemonic" placeholder="{{ '•••••••• (задана, оставьте пустым чтобы не менять)' if secret('ton','mnemonic') else 'word1 word2 … word24' }}">
+  <label class="f">Сид-фраза Tonkeeper</label>
+  <div class="row"><label><input type="radio" name="wcount" value="12" checked onchange="setCount(12)"> 12 слов</label>
+    <label><input type="radio" name="wcount" value="24" onchange="setCount(24)"> 24 слова</label>
+    <span class="help">{{ 'Фраза уже задана — заполните поля, только если меняете кошелёк.' if secret('ton','mnemonic') else 'Tonkeeper → Настройки → Резервная копия. Можно вставить всю фразу в первое поле — слова разложатся сами.' }}</span></div>
+  <div class="grid" id="words" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr));margin-top:6px"></div>
+  <input type="hidden" name="mnemonic" id="mnemonic">
   <div class="cols">
-    <div><label class="f">Адрес кошелька</label><input type="text" name="ton_address" id="ton_address" value="{{ cfg.ton.address }}" placeholder="UQ…"></div>
+    <div><label class="f">Адрес кошелька (необязательно)</label><input type="text" name="ton_address" id="ton_address" value="{{ cfg.ton.address }}" placeholder="пусто — бот вычислит из сид-фразы"></div>
     <div><label class="f">Версия</label><select name="ton_version" id="ton_version">{% for v in ['v5r1','v4r2'] %}<option value="{{v}}" {{ 'selected' if cfg.ton.version==v }}>{{ v }}{{ ' (W5, Tonkeeper по умолчанию)' if v=='v5r1' else '' }}</option>{% endfor %}</select></div>
   </div>
+  <div class="help">Адрес можно не вводить: бот сам найдёт кошелёк этой фразы (W5 или v4r2, формат 12 слов BIP39 или TON). Новый кошелёк без транзакций тоже подойдёт — бот развернёт его первой оплатой.</div>
+  <button type="button" onclick="showAddr()" style="margin-top:8px">Показать адреса этой фразы</button><div id="r_addr" class="result"></div>
   <label class="f">Ключ toncenter.com (необязательно)</label>
   <input type="password" name="toncenter_api_key" id="toncenter_key" placeholder="{{ '•••••••• (задан)' if secret('ton','toncenter_api_key') else 'без ключа — не чаще 1 запроса в секунду' }}">
   <button type="button" onclick="testWallet()" style="margin-top:8px">Проверить кошелёк</button><div id="r_w" class="result"></div>
@@ -59,7 +65,21 @@
 </form>
 <script>
 const v=id=>document.getElementById(id).value;
-const wallet=()=>({mnemonic:v('mnemonic'),address:v('ton_address'),version:v('ton_version'),toncenter_api_key:v('toncenter_key')});
+function setCount(n){const box=document.getElementById('words');const old=[...box.querySelectorAll('input')].map(i=>i.value);
+  box.innerHTML='';for(let i=0;i<n;i++){const inp=document.createElement('input');inp.type='password';inp.autocomplete='off';
+  inp.placeholder=(i+1)+'.';inp.value=old[i]||'';inp.onfocus=()=>inp.type='text';inp.onblur=()=>inp.type='password';
+  inp.oninput=()=>{const parts=inp.value.trim().split(/[\s,]+/).map(w=>w.replace(/^\d+[.)]/,'')).filter(Boolean);
+    if(parts.length>1){if(parts.length>12&&n==12){document.querySelector('input[name=wcount][value="24"]').checked=true;setCount(24);}
+      const all=[...document.querySelectorAll('#words input')];parts.forEach((w,k)=>{if(all[i+k])all[i+k].value=w.toLowerCase()});}
+    joinWords()};box.appendChild(inp)}joinWords()}
+function joinWords(){document.getElementById('mnemonic').value=[...document.querySelectorAll('#words input')].map(i=>i.value.trim().toLowerCase()).filter(Boolean).join(' ')}
+setCount(12);
+async function showAddr(){const el=document.getElementById('r_addr');joinWords();
+  try{const r=await postJSON('/api/wallet/addresses',{mnemonic:v('mnemonic')});
+    if(!r.ok){showResult(el,r);return}
+    el.className='result ok';el.innerHTML=r.items.map(x=>`${x.kind=='bip39'?'BIP39 (12 слов)':'TON'} · ${x.version}: <code>${x.address}</code>`).join('<br>')+'<br><span class="muted">Сверьте с адресом в Tonkeeper → «Получить».</span>'}
+  catch(e){showResult(el,{ok:false,text:'Ошибка: '+e})}}
+const wallet=()=>(joinWords(),{mnemonic:v('mnemonic'),address:v('ton_address'),version:v('ton_version'),toncenter_api_key:v('toncenter_key')});
 async function run(id,url,data,wait){const el=document.getElementById(id);el.textContent=wait||'Проверяю…';el.className='result';
   try{showResult(el,await postJSON(url,data))}catch(e){showResult(el,{ok:false,text:'Ошибка запроса: '+e})}}
 function testFunpay(){run('r_fp','/api/test/funpay',{golden_key:v('golden_key')})}

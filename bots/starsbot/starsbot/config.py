@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 DENOMINATIONS = (50, 75, 100, 150, 250, 350, 500)
+GIFT_DENOMINATIONS = (13, 21, 43, 85, 50, 100, 150, 250, 350, 500)
 
 DEFAULTS: dict[str, Any] = {
     "general": {
@@ -25,7 +26,8 @@ DEFAULTS: dict[str, Any] = {
         "node_id": 2418,                 # «Telegram → Звёзды» (funpay.com/lots/2418/)
         "game_id": 0,                    # id игры для поднятия лотов (0 — не поднимать)
         # Лоты: один лот на номинал. offer_id — id лота из ссылки funpay.com/lots/offer?id=…
-        "lots": [{"stars": n, "offer_id": 0} for n in DENOMINATIONS],
+        # position — желаемое место лота в списке раздела (1 — первый). 0 — как в настройках RTBA
+        "lots": [{"stars": n, "offer_id": 0, "position": 0} for n in DENOMINATIONS],
         "order_match_regex": r"(?i)(зв[её]зд|stars|⭐)",
         "order_exclude_regex": r"(?i)(подарк|gift|с заходом|вход на аккаунт)",
         "auto_raise": True, "raise_interval_minutes": 240,
@@ -34,6 +36,54 @@ DEFAULTS: dict[str, Any] = {
         "deactivate_when_empty": True,
         "presale_replies": True,         # отвечать на вопросы о звёздах в чатах без заказа
         "coord_db": "",                  # общий файл координации с другими ботами (обычно задаёт Центр)
+        # Автовыставление лотов: бот сам создаёт недостающие лоты по образцу вашего лота (копия полей формы)
+        "auto_create_lots": False,
+        "lot_price_per_star": 1.6,       # стартовая цена нового лота, ₽ за звезду (дальше её ведёт RTBA)
+        "lot_description": "⚡ Автовыдача 1–5 минут. Укажите @username — звёзды придут на аккаунт.",
+        "gift_lot_description": "🎁 Автовыдача подарками 1–5 минут. Укажите @username — подарки придут на аккаунт, "
+                                "их можно конвертировать в звёзды.",
+    },
+    # Выдача звёзд подарками Telegram (раздел FunPay «Звёзды → Подарком»)
+    "gifts": {
+        "enabled": False,
+        "api_id": 0, "api_hash": "",     # свои ключи приложения: my.telegram.org → API development tools
+        "phone": "",
+        "session_file": "data/telegram.session",
+        # номинал лота = сколько звёзд получит покупатель, конвертировав подарки (13 = 🧸15, 21 = 🌹25, 43 = 🎂50, 85 = 🏆100)
+        "lots": [{"stars": n, "offer_id": 0, "position": 0} for n in GIFT_DENOMINATIONS],
+        "order_regex": r"(?i)(подарк|gift)",
+        "mode": "convert",               # convert — по сумме конвертации, price — по цене подарков
+        "per_gift_penalty": 3,           # ⭐ «штрафа» за каждый лишний подарок — меньше подарков ценой мелкой переплаты
+        "allowed_gift_ids": [],          # только эти подарки (пусто — любые обычные, не лимитированные)
+        "max_gifts_per_order": 40,
+        "hide_sender_name": False,
+        "gift_message": "Заказ #{order_id}. Спасибо за покупку! ⭐",   # подпись к подарку (без ссылок и контактов)
+        "pause_between_gifts": 1.5,
+        "stock_sync": True, "max_display_amount": 200, "deactivate_when_empty": True,
+        "low_stars_alert": 500,
+        "pilot_orders": 1,               # первые N боевых заказов подарками — после одобрения
+        "max_order_stars": 0,            # набор дороже N ⭐ — с одобрения (0 — без лимита)
+        # Автопополнение звёзд аккаунта через Fragment (покупка самому себе тем же кошельком TON)
+        "topup": {"enabled": False, "min_stars": 1000, "amount": 2500, "username": "",
+                  "cooldown_minutes": 20,     # пауза после пополнения: звёзды от Fragment приходят не мгновенно
+                  "max_per_day": 10000},      # не больше N ⭐ пополнений за сутки (0 — без лимита)
+    },
+    # Автономный цикл: напоминания о подтверждении, файлы для поддержки, вывод с FunPay на кошелёк
+    "autopilot": {
+        "enabled": False,
+        "confirm_reminder_hours": 24,    # через сколько часов после выдачи вежливо напомнить о подтверждении (0 — нет)
+        "support_after_hours": 72,       # через сколько часов без подтверждения готовить файл для поддержки FunPay
+        "support_folder": "data/support",
+        "withdraw": {
+            "enabled": False,
+            "min_wallet_ton": 5.0,       # выводить, когда на кошельке меньше N TON
+            "min_funpay_rub": 1000.0,    # и на балансе FunPay не меньше N ₽
+            "keep_rub": 0.0,             # оставлять на FunPay
+            "max_per_day_rub": 20000.0,
+            "method": "",                # способ вывода из списка FunPay (выбирается в панели)
+            "wallet": "",                # куда: адрес кошелька (пусто — адрес кошелька бота)
+            "require_approval": True,    # каждый вывод — после кнопки в Telegram/панели
+        },
     },
     "fragment": {
         "cookies": "",                   # stel_ssid=…; stel_dt=…; stel_token=…; stel_ton_token=…
@@ -47,6 +97,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "ton": {
         "mnemonic": "", "address": "", "version": "v5r1",   # Tonkeeper по умолчанию создаёт W5 (v5r1)
+        "mnemonic_type": "auto",         # auto | bip39 (12 слов Tonkeeper) | ton (24 слова) — auto подбирает сам
         "toncenter_endpoint": "https://toncenter.com/api/v2", "toncenter_api_key": "",
         "low_balance_ton": 3.0,          # предупреждать, когда на кошельке меньше
         "fee_reserve_ton": 0.1,          # запас на комиссию сети при расчёте наличия
@@ -192,11 +243,11 @@ def validate_config(cfg: Section) -> list[str]:
             problems.append(f"лот {lot.get('offer_id')}: Fragment продаёт от 50 звёзд")
     if not cfg.fragment.cookies:
         problems.append("fragment.cookies не заданы (сессия fragment.com с подключённым кошельком)")
-    words = str(cfg.ton.mnemonic or "").split()
-    if len(words) not in (12, 24):
-        problems.append("ton.mnemonic: нужна сид-фраза кошелька из 24 слов")
-    if not cfg.ton.address:
-        problems.append("ton.address: адрес кошелька бота не задан")
+    from starsbot.ton.mnemonic import MnemonicError, check_words, normalize_words
+    try:
+        check_words(normalize_words(str(cfg.ton.mnemonic or "")))
+    except MnemonicError as e:
+        problems.append(f"ton.mnemonic: {e}")
     if cfg.ton.version not in ("v4r2", "v5r1"):
         problems.append("ton.version: поддерживаются v4r2 и v5r1")
     if cfg.dashboard.enabled and len(str(cfg.dashboard.token)) < 12:
