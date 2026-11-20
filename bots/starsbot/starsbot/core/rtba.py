@@ -67,6 +67,14 @@ def filter_competitors(lots: list[CompetitorLot], cfg, stars: int, own_offer_ids
             continue
         if cfg.competitor_only_online and not lot.online:
             continue
+        # «одноразовые» продавцы без отзывов и с низким рейтингом: покупатели им не доверяют, равняться на них незачем.
+        # FunPay показывает в таблице только целые звёзды (rating-1…5), поэтому 4.5 на деле означает «5 звёзд»
+        min_reviews = int(cfg.get("competitor_min_reviews") or 0)
+        if min_reviews and (lot.reviews or 0) < min_reviews:
+            continue
+        min_rating = float(cfg.get("competitor_min_rating") or 0)
+        if min_rating and lot.rating is not None and lot.rating < min_rating:
+            continue
         out.append(lot)
     out.sort(key=lambda l: l.price)
     k = float(cfg.outlier_iqr_factor or 0)
@@ -86,6 +94,28 @@ def price_floor(cfg, stars: int, cost_per_star_rub: float | None, fee_pct: float
         by_margin = stars * cost_per_star_rub * (1 + float(cfg.min_margin_pct) / 100) / max(1e-9, 1 - fee)
         floor = max(floor, by_margin)
     return round(floor, 2)
+
+
+def spread_shift(cfg, prices: list[float], pos: int) -> int:
+    """Спред-буфер: если следующий конкурент заметно дороже, встаём под него (на место ниже), забирая разрыв.
+
+    Стоя на месте pos, мы уже берём всё до цены pos-го конкурента. Шаг вниз на место pos+1 даёт ещё
+    prices[pos] − prices[pos−1] ₽ с каждой сделки ценой одного места в выдаче — делаем его, только если разрыв
+    не меньше min_gap_rub и min_gap_pct от цены (иначе на крупных лотах ради 5 ₽ из 1500 теряли бы место)
+    и не больше max_gap_pct (слишком дорогой сосед — значит, там уже нет покупателей)."""
+    sb = cfg.get("spread_buffer") or {}
+    maxpos = int(cfg.get("max_position") or pos)
+    if not sb.get("enabled") or maxpos <= pos:
+        return pos
+    min_rub, min_pct = float(sb.get("min_gap_rub", 5) or 0), float(sb.get("min_gap_pct", 1.5) or 0)
+    max_pct = float(sb.get("max_gap_pct", 10) or 0)
+    while pos < maxpos and pos < len(prices):
+        here, nxt = prices[pos - 1], prices[pos]
+        gap = nxt - here
+        if gap < max(min_rub, here * min_pct / 100) or (max_pct and gap > here * max_pct / 100):
+            break
+        pos += 1
+    return pos
 
 
 class RTBAEngine:
@@ -124,17 +154,26 @@ class RTBAEngine:
             return self._finish(d, offer_id, markup, current_lot_price, floor_lot, ceil_lot, now)
         prices = [c.price for c in comps]
         best = prices[0]
+        spread = False
         if cfg.strategy == "median":
             anchor = statistics.median(prices)
             reason = f"медиана рынка {anchor:.2f}"
         elif cfg.strategy == "topN":
             pos = max(1, int(cfg.target_position))
+            shifted = spread_shift(cfg, prices, pos)
+            reason = f"позиция {pos}"
+            if shifted > pos:
+                spread = True
+                reason += f"→{shifted} (спред-буфер: разрыв {prices[shifted - 1] - prices[pos - 1]:.2f} ₽)"
+                pos = shifted
             anchor = prices[min(pos, len(prices)) - 1]
-            reason = f"позиция {pos}: цена конкурента {anchor:.2f}"
+            reason += f": цена конкурента {anchor:.2f}"
         else:
             anchor = best
             reason = f"лидер рынка {best:.2f}"
         undercut = max(float(cfg.undercut_abs or 0), anchor * float(cfg.undercut_pct or 0) / 100)
+        if spread:
+            undercut = float((cfg.get("spread_buffer") or {}).get("offset_rub", 0.05) or 0.05)
         target_buyer = anchor - undercut
         if cfg.strategy == "topN" and pos > 1 and len(prices) >= pos:
             # встаём между (pos-1)-м и pos-м конкурентом: при плотных ценах подрезка не должна
@@ -155,6 +194,11 @@ class RTBAEngine:
         if target_buyer < floor_buyer:
             notes.append(f"рынок ниже нашего пола ({floor_buyer:.2f}) — стоим на полу")
         position = 1 + sum(1 for p in prices if p < max(target_buyer, floor_buyer))
+        if len(comps) < len(same := [l for l in lots if lot_matches(l, stars, cfg.method_filter) and
+                                     l.offer_id not in own_offer_ids]):
+            seen = 1 + sum(1 for l in same if l.price < max(target_buyer, floor_buyer))
+            if seen != position:
+                notes.append(f"в общей выдаче {seen}-е место (без учёта {len(same) - len(comps)} отфильтрованных)")
         d = PriceDecision(target_buyer, target_buyer / markup, reason, best_competitor=round(best, 2),
                           competitors=len(comps), position=position, floor=floor_lot, notes=notes)
         if current_lot_price and cfg.strategy == "topN":
