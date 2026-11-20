@@ -51,7 +51,11 @@ class Economics:
 
     # ------------------------------------------------------------------ курс
     def topup_rate(self, days: float = 60) -> float | None:
-        """Средний курс ваших пополнений (₽ за TON) за последние days дней."""
+        """Средний курс ваших пополнений (₽ за TON) за последние days дней.
+        economics.cost_rate_rub > 0 — курс задан вручную (например, цена следующей закупки), записи не учитываются."""
+        fixed = float(self.e.get("cost_rate_rub") or 0) if hasattr(self.e, "get") else 0.0
+        if fixed > 0:
+            return fixed
         row = self.db.one("SELECT SUM(rub) r, SUM(ton) t FROM cashflow WHERE kind='topup' AND rub>0 AND ton>0 AND ts>=?",
                           (time.time() - days * DAY,))
         if row and row["t"]:

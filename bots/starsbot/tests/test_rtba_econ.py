@@ -102,3 +102,13 @@ def test_buyer_markup_by_default():
     d = eng.decide(lots, offer_id="9", stars=50, own_offer_ids={"9"}, own_username="me", current_lot_price=80,
                    cost_per_star_rub=1.0)
     assert abs(d.target_buyer_price - 77.03) < 0.05 and d.target_lot_price < 68
+
+
+def test_cost_rate_override_beats_topups(tmp_path):
+    from tests.test_engine import make
+    sup, e, fp, wallet = make(tmp_path)
+    ec = e.econ
+    sup.db.exec("INSERT INTO cashflow(ts,kind,rub,ton,note) VALUES(?,?,?,?,?)", (__import__("time").time(), "topup", 7000, 77.2, ""))
+    assert round(ec.topup_rate()) == 91
+    e.cfg.economics.cost_rate_rub = 86
+    assert ec.topup_rate() == 86 and ec.effective_rate()[0] == 86

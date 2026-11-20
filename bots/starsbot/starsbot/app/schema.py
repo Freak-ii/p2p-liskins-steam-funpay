@@ -100,6 +100,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("funpay_fee_pct", "Комиссия FunPay с вашей цены, %", "float", "Обычно 0: комиссию платит покупатель сверху"),
         ("withdraw_fee_pct", "Комиссия вывода с FunPay, %", "float", "Зависит от способа вывода"),
         ("withdraw_fee_fixed_rub", "Фикс. комиссия за один вывод, ₽", "float", ""),
+        ("cost_rate_rub", "Курс TON для себестоимости, ₽ (0 — по пополнениям)", "float", "Например, цена следующей закупки"),
         ("exchange_spread_pct", "Покупаете TON дороже биржи на, %", "float", "Используется, пока нет записей о пополнениях"),
         ("deposit_fee_ton", "Комиссия перевода TON на кошелёк, TON", "float", ""),
         ("typical_topup_ton", "Обычное пополнение, TON", "float", ""),
