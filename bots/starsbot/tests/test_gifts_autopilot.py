@@ -328,3 +328,20 @@ def test_loss_guard_blocks_unprofitable_purchase(tmp_path):
     o = {"price": 60.0, "channel": "funpay"}
     assert "без прибыли" in e._loss_problem(o, 50, 0.9) or "нет курса" in e._loss_problem(o, 50, 0.9)
     assert e._loss_problem({"price": 500.0, "channel": "funpay"}, 50, 0.1) == ""
+
+
+def test_second_instance_on_same_db_refuses_to_start(tmp_path):
+    from starsbot.core.engine import Engine
+    from starsbot.crm.db import Database
+    db = Database(tmp_path / "s.sqlite3")
+    a = Engine.__new__(Engine)
+    b = Engine.__new__(Engine)
+    for x, lid in ((a, "pc:1:a"), (b, "pc:2:b")):
+        x.db, x.lease_id = db, lid
+    assert a.take_lease() is None                  # первый берёт базу
+    assert b.take_lease()["id"] == "pc:1:a"        # второй видит живого владельца
+    assert a.take_lease() is None                  # продление своей аренды
+    a.release_lease()
+    assert b.take_lease() is None                  # после выхода первого — можно
+    db.kv_set("engine_lease", {"id": "pc:2:b", "pid": 2, "ts": time.time() - 999})
+    assert a.take_lease() is None and db.kv_get("engine_lease")["id"] == "pc:1:a"   # зависшая аренда истекает

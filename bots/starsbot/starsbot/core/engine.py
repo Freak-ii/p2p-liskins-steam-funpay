@@ -13,6 +13,8 @@ import asyncio
 import json
 import logging
 import math
+import os
+import socket
 import re
 import statistics
 import time
@@ -73,6 +75,7 @@ class Engine:
         self.fragment_status: dict[str, Any] = db.kv_get("fragment_status") or {
             "session": "unknown", "kyc": "unknown", "checked_at": 0, "error": ""}
         self.wallet_info: dict[str, Any] = {"balance": None, "ts": 0}
+        self.lease_id = f"{socket.gethostname()}:{os.getpid()}:{id(self):x}"
 
     # ================================================================== helpers
     @property
@@ -1502,7 +1505,42 @@ class Engine:
         for o in self.db.orders_by_status(S.READY):
             self.enqueue(o["order_id"])
 
+    # ================================================================== один экземпляр на базу
+    LEASE_TTL = 75.0
+
+    def take_lease(self) -> dict | None:
+        """Аренда базы: два запущенных бота на одной базе и одном аккаунте FunPay мешают друг другу
+        (дерутся за лоты, могут дважды выдать заказ). Возвращает чужую живую аренду или None, если взяли свою."""
+        if self.db.path == ":memory:":
+            return None
+        cur = self.db.kv_get("engine_lease") or {}
+        if cur.get("id") and cur["id"] != self.lease_id and time.time() - float(cur.get("ts") or 0) < self.LEASE_TTL:
+            return cur
+        self.db.kv_set("engine_lease", {"id": self.lease_id, "pid": os.getpid(), "ts": time.time()})
+        return None
+
+    async def lease_keeper(self) -> None:
+        while True:
+            await asyncio.sleep(20)
+            other = self.take_lease()
+            if other:
+                await self.notifier.notify("CRITICAL", "second_instance", "Запущен второй StarsBot на той же базе "
+                                           f"(pid {other.get('pid')}) — этот экземпляр останавливается.")
+                asyncio.get_running_loop().call_soon(lambda: asyncio.ensure_future(self.stop()))
+                return
+
+    def release_lease(self) -> None:
+        try:
+            if (self.db.kv_get("engine_lease") or {}).get("id") == self.lease_id:
+                self.db.kv_set("engine_lease", None)
+        except Exception:  # noqa: BLE001
+            pass
+
     async def start(self) -> None:
+        other = self.take_lease()
+        if other:
+            raise RuntimeError(f"уже работает другой экземпляр StarsBot на этой базе (pid {other.get('pid')}). "
+                               "Закройте его (диспетчер задач → python.exe) и запустите бота снова.")
         await self.fp.login()
         await self.recover()
         await self.ensure_fragment(force=True)
@@ -1547,6 +1585,7 @@ class Engine:
                        self.price_guard),
             self.deliver_worker(),
             self.notifier.poll_commands(),
+            self.lease_keeper(),
         ]
         if self.analytics:
             loops.append(self._loop("analytics", 600, self.analytics.tick))
@@ -1560,6 +1599,9 @@ class Engine:
         await asyncio.gather(*self._tasks)
 
     async def stop(self) -> None:
+        me = asyncio.current_task()
         for t in self._tasks:
-            t.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+            if t is not me:
+                t.cancel()
+        await asyncio.gather(*[t for t in self._tasks if t is not me], return_exceptions=True)
+        self.release_lease()
