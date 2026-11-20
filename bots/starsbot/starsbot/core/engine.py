@@ -1104,7 +1104,8 @@ class Engine:
         for o in self.db.orders_by_status(S.AWAITING_USERNAME):
             if self.paused:
                 break
-            if self.channel_of(o) is not None and not o["tg_username"]:
+            ch = self.channel_of(o)
+            if ch is not None and not getattr(ch, "buyer_chat", False) and not o["tg_username"]:
                 continue                 # код Ozon ещё не активирован: напомнить покупателю некуда, это не просрочка
             if o["tg_username"] and not o["tg_recipient"] and o["fail_reason"] in ("fragment_auth", "network",
                                                                                    "rate_limit", "layout", "fragment",
@@ -1133,7 +1134,9 @@ class Engine:
                 self.enqueue(o["order_id"])
         for o in self.db.active_orders():
             total_m = (now - (o["paid_at"] or now)) / 60
-            if self.channel_of(o) is not None and S(o["status"]) == S.AWAITING_USERNAME and not o["tg_username"]:
+            ch = self.channel_of(o)
+            if ch is not None and not getattr(ch, "buyer_chat", False) and S(o["status"]) == S.AWAITING_USERNAME \
+                    and not o["tg_username"]:
                 continue
             if S(o["status"]) != S.DELIVERED and total_m > float(self.cfg.sla.order_total_minutes):
                 await self.notifier.notify("WARNING", "sla_total", f"#{o['order_id']} не выдан {total_m:.0f} мин. "
@@ -1245,7 +1248,8 @@ class Engine:
                          "WHERE order_id=? AND state IN ('unknown','sending')", (oid,))
         if not o["tg_username"]:
             self._set(oid, S.AWAITING_USERNAME, "admin_take", approved=1, username_attempts=0, admin_alerted=0)
-            if self.channel_of(o) is not None:
+            ch = self.channel_of(o)
+            if ch is not None and not getattr(ch, "buyer_chat", False):
                 return "заказ передан боту: ждём, когда покупатель активирует код"
             await self.say(o, "greeting_need_username")
             self.db.add_event(oid, "greeting_sent")
