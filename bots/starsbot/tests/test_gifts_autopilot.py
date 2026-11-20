@@ -496,3 +496,36 @@ def test_order_chat_username_read_directly(tmp_path):
         await drain(e, wallet)
         assert sup.db.get_order(oid)["tg_username"] == "good_user"
     asyncio.run(go())
+
+
+def test_never_read_chats_are_fetched_once(tmp_path):
+    """Чат, где последнее сообщение наше, после первого чтения больше не запрашивается каждый опрос."""
+    from starsbot.funpay.parsers import ChatBookmark
+    sup, e, fp, wallet = make(tmp_path)
+    calls = []
+    real_hist = fp.get_chat_history
+
+    async def hist(chat, last=0):
+        calls.append(chat)
+        return await real_hist(chat, last)
+    fp.get_chat_history = hist
+
+    async def go():
+        await boot(e)
+        for i in range(10):
+            fp.chats[f"9{i}"] = []
+            await fp.send_message(f"9{i}", "Спасибо за заказ")      # наше последнее сообщение
+        bms = [ChatBookmark(c, "x", m[-1].message_id, m[-1].text, False) for c, m in fp.chats.items()
+               if c.startswith("9")]
+
+        async def poll():
+            return {"orders_changed": False, "bookmarks": bms, "counters": {}}
+        fp.poll_updates = poll
+        await e.funpay_poll()
+        assert len([c for c in calls if c.startswith("9")]) == 6     # не больше 6 чатов за опрос
+        await e.funpay_poll()
+        n = len(calls)
+        await e.funpay_poll()
+        assert len(calls) == n                                        # все прочитаны, повторно не запрашиваем
+        assert all(sup.db.last_seen_message(f"9{i}") > 0 for i in range(10))
+    asyncio.run(go())

@@ -1507,18 +1507,25 @@ class Engine:
                 bookmarks = await self.fp.get_bookmarks_page()
             except FunPayError as e:
                 log.warning("список диалогов /chat/: %s", e)
+        fetched = 0
         for bm in bookmarks:
             seen = self.db.last_seen_message(bm.chat_id)
             if not init:
                 self.db.set_last_seen_message(bm.chat_id, bm.last_message_id)
                 continue
             if bm.last_message_id > seen:
+                if fetched >= 6:         # остальные чаты — в следующем опросе, чтобы опрос не затягивался
+                    break
+                fetched += 1
                 try:
                     msgs = await self.fp.get_chat_history(bm.chat_id, seen)
                 except FunPayError as e:
                     log.warning("чат %s: %s", bm.chat_id, e)
                     continue
                 if seen == 0:
+                    # чат читаем впервые: запоминаем, докуда дочитали, даже если отвечать не на что
+                    self.db.set_last_seen_message(bm.chat_id, max([bm.last_message_id] +
+                                                                  [m.message_id for m in msgs]))
                     msgs = self._unanswered_tail(msgs)
                 await self.process_chat(bm.chat_id, msgs)
         if not init:                     # первый опрос: старую переписку не обрабатываем, дальше — всё новое
