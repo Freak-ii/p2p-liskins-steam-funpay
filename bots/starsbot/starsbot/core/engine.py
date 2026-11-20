@@ -25,6 +25,7 @@ from starsbot.core import messages as M
 from starsbot.core.models import ChatMessage, FunPayOrder, OrderStatus as S
 from starsbot.core.risk import RiskEngine
 from starsbot.core.rtba import RTBAEngine
+from starsbot.core import strategy as strat
 from starsbot.core.stars import looks_like_username_attempt, stars_from_text, username_from_params, \
     username_from_text
 from starsbot.crm.db import Database
@@ -821,6 +822,11 @@ class Engine:
         if not minp or self.econ is None or self.cfg.general.demo or not o["price"]:
             return ""
         price = float(o["price"])
+        if self.channel_name(o) == "funpay" and str(self.cfg.rtba.get("preset") or "custom") != "custom":
+            # сегмент с маржой ниже порога (мелкие лоты «в ноль») не должен ждать одобрения: допускаем
+            # маржу сегмента минус 1% на колебание курса TON между выставлением цены и покупкой
+            plan = self.lot_strategy(int(o["stars_per_unit"] or stars) if "stars_per_unit" in o.keys() else stars)
+            minp = min(minp, float(plan.get("margin_pct") or 0) - float(plan.get("night_bonus") or 0) - 1.0)
         fl = self.econ.flow(stars, price, ton_stars=amount, channel=self.channel_name(o))
         if fl.profit is None:
             return "нет курса TON — не могу проверить, что заказ не в минус"
@@ -839,12 +845,13 @@ class Engine:
             return
         if not self.cost_per_star_ton() or not self.econ.effective_rate()[0]:
             return
-        margin = float(self.cfg.rtba.min_margin_pct or 0)
         node = int(self.cfg.funpay.node_id)
         for lot in self.lots:
             if not lot.get("offer_id"):
                 continue
             stars = int(lot["stars"])
+            # маржа сегмента с ночной надбавкой — та же, что у пола RTBA, иначе они перетягивали бы цену
+            margin = float(self.lot_strategy(stars).get("margin_pct", self.cfg.rtba.min_margin_pct) or 0)
             fl = self.econ.flow(stars, 100.0)
             if fl.breakeven_price is None:
                 continue
@@ -1154,6 +1161,32 @@ class Engine:
             log.warning("поднятие лотов: %s", e)
         self.db.kv_set("last_raise", time.time())
 
+    def turnover_usage(self) -> tuple[float | None, float, float]:
+        """Доля лимита карты, выбранная выручкой FunPay за сутки/месяц (кэш на минуту)."""
+        c = getattr(self, "_usage_cache", None)
+        if c and time.time() - c[0] < 60:
+            return c[1]
+        day, month = strat.turnover(self.db)
+        res = (strat.usage(self.cfg.rtba, day, month), day, month)
+        self._usage_cache = (time.time(), res)
+        return res
+
+    def lot_strategy(self, stars: int) -> dict:
+        used = self.turnover_usage()[0] if str(self.cfg.rtba.get("preset") or "custom") == "auto" else None
+        return strat.resolve(self.cfg.rtba, int(stars), used=used)
+
+    @staticmethod
+    def _plan_tag(plan: dict | None) -> str:
+        if not plan or plan.get("effective") == "custom" and not plan.get("night"):
+            return ""
+        parts = [plan["title"]]
+        seg = plan.get("segment")
+        if seg:
+            parts.append(f"{seg.get('from')}–{seg.get('to')}⭐ маржа {plan.get('margin_pct', 0):g}%")
+        if plan.get("night"):
+            parts.append(f"ночь +{plan['night_bonus']:g}%")
+        return "[" + " · ".join(parts) + "] "
+
     async def rtba_step(self) -> None:
         cfg = self.cfg.rtba
         if self.paused:
@@ -1183,6 +1216,10 @@ class Engine:
             pos = int(lot.get("position") or 0)
             if pos > 0:
                 overrides.update(strategy="topN", target_position=pos)
+            plan = None
+            if kind == "username":       # пресет и сегмент номинала (подарки — по своей позиции, как раньше)
+                plan = self.lot_strategy(stars)
+                overrides.update(plan["overrides"])
             try:
                 fields = await self.fp.get_lot_fields(int(offer_id), node)
             except FunPayError as e:
@@ -1217,7 +1254,7 @@ class Engine:
             self.db.exec("INSERT INTO price_history(ts,offer_id,stars,old_price,new_price,best_competitor,competitors,"
                          "position,floor,reason,applied) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                          (time.time(), offer_id, stars, current, d.target_lot_price, d.best_competitor, d.competitors,
-                          d.position, d.floor, d.reason + ("; " + "; ".join(d.notes) if d.notes else ""),
+                          d.position, d.floor, self._plan_tag(plan) + d.reason + ("; " + "; ".join(d.notes) if d.notes else ""),
                           int(applied)))
             if any("пола" in n for n in d.notes):
                 below = d.best_competitor is not None and d.target_buyer_price is not None and \
@@ -1386,10 +1423,37 @@ class Engine:
             if len(args) > 0 and args[0].isdigit():
                 return await self.gifts.create_topup(int(args[0]), self.gifts.account.get("username") or "")
             return await self.gifts.maybe_topup(need=1)
+        if cmd in ("rtba_preset", "card_limit"):
+            upd: dict = {}
+            if cmd == "rtba_preset":
+                if not args or args[0] not in strat.PRESET_TITLES:
+                    return "пресеты: " + ", ".join(strat.PRESET_TITLES)
+                upd["preset"] = args[0]
+            else:
+                try:
+                    upd["card_limit"] = {"daily_rub": float(args[0]) if args else 0.0,
+                                         "monthly_rub": float(args[1]) if len(args) > 1 else
+                                         float((self.cfg.rtba.get("card_limit") or {}).get("monthly_rub") or 0)}
+                except ValueError:
+                    return "формат: card_limit <в сутки ₽> [в месяц ₽]"
+            for k, v in upd.items():
+                if isinstance(v, dict):
+                    self.cfg.rtba.setdefault(k, {}).update(v)
+                else:
+                    self.cfg.rtba[k] = v
+            self._usage_cache = None
+            if lm is not None and lm.save_config is not None:
+                lm.save_config({"rtba": upd}, rebuild=False)
+            used, day, month = self.turnover_usage()
+            plan = self.lot_strategy(500)
+            return (f"RTBA: пресет {strat.PRESET_TITLES.get(self.cfg.rtba.get('preset'), '?')} → сейчас {plan['title']}; "
+                    f"выручка сегодня {day:.0f} ₽, месяц {month:.0f} ₽"
+                    + (f", лимит выбран на {used * 100:.0f}%" if used is not None else ", лимит карты не задан"))
         if cmd == "report" and self.analytics:
             return self.analytics.text_report()
         return ("Команды: /status /orders /balance /report /pause /resume /approve ID /reject ID /refund ID "
-                "/delivered ID /user ID username /msg ID текст /stars /topup [N] /support /lots_create /lots_off")
+                "/delivered ID /user ID username /msg ID текст /stars /topup [N] /support /lots_create /lots_off "
+                "/rtba_preset custom|turnover|balanced|margin|auto /card_limit ₽_в_сутки [₽_в_месяц]")
 
     def status_text(self) -> str:
         counts = {r["status"]: r["n"] for r in self.db.q("SELECT status, COUNT(*) n FROM orders GROUP BY status")}

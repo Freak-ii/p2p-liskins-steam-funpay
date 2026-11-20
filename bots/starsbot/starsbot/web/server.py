@@ -349,11 +349,49 @@ def make_app(sup, log_handler=None) -> web.Application:
         last = {int(r["stars"]): r for r in db.q(
             "SELECT * FROM price_history WHERE id IN (SELECT MAX(id) FROM price_history GROUP BY stars)") if r["stars"]}
         cps = sup.econ.cost_per_star_rub()
-        return render("pricing.html", request, stars=stars, denoms=denoms, lots=lots, last=last,
+        from starsbot.core import strategy as strat
+        used, day_rub, month_rub = sup.engine.turnover_usage()
+        rt = sup.cfg.rtba
+        plans = {int(l["stars"]): strat.resolve(rt, int(l["stars"]), used=used) for l in lots}
+        sinfo = {"preset": rt.get("preset") or "custom", "titles": strat.PRESET_TITLES, "used": used,
+                 "day": day_rub, "month": month_rub, "limit": rt.get("card_limit") or {},
+                 "night": strat.is_night(rt), "night_cfg": rt.get("night") or {},
+                 "spread": rt.get("spread_buffer") or {}, "presets": strat.describe(rt, used),
+                 "effective": strat.auto_preset(rt, used) if (rt.get("preset") or "custom") == "auto"
+                 else (rt.get("preset") or "custom")}
+        return render("pricing.html", request, stars=stars, denoms=denoms, lots=lots, last=last, plans=plans, pst=sinfo,
                       series=a.price_series(stars, 300), cost_per_star=cps, fee_pct=sup.econ.fees_pct(),
                       history=db.q("SELECT * FROM price_history WHERE stars=? ORDER BY id DESC LIMIT 60", (stars,)),
                       comps=json.loads(snap["data"]) if snap else [], snap_ts=snap["ts"] if snap else None,
                       rtba=sup.cfg.rtba, markup=sup.engine.rtba.markup)
+
+    async def pricing_strategy(request: web.Request):
+        """Быстрый выбор пресета и лимита карты — применяется сразу, без перезапуска."""
+        need(request, "admin")
+        from starsbot.core import strategy as strat
+        f = await request.post()
+        preset = str(f.get("preset") or "")
+        if preset not in strat.PRESET_TITLES:
+            raise back(request, "Неизвестный пресет", "/pricing")
+        upd = {"preset": preset,
+               "card_limit": {"daily_rub": max(0.0, _num_in(f.get("daily_rub"), 0, float)),
+                              "monthly_rub": max(0.0, _num_in(f.get("monthly_rub"), 0, float))},
+               "spread_buffer": {"enabled": f.get("spread") == "on"},
+               "night": {"enabled": f.get("night") == "on"}}
+        if preset != "custom":
+            upd["enabled"] = True
+        sup.save({"rtba": upd}, rebuild=False)
+        live = sup.engine.cfg.rtba
+        for k, v in upd.items():
+            if isinstance(v, dict):
+                live.setdefault(k, {})
+                live[k].update(v)
+            else:
+                live[k] = v
+        sup.engine._usage_cache = None
+        audit(request, "rtba.preset", preset)
+        raise back(request, f"Пресет «{strat.PRESET_TITLES[preset]}» включён — цены пересчитаются при следующей "
+                            f"проверке рынка", "/pricing")
 
     # ------------------------------------------------------------------ деньги
     async def money(request: web.Request):
@@ -1035,7 +1073,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/", dashboard), web.get("/orders", orders), web.get("/orders/{oid}", order),
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.get("/customers/{cid:\\d+}", customer),
-        web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing),
+        web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing), web.post("/pricing/strategy", pricing_strategy),
         web.get("/money", money), web.post("/money", money_action), web.post("/api/calc", api_calc),
         web.get("/analytics", analytics_page), web.get("/alerts", alerts),
         web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
