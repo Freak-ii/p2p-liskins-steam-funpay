@@ -29,8 +29,9 @@ DEFAULTS: dict = {
         "poll_seconds": 10,          # как часто опрашивать ботов для сводки
     },
     "workers": {
-        "mannbot": {"enabled": True, "autostart": True, "port": 8801, "python": ""},
-        "lisbot": {"enabled": True, "autostart": True, "port": 8802, "node": ""},
+        # autostart — запускать ли бота вместе с центром (меняется кнопкой в панели центра)
+        "mannbot": {"enabled": True, "autostart": False, "port": 8801, "python": ""},
+        "lisbot": {"enabled": True, "autostart": False, "port": 8802, "node": ""},
         # процесс StarsBot = его панель; торговля начнётся только после мастера настройки (кошелёк TON, Fragment)
         "starsbot": {"enabled": True, "autostart": True, "port": 8803, "python": ""},
     },

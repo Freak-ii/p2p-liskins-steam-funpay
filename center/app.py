@@ -82,7 +82,7 @@ class Center:
     def overview(self) -> dict:
         bots = []
         for name, w in self.workers.items():
-            bots.append({**w.info(), "summary": self.summaries.get(name), "summary_at": self.summary_at.get(name)})
+            bots.append({**w.info(), "autostart": bool(self.cfg.worker(name).get("autostart", True)), "summary": self.summaries.get(name), "summary_at": self.summary_at.get(name)})
         alerts = self.alerts(30)
         return {
             "uptime": round(time.time() - self.started_at), "demo": self.demo, "bots": bots,
