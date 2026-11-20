@@ -182,3 +182,41 @@ def test_pages_before_first_wallet_check(tmp_path):
             await client.close()
 
     asyncio.run(go())
+
+
+def test_marketplace_pages(tmp_path):
+    from starsbot.avito.fake import DEMO_PRODUCTS, run_avito_demo
+    from starsbot.wb.channel import run_wb_demo
+    over = {**DEMO_OVERRIDES, "avito": {"enabled": True, "products": DEMO_PRODUCTS},
+            "wb": {"enabled": True, "products": [{"stars": 100, "nm_id": "WB100", "price": 190}]}}
+    sup = Supervisor(tmp_path, demo=True, overrides=over)
+    sup.save({"dashboard": TOKENS}, rebuild=False)
+
+    async def go():
+        sup.engine.cfg.deal.message_rate_limit_seconds = 0
+        sup.engine.fragment_ok = True
+        await sup.engine.wallet_watch()
+        await run_avito_demo(sup.engine, sup.engine.wallet)
+        await run_wb_demo(sup.engine, sup.engine.wallet)
+        client = await _client(sup, MemoryLogHandler(), TOKENS["token"])
+        try:
+            for path in ["/avito", "/wb", "/ozon", "/settings"]:
+                r = await client.get(path)
+                assert r.status == 200, (path, await r.text())
+            html = await (await client.get("/avito")).text()
+            assert "Анна" in html and "Пол маржи" in html
+            r = await client.post("/wb", data={"action": "issue", "stars": "100", "count": "4"})
+            assert r.status == 200
+            csv_text = await (await client.get("/wb/codes.csv")).text()
+            assert csv_text.count("TGW-") >= 4
+            r = await client.post("/avito", data={"action": "products", "id_100": "https://www.avito.ru/moskva/x_1234567",
+                                                  "price_100": "200"})
+            assert r.status == 200
+            p = next(p for p in sup.raw["avito"]["products"] if p["stars"] == 100)    # в демо конфиг перекрыт
+            assert p["item_id"] == 1234567 and p["price"] == 200
+            r = await client.post("/avito", data={"action": "pricing", "price_mode": "margin", "min_margin_pct": "3",
+                                                  "target_margin_pct": "9", "price_sync": "1"})
+            assert r.status == 200 and sup.raw["avito"]["price_mode"] == "margin"
+        finally:
+            await client.close()
+    asyncio.run(go())

@@ -1,0 +1,71 @@
+{% extends "base.html" %}{% block title %}Wildberries{% endblock %}
+{% block body %}
+<h1>Wildberries: звёзды кодами активации</h1>
+
+{% if not ch %}
+<div class="card"><h2>Wildberries выключен</h2>
+<p>Отдельную площадку WB Digital закрыли 1 декабря 2025, цифровые товары переехали на основную витрину в категорию
+«Цифровые товары» (ключи активации). Пока она открыта не всем продавцам — подайте заявку через поддержку в кабинете
+продавца WB. Открытого API выдачи ключей нет, поэтому бот работает через пул кодов:</p>
+<ol><li>здесь выпускаете пачку одноразовых кодов нужного номинала;</li>
+<li>скачиваете CSV и загружаете коды в карточку товара в кабинете WB — WB выдаёт их покупателям сам;</li>
+<li>покупатель вводит код и @username в боте активации — бот покупает звёзды на Fragment с общего кошелька.</li></ol>
+<p>Что нужно: статус ИП или самозанятого (WB платит на расчётный счёт), доступ к категории «Цифровые товары», отдельный
+Telegram-бот для покупателей (@BotFather).</p>
+{% if is_admin %}<p><a href="/settings#s-wb">Настройки → Wildberries</a></p>{% endif %}</div>
+{% else %}
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ s.pool_stars }}⭐</div><div class="l">в невыданных кодах (нужно держать в TON)</div></div>
+  <div class="card kpi"><div class="v">{{ s.redeemed }}</div><div class="l">кодов активировано</div></div>
+  <div class="card kpi"><div class="v">{% if s.bot_username %}@{{s.bot_username}}{% elif s.bot %}бот{% else %}<span class="c-red">нет</span>{% endif %}</div><div class="l">бот активации</div></div>
+</div>
+
+<div class="cols">
+<div class="card"><h2>Товары и цены</h2>
+<div class="help" style="margin-bottom:8px">Артикул WB (nm_id) — для файла выгрузки. Цену на WB вы ставите в кабинете: бот показывает, какая цена
+держит маржу не ниже {{ wb.min_margin_pct }}% (комиссия WB {{ wb.commission_pct }}%).</div>
+<form method="post"><input type="hidden" name="action" value="products"><table>
+<tr><th>Номинал</th><th>Артикул nm_id</th><th>Ваша цена, ₽</th><th>Пол маржи</th><th>Ставить на WB</th><th>Кодов в пуле</th></tr>
+{% set info = {} %}{% for p in s.prices %}{% set _ = info.update({p.stars: p}) %}{% endfor %}
+{% for p in wb.products %}{% set i = info.get(p.stars, {}) %}<tr><td><b>{{p.stars}}⭐</b></td>
+<td><input name="id_{{p.stars}}" value="{{p.nm_id or ''}}" style="width:120px" {% if not is_admin %}disabled{% endif %}></td>
+<td><input name="price_{{p.stars}}" value="{{p.price or ''}}" style="width:80px" {% if not is_admin %}disabled{% endif %}></td>
+<td>{{ i.floor|money if i.floor else '—' }}</td>
+<td class="{{ 'c-red' if i.raised else '' }}">{{ i.target|money if i.target else '—' }}{% if i.raised %} ↑ поднимите цену{% endif %}</td>
+<td class="{{ 'c-red' if p.nm_id and (i.pool or 0) < wb.pool_warn_low else '' }}">{{ i.pool or 0 }}</td></tr>{% endfor %}
+</table>{% if is_admin %}<button>Сохранить товары</button>{% endif %}</form></div>
+
+{% if is_admin %}<div class="card"><h2>Выпустить коды</h2>
+<form method="post"><input type="hidden" name="action" value="issue">
+<label>Номинал<br><select name="stars">{% for p in wb.products %}<option value="{{p.stars}}">{{p.stars}} ⭐</option>{% endfor %}</select></label>
+<label>Сколько кодов<br><input name="count" value="5" style="width:80px"></label>
+<button>Выпустить</button></form>
+<div class="help" style="margin-top:8px">Выпускайте столько, сколько готовы выдать прямо сейчас: каждый код в пуле — обещание
+звёзд, на него должно хватать TON. Лишние коды можно аннулировать — WB-покупатель с таким кодом получит отказ, а WB
+вернёт ему деньги.</div>
+<p><a href="/wb/codes.csv">Скачать все невыданные коды (CSV)</a></p></div>{% endif %}
+</div>
+
+<div class="card tw"><h2>Пачки кодов</h2><table>
+<tr><th>Пачка</th><th>⭐</th><th>Всего</th><th>Осталось</th><th>Активировано</th><th>Выгружена</th><th></th></tr>
+{% for b in s.batches %}<tr><td>{{b.batch}}</td><td>{{b.stars}}</td><td>{{b.n}}</td><td>{{b.left_n}}</td><td>{{b.used}}</td><td>{{ b.exported|ts if b.exported else 'нет' }}</td>
+<td>{% if is_admin and b.left_n %}<a href="/wb/codes.csv?batch={{b.batch}}">CSV</a>
+<form method="post" style="display:inline"><input type="hidden" name="batch" value="{{b.batch}}"><button name="action" value="void" class="btn-mini">аннулировать остаток</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="7" class="muted">Кодов ещё не выпускали</td></tr>{% endfor %}</table></div>
+
+<div class="card"><h2>Инструкция для карточки товара</h2>
+<pre style="white-space:pre-wrap">Как получить звёзды:
+1. После оплаты код активации появится в заказе в личном кабинете Wildberries.
+2. Откройте бот активации в Telegram{% if s.bot_username %}: @{{s.bot_username}}{% endif %}.
+3. Отправьте код и username аккаунта, на который зачислить звёзды (например, @username).
+4. Звёзды придут через официальную платформу Telegram — Fragment, обычно за 1–5 минут.
+Вход в аккаунт, пароли и коды из Telegram не нужны — никому их не сообщайте.</pre></div>
+
+<div class="card tw"><h2>Активированные коды</h2><table>
+<tr><th>Код</th><th>Заказ</th><th>⭐</th><th>Состояние</th><th>Получатель</th><th>Статус заказа</th></tr>
+{% for c in codes %}<tr><td><code>{{ c.display[:-4] }}****</code></td><td>{% if c.order_id %}<a href="/orders/{{c.order_id}}">{{c.order_id}}</a>{% else %}—{% endif %}</td><td>{{c.stars}}</td>
+<td>{{ {'redeemed':'активирован','void':'аннулирован'}.get(c.state, c.state) }}</td><td>{{ ('@' ~ c.tg_username) if c.tg_username else '—' }}</td>
+<td>{% if c.status %}<span class="chip c-{{colors[c.status]}}">{{c.status|st}}</span>{% endif %}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Пока никто не активировал код</td></tr>{% endfor %}</table></div>
+{% endif %}
+{% endblock %}

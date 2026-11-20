@@ -1,0 +1,84 @@
+{% extends "base.html" %}{% block title %}Авито{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>Авито: продажа звёзд через безопасную сделку</h1>
+{% if ch and is_admin %}<div class="row"><form method="post"><button name="action" value="poll">Проверить чаты сейчас</button></form>
+<form method="post"><button name="action" value="prices">Пересчитать цены</button></form>
+<form method="post"><button name="action" value="test">Проверить API Авито</button></form></div>{% endif %}</div>
+
+{% if not ch %}
+<div class="card"><h2>Авито выключен</h2>
+<p>Как это работает: объявление «Telegram Stars» на каждый номинал с кнопкой «Купить» (безопасная сделка Авито для
+цифровых товаров). Покупатель платит Авито, бот видит оплату в чате объявления, просит @username, покупает звёзды на
+Fragment с общего кошелька и пишет в чат, что всё отправлено. Деньги Авито переводит после подтверждения покупателем.</p>
+<p>До оплаты бот отвечает на вопросы (как купить, номиналы) и запоминает username, если его прислали заранее. Чаты других
+ваших объявлений бот не трогает, а если вы ответили покупателю сами — не перебивает вас.</p>
+<p>Что нужно: профиль Авито с доступом к API (Авито → Для профессионалов → API: client_id и client_secret; мессенджер
+доступен не на всех тарифах), объявления по номиналам с включённой онлайн-оплатой.</p>
+{% if is_admin %}<p><a href="/settings#s-avito">Настройки → Авито</a></p>{% endif %}</div>
+{% else %}
+<div class="grid">
+  <div class="card kpi"><div class="v">{% if s.last_ok %}{{ s.last_ok|ts }}{% else %}—{% endif %}</div><div class="l">последняя проверка чатов{% if s.error %} · <span class="c-red">{{s.error}}</span>{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ s.waiting }}</div><div class="l">оплачено, ждём username</div></div>
+  <div class="card kpi"><div class="v">{{ s.unconfirmed }}</div><div class="l">выдано, ждём подтверждения покупателя</div></div>
+  <div class="card kpi"><div class="v">{{ s.presold }}</div><div class="l">прислали username до оплаты</div></div>
+  <div class="card kpi"><div class="v">{{ s.chats }}</div><div class="l">чатов по объявлениям со звёздами</div></div>
+</div>
+{% endif %}
+
+<div class="cols">
+<div class="card"><h2>Объявления и цены</h2>
+<div class="help" style="margin-bottom:8px">ID объявления — число из ссылки avito.ru/…_<b>1234567890</b> (можно вставить ссылку целиком).
+Ваша цена — сколько вы хотите; бот не опустит её ниже пола маржи {{ av.min_margin_pct }}% и сам выставит на Авито{% if not av.price_sync %} (автоцена выключена){% endif %}.</div>
+<form method="post"><input type="hidden" name="action" value="products"><table>
+<tr><th>Номинал</th><th>ID объявления</th><th>Ваша цена, ₽</th><th>Пол маржи</th><th>Будет на Авито</th><th>Сейчас</th></tr>
+{% set info = {} %}{% if s %}{% for p in s.prices %}{% set _ = info.update({p.stars: p}) %}{% endfor %}{% endif %}
+{% for p in av.products %}{% set i = info.get(p.stars, {}) %}<tr><td><b>{{p.stars}}⭐</b>{% if i.out %} <span class="chip c-red">нет TON</span>{% endif %}</td>
+<td><input name="id_{{p.stars}}" value="{{p.item_id or ''}}" style="width:130px" {% if not is_admin %}disabled{% endif %}></td>
+<td><input name="price_{{p.stars}}" value="{{p.price or ''}}" style="width:80px" {% if not is_admin %}disabled{% endif %}></td>
+<td>{{ i.floor|money if i.floor else '—' }}</td>
+<td class="{{ 'c-red' if i.raised else '' }}">{{ i.target|money if i.target else '—' }}{% if i.raised %} ↑{% endif %}</td>
+<td>{{ i.live if i.live else '—' }}</td></tr>{% endfor %}
+{% if is_admin %}<tr><td><input name="extra_stars" placeholder="ещё, ⭐" style="width:80px"></td><td><input name="extra_id" placeholder="ID"></td><td><input name="extra_price" placeholder="₽" style="width:80px"></td><td colspan="3" class="muted">например, 200 ⭐</td></tr>{% endif %}
+</table>{% if is_admin %}<button>Сохранить объявления</button>{% endif %}</form></div>
+
+<div class="card"><h2>Правила цены</h2>
+<form method="post"><input type="hidden" name="action" value="pricing">
+<label>Режим<br><select name="price_mode" {% if not is_admin %}disabled{% endif %}>
+<option value="fixed" {% if av.price_mode != 'margin' %}selected{% endif %}>моя цена, но не ниже пола маржи</option>
+<option value="margin" {% if av.price_mode == 'margin' %}selected{% endif %}>по целевой марже (следует за курсом TON)</option></select></label>
+<label>Минимальная маржа, % от цены<br><input name="min_margin_pct" value="{{ av.min_margin_pct }}" style="width:80px"></label>
+<label>Целевая маржа, % (режим «по марже»)<br><input name="target_margin_pct" value="{{ av.target_margin_pct }}" style="width:80px"></label>
+<label><input type="checkbox" name="price_sync" value="1" {% if av.price_sync %}checked{% endif %}> менять цены объявлений автоматически</label>
+{% if is_admin %}<button>Сохранить</button>{% endif %}</form>
+<div class="help" style="margin-top:8px">Маржа = (цена − комиссия Авито {{ av.commission_pct }}% − вывод {{ av.withdraw_fee_pct }}% − себестоимость TON) / цена.
+Себестоимость — по вашему курсу TON со страницы «Деньги». Если TON дорожает, пол растёт, и бот поднимает цену.</div></div>
+</div>
+
+<div class="card"><h2>Текст объявления</h2>
+<div class="help" style="margin-bottom:6px">Без ссылок, телефонов и других мессенджеров — так требует Авито.</div>
+<pre style="white-space:pre-wrap">⭐ Telegram Stars — автоматическая выдача 24/7
+Как получить:
+1. Нажмите «Купить» — оплата через Авито, продавец получит деньги только после того, как вы подтвердите получение.
+2. Пришлите в чат username аккаунта Telegram (например, @username).
+3. Звёзды придут за 1–5 минут через официальную платформу Telegram — Fragment.
+Вход в аккаунт, пароли и коды не нужны — никому их не сообщайте.</pre></div>
+
+{% if ch %}
+{% if calc %}<div class="card tw"><h2>Экономика номиналов на Авито</h2>
+<table><tr><th>Номинал</th><th>Цена, ₽</th><th>− Авито</th><th>= чистыми</th><th>Себестоимость</th><th>Прибыль</th><th>Маржа</th><th>Безубыток</th></tr>
+{% for f in calc %}<tr><td>{{f.stars}}⭐</td><td>{{f.price|money}}</td><td>{{f.funpay_fee|money}}</td><td>{{f.net_rub|money}}</td><td>{{f.cost_rub|money}}</td>
+<td class="{{ 'c-green' if (f.profit or 0) >= 0 else 'c-red' }}">{{f.profit|money}}</td><td class="{{ 'c-red' if f.margin_pct is not none and f.margin_pct < av.min_margin_pct else '' }}">{{ f.margin_pct if f.margin_pct is not none else '—' }}%</td><td>{{f.breakeven_price|money}}</td></tr>{% endfor %}</table></div>{% endif %}
+
+<div class="card tw"><h2>Заказы Авито</h2><table>
+<tr><th>Заказ</th><th>Покупатель</th><th>⭐</th><th>Цена</th><th>Получатель</th><th>Статус</th><th>Создан</th></tr>
+{% for o in orders %}<tr><td><a href="/orders/{{o.order_id}}">{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{{o.stars}}</td><td>{{o.price|money}}</td>
+<td>{{ ('@' ~ o.tg_username) if o.tg_username else '—' }}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{{o.created_at|ts}}</td></tr>
+{% else %}<tr><td colspan="7" class="muted">Заказов с Авито пока не было</td></tr>{% endfor %}</table></div>
+
+<div class="card tw"><h2>Чаты</h2><table>
+<tr><th>Покупатель</th><th>Объявление</th><th>Username до оплаты</th><th>Автоответ</th><th>Обновлён</th></tr>
+{% for c in chats %}<tr><td>{{c.buyer_name}}</td><td>{{c.item_title or c.item_id}}</td><td>{{ ('@' ~ c.pending_username) if c.pending_username else '—' }}</td>
+<td>{{ c.presale_at|ts if c.presale_at else '—' }}</td><td>{{c.updated_at|ts}}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">Чатов пока нет</td></tr>{% endfor %}</table></div>
+{% endif %}
+{% endblock %}

@@ -83,7 +83,11 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
                   mem: MemoryLogHandler) -> None:
     from starsbot.web.server import start_web
     from starsbot.ozon.fake import DEMO_PRODUCTS
-    demo_over = {**DEMO_OVERRIDES, "ozon": {"enabled": True, "products": DEMO_PRODUCTS}}
+    from starsbot.avito.fake import DEMO_PRODUCTS as AVITO_DEMO
+    demo_over = {**DEMO_OVERRIDES, "ozon": {"enabled": True, "products": DEMO_PRODUCTS},
+                 "avito": {"enabled": True, "products": AVITO_DEMO},
+                 "wb": {"enabled": True, "products": [{"stars": n, "nm_id": f"WB{n}", "price": p} for n, p in
+                                                      ((100, 189), (250, 459), (500, 899))]}}
     sup = Supervisor(home, demo=demo, overrides=demo_over if demo else None)
     token = sup.ensure_token()
     if demo:
@@ -92,10 +96,14 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         await run_scenario(sup.engine, sup.engine.fp, sup.engine.wallet, verbose=False)
         from starsbot.ozon.fake import run_ozon_demo
         await run_ozon_demo(sup.engine, sup.engine.wallet)
+        from starsbot.avito.fake import run_avito_demo
+        await run_avito_demo(sup.engine, sup.engine.wallet)
+        from starsbot.wb.channel import run_wb_demo
+        await run_wb_demo(sup.engine, sup.engine.wallet)
         from starsbot.demo import run_gift_demo
         sup.engine.cfg.gifts.pause_between_gifts = 0
         await run_gift_demo(sup.engine, sup.engine.fp, sup.engine.wallet)
-        log.info("Демо-сценарий выполнен: 6 заказов FunPay и 3 заказа Ozon в CRM")
+        log.info("Демо-сценарий выполнен: заказы FunPay, Ozon, Авито и Wildberries в CRM")
     runner = await start_web(sup, host, port, mem)
     shown_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     url = f"http://{shown_host}:{port}/login?token={token}"
