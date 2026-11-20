@@ -96,7 +96,11 @@ class GgselChannel:
 
     # ------------------------------------------------------------------ товары
     def products(self) -> list[dict]:
-        return [p for p in (self.c.products or []) if p.get("stars") and p.get("offer_id")]
+        out = [p for p in (self.c.products or []) if p.get("stars") and p.get("offer_id")]
+        pr = getattr(self.engine, "premium", None)
+        if pr is not None and pr.enabled:          # Telegram Premium: товары с полем months
+            out += [p for p in (self.c.get("premium_products") or []) if p.get("months") and p.get("offer_id")]
+        return out
 
     def product_for(self, product_id: int) -> dict | None:
         for p in self.products():
@@ -175,10 +179,13 @@ class GgselChannel:
         oid = order_id_of(go.invoice_id)
         if self.db.get_order(oid) is not None:
             return
-        per_unit = int(conf.get("stars") or 0)
-        stars = per_unit * max(1, go.quantity)
         fee = float(self.c.commission_pct or 0) / 100
         currency = "₽" if go.currency.upper() in ("RUB", "RUR", "₽", "") else go.currency
+        if conf.get("months"):
+            await self.create_premium_order(go, conf, fee, currency)
+            return
+        per_unit = int(conf.get("stars") or 0)
+        stars = per_unit * max(1, go.quantity)
         self.db.create_order(order_id=oid, buyer_username="Покупатель GGSEL", buyer_id=0,
                              chat_id=chat_of(go.invoice_id), description=f"{stars} Telegram Stars (GGSEL)",
                              quantity=go.quantity, stars_per_unit=per_unit, stars=stars, price=round(go.amount, 2),
@@ -213,6 +220,44 @@ class GgselChannel:
         await self.engine.say(o, "greeting_need_username")
         self.db.add_event(oid, "greeting_sent")
         if raw:                                       # покупатель что-то ввёл, но это не username
+            await self.engine.bad_username(self.db.get_order(oid), "bad_format")
+
+    async def create_premium_order(self, go: GgselOrder, conf: dict, fee: float, currency: str) -> None:
+        from starsbot.premium.service import months_text
+        oid = order_id_of(go.invoice_id)
+        months = int(conf["months"])
+        self.db.create_order(order_id=oid, buyer_username="Покупатель GGSEL", buyer_id=0,
+                             chat_id=chat_of(go.invoice_id), description=f"Telegram Premium {months_text(months)} (GGSEL)",
+                             quantity=go.quantity, stars_per_unit=0, stars=0, price=round(go.amount, 2),
+                             currency=currency, fp_status="paid", lot_offer_id=str(conf.get("offer_id") or ""),
+                             lang="ru", channel="ggsel", payout=round(go.amount * (1 - fee), 2), delivery="premium",
+                             premium_months=months, status=S.AWAITING_USERNAME.value)
+        self.db.exec("UPDATE ggsel_sales SET order_id=?, updated_at=? WHERE invoice_id=?",
+                     (oid, time.time(), go.invoice_id))
+        username, raw = username_from_options(go.options)
+        self.db.add_event(oid, "created", channel="ggsel", invoice=go.invoice_id, price=go.amount, months=months,
+                          quantity=go.quantity, option=raw[:64])
+        await self.notifier.notify("INFO", "ggsel_new_order", f"🛒 GGSEL #{go.invoice_id}: Telegram Premium "
+                                   f"{months_text(months)} за {go.amount:.2f} {currency}" +
+                                   (f" → @{username}" if username else " (username спросим в чате)"), order_id=oid)
+        o = self.db.get_order(oid)
+        if go.quantity > 1:
+            self.engine._set(oid, S.MANUAL, "premium_multi", fail_reason="premium_qty")
+            await self.notifier.notify("WARNING", "premium_multi", f"GGSEL #{go.invoice_id}: {go.quantity} × Premium "
+                                       "в одном заказе — выдайте вручную.", order_id=oid)
+            await self.say(o, "call_seller", self.engine._order_vars(o))
+            return
+        if self.engine.paused:
+            if username:
+                self.engine._set(oid, event="username_received", tg_username=username, username_source="ggsel",
+                                 username_at=time.time())
+            return
+        if username:
+            await self.engine.accept_username(o, username, source="ggsel_form")
+            return
+        await self.engine.say(o, "greeting_need_username")
+        self.db.add_event(oid, "greeting_sent")
+        if raw:
             await self.engine.bad_username(self.db.get_order(oid), "bad_format")
 
     # ------------------------------------------------------------------ статусы счетов
@@ -359,6 +404,10 @@ class GgselChannel:
         mode = str(self.c.get("price_mode") or "manual")
         if mode != "margin":
             return float(p["price"]) if p.get("price") else None
+        if p.get("months"):
+            pr = self.engine.premium
+            m = max(float(self.c.get("margin_pct") or 0), float(self.c.get("min_margin_pct") or 0))
+            return pr.floor_price(int(p["months"]), channel="ggsel", margin_pct=m) if pr is not None else None
         econ = self.engine.econ
         if econ is None:
             return None
@@ -379,30 +428,39 @@ class GgselChannel:
         econ = self.engine.econ
         if econ is None or not price:
             return None
+        if p.get("months"):
+            return self.engine.premium.margin_at(int(p["months"]), float(price), channel="ggsel")
         return econ.flow(int(p["stars"]), float(price), channel="ggsel").margin_pct
 
     async def stock_sync(self, balance: float, per_star: float | None, committed: int) -> None:
         """Остаток каждого товара = сколько раз хватит свободного TON; цена — по марже (если включено)."""
-        if self.engine.paused or not per_star:
+        if self.engine.paused:
             return
-        free_ton = max(0.0, balance - float(self.cfg.ton.fee_reserve_ton) - committed * per_star)
+        free_ton = max(0.0, balance - float(self.cfg.ton.fee_reserve_ton) - committed * (per_star or 0))
         if not self.engine.fragment_ok and self.cfg.fragment.hide_lots_when_down:
             free_ton = 0.0
         push_prices = time.time() - self._last_price_push >= float(self.c.get("price_push_minutes") or 10) * 60
         min_m = float(self.c.get("min_margin_pct") or 0)
         for p in self.products():
-            stars = int(p["stars"])
+            stars = int(p.get("stars") or 0)
+            months = int(p.get("months") or 0)
+            label = f"Premium {months} мес." if months else f"{stars} ⭐"
+            if not months and not per_star:
+                continue                         # цена звезды ещё неизвестна — звёздные товары не трогаем
             fields: dict[str, Any] = {}
             price = self.target_price(p)
             margin = self.margin_at(p, price) if price else None
             low = margin is not None and margin < min_m
             if low:
-                await self.notifier.notify("WARNING", "ggsel_low_margin", f"GGSEL {stars} ⭐: цена {price} ₽ даёт "
+                await self.notifier.notify("WARNING", "ggsel_low_margin", f"GGSEL {label}: цена {price} ₽ даёт "
                                            f"маржу {margin}% (минимум {min_m}%). Товар скрыт, поднимите цену или "
                                            "включите цену по марже.", throttle_key=f"ggsel_margin:{p['offer_id']}")
             if self.c.stock_sync:
-                cap = int(self.c.max_stock or 0) if stars >= FRAGMENT_MIN_STARS else 100000
-                amount = max(0, min(int(free_ton / (stars * per_star * 1.03)), cap))
+                cap = int(self.c.max_stock or 0) if months or stars >= FRAGMENT_MIN_STARS else 100000
+                if months:
+                    amount = max(0, min(self.engine.premium.capacity(months, free_ton), cap))
+                else:
+                    amount = max(0, min(int(free_ton / (stars * per_star * 1.03)), cap))
                 if low and self.c.get("hide_below_min_margin", True):
                     amount = 0
                 if self.db.kv_get(f"ggsel_stock:{p['offer_id']}") != amount:
@@ -423,7 +481,7 @@ class GgselChannel:
                 self.db.kv_set(f"ggsel_stock:{p['offer_id']}", fields["quantity"])
             if "price" in fields:
                 self.db.kv_set(f"ggsel_price:{p['offer_id']}", fields["price"])
-            self.db.add_event("-", "ggsel_offer", offer_id=p["offer_id"], stars=stars, **fields)
+            self.db.add_event("-", "ggsel_offer", offer_id=p["offer_id"], stars=stars, months=months, **fields)
         if push_prices:
             self._last_price_push = time.time()
 
@@ -471,7 +529,8 @@ class GgselChannel:
         active = (S.COMPLETED.value, S.REFUNDED.value, S.BLOCKED.value, S.DELIVERED.value)
         return {
             "enabled": True, "last_ok": self.last_ok, "error": self.last_error,
-            "products": self.products(),
+            "products": [p for p in self.products() if not p.get("months")],
+            "premium_products": [p for p in self.products() if p.get("months")],
             "stocks": {str(p["offer_id"]): self.db.kv_get(f"ggsel_stock:{p['offer_id']}") for p in self.products()},
             "prices": {str(p["offer_id"]): self.db.kv_get(f"ggsel_price:{p['offer_id']}") for p in self.products()},
             "targets": {str(p["offer_id"]): self.target_price(p) for p in self.products()},

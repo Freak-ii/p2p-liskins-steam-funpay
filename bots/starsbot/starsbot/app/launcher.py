@@ -24,6 +24,10 @@ DEMO_OVERRIDES = {
     "risk": {"large_order_stars": 1500, "manual_review_score": 40},
     "rtba": {"enabled": True, "competitor_min_amount": 2, "min_margin_pct": 8},
     "notifications": {"telegram": {"enabled": False}},
+    "premium": {"enabled": True, "pilot_orders": 0, "price_mode": "rtba", "target_position": 2,
+                "quote_username": "my_shop_account",
+                "lots": [{"months": 3, "offer_id": 301, "position": 0}, {"months": 6, "offer_id": 302, "position": 0},
+                         {"months": 12, "offer_id": 303, "position": 1}]},
     "gifts": {"enabled": True, "pilot_orders": 0, "pause_between_gifts": 0,
               "lots": [{"stars": n, "offer_id": 100 + i, "position": 3 if n == 13 else 0}
                        for i, n in enumerate((13, 21, 43, 85, 50, 100, 150, 250, 350, 500))]},
@@ -83,9 +87,9 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
                   mem: MemoryLogHandler) -> None:
     from starsbot.web.server import start_web
     from starsbot.ozon.fake import DEMO_PRODUCTS
-    from starsbot.ggsel.fake import DEMO_PRODUCTS as GG_PRODUCTS
+    from starsbot.ggsel.fake import DEMO_PREMIUM_PRODUCTS, DEMO_PRODUCTS as GG_PRODUCTS
     demo_over = {**DEMO_OVERRIDES, "ozon": {"enabled": True, "products": DEMO_PRODUCTS},
-                 "ggsel": {"enabled": True, "products": GG_PRODUCTS}}
+                 "ggsel": {"enabled": True, "products": GG_PRODUCTS, "premium_products": DEMO_PREMIUM_PRODUCTS}}
     sup = Supervisor(home, demo=demo, overrides=demo_over if demo else None)
     token = sup.ensure_token()
     if demo:
@@ -99,6 +103,8 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         from starsbot.demo import run_gift_demo
         sup.engine.cfg.gifts.pause_between_gifts = 0
         await run_gift_demo(sup.engine, sup.engine.fp, sup.engine.wallet)
+        from starsbot.demo import run_premium_demo
+        await run_premium_demo(sup.engine, sup.engine.fp, sup.engine.wallet)
         log.info("Демо-сценарий выполнен: заказы FunPay, Ozon и GGSEL в CRM")
     runner = await start_web(sup, host, port, mem)
     shown_host = "127.0.0.1" if host in ("0.0.0.0", "") else host

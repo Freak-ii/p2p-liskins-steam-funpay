@@ -196,9 +196,9 @@ class Economics:
                                          (since,), 0) or 0)
         # реальные списания с кошелька: покупки на Fragment, включая пополнение звёзд аккаунта (у подарков TON
         # в заказе — только оценка себестоимости, с кошелька они не списываются)
-        spent = float(self.db.scalar("SELECT SUM(ton_amount) FROM orders WHERE COALESCE(delivery,'fragment')='fragment' "
+        spent = float(self.db.scalar("SELECT SUM(ton_amount) FROM orders WHERE COALESCE(delivery,'fragment') IN ('fragment','premium') "
                                      "AND delivered_at>=? AND ton_amount>0", (since,), 0) or 0)
-        gas = float(self.db.scalar("SELECT SUM(tx_fee_ton) FROM orders WHERE COALESCE(delivery,'fragment')='fragment' "
+        gas = float(self.db.scalar("SELECT SUM(tx_fee_ton) FROM orders WHERE COALESCE(delivery,'fragment') IN ('fragment','premium') "
                                    "AND delivered_at>=?", (since,), 0) or 0)
         expected = float(start["ton"]) + topped - withdrawn - spent - gas
         actual = w.get("balance")

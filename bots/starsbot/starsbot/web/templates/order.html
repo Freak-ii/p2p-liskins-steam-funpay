@@ -10,7 +10,7 @@
 {% if o.payout is not none %}<tr><td>Выплата GGSEL (оценка)</td><td>{{o.payout|money}} ₽</td></tr>{% endif %}
 {% else %}<tr><td>Покупатель</td><td><a href="/customers/{{o.buyer_id}}">{{o.buyer_username}}</a>{% if customer %} {% for t, color in segments_of(customer) %}<span class="chip c-{{color}}">{{t}}</span> {% endfor %}{% endif %}{% if customer %} · заказов {{customer.orders_count}}, LTV {{customer.total_spent|money}} ₽{% if customer.blacklisted %} <span class="chip c-red">ЧС</span>{% endif %}{% endif %}</td></tr>{% endif %}
 <tr><td>Товар</td><td>{{o.description}}</td></tr>
-<tr><td>Звёзды</td><td><b>{{o.stars}}⭐</b> ({{o.quantity}} × {{o.stars_per_unit}})</td></tr>
+{% if o.delivery == 'premium' %}<tr><td>Товар</td><td><b>💎 Telegram Premium {{o.premium_months}} мес.</b> (подарок через Fragment)</td></tr>{% else %}<tr><td>Звёзды</td><td><b>{{o.stars}}⭐</b> ({{o.quantity}} × {{o.stars_per_unit}})</td></tr>{% endif %}
 <tr><td>Сумма</td><td>{{o.price|money}} {{o.currency}}</td></tr>
 {% if o.channel not in ('ozon', 'ggsel') %}<tr><td>Статус FunPay</td><td>{{o.fp_status}}</td></tr>{% endif %}
 <tr><td>Получатель</td><td>{% if o.tg_username %}<b>@{{o.tg_username}}</b>{% if o.tg_name %} · {{o.tg_name}}{% endif %} <span class="muted">({{o.username_source or '—'}}, попыток {{o.username_attempts}})</span>{% else %}—{% endif %}</td></tr>

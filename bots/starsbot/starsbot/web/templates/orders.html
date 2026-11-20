@@ -7,7 +7,7 @@
 <button>Найти</button></form>
 <div class="card tw"><table>
 <tr><th>Заказ</th><th>Покупатель</th><th>⭐</th><th>Получатель</th><th>Сумма</th><th>TON</th><th>Статус</th><th>Площадка</th><th>Риск</th><th>Оплачен</th><th>Выдан</th></tr>
-{% for o in rows %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{{o.stars}}</td>
+{% for o in rows %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{% if o.delivery == 'premium' %}💎 {{o.premium_months}} мес.{% else %}{{o.stars}}{% endif %}</td>
 <td>{{ ('@' ~ o.tg_username) if o.tg_username else '—' }}</td>
 <td>{{o.price|money}} {{o.currency}}</td><td>{{o.ton_amount|ton}}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{% if o.channel == 'ozon' %}<span class="chip c-blue">Ozon</span>{% elif o.channel == 'ggsel' %}<span class="chip c-amber">GGSEL</span> · {{o.fp_status}}{% else %}FunPay · {{o.fp_status}}{% endif %}</td>
 <td>{{o.risk_score or 0}}</td><td>{{o.paid_at|ts}}</td><td>{{o.delivered_at|ts}}</td></tr>

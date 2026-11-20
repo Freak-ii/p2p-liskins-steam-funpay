@@ -98,8 +98,12 @@ class Autopilot:
                 lines.append(f"  • подарок {r['gift_id']} — {r['stars']} ⭐, отправлен {_dt(r['updated_at'])}")
             lines.append("Подтверждение: история звёзд Telegram-аккаунта продавца (исходящие оплаты подарков).")
         else:
-            lines.append(f"Способ выдачи: Telegram Stars по username @{o['tg_username']} через официальный "
-                         "сервис Telegram — fragment.com")
+            if o["delivery"] == "premium":
+                lines.append(f"Способ выдачи: подарок Telegram Premium на {o['premium_months']} мес. по username "
+                             f"@{o['tg_username']} через официальный сервис Telegram — fragment.com")
+            else:
+                lines.append(f"Способ выдачи: Telegram Stars по username @{o['tg_username']} через официальный "
+                             "сервис Telegram — fragment.com")
             if o["tx_hash"] and not str(o["tx_hash"]).startswith("dry"):
                 lines.append(f"Транзакция оплаты на Fragment (сеть TON): {o['tx_hash']}")
                 lines.append(f"Проверить: https://tonviewer.com/transaction/{o['tx_hash']}")

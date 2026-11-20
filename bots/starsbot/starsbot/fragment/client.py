@@ -158,7 +158,7 @@ class FragmentClient:
                                     f"{self.wallet.raw_address}. Подключите на Fragment кошелёк бота.")
         return winfo
 
-    async def api(self, method: str, **params: Any) -> dict:
+    async def api(self, method: str, _page: str = "stars/buy", **params: Any) -> dict:
         if not self.api_hash:
             await self.login()
         data = {k: (json.dumps(v, separators=(",", ":")) if isinstance(v, (dict, list)) else v)
@@ -169,8 +169,8 @@ class FragmentClient:
             sess = await self._sess()
             try:
                 async with sess.post(f"{BASE}/api", params={"hash": self.api_hash}, data=data, headers={
-                        "X-Requested-With": "XMLHttpRequest", "Origin": BASE, "Referer": f"{BASE}/stars/buy",
-                        "X-Aj-Referer": f"{BASE}/stars",
+                        "X-Requested-With": "XMLHttpRequest", "Origin": BASE, "Referer": f"{BASE}/{_page}",
+                        "X-Aj-Referer": f"{BASE}/{_page.split('/')[0]}",
                         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                         "Accept": "application/json, text/javascript, */*; q=0.01"}) as r:
                     text = await r.text()
@@ -260,6 +260,62 @@ class FragmentClient:
         total = sum(m.amount for m in msgs) / 1e9
         return FragmentTx(req_id=req_id, valid_until=valid_until, messages=msgs, amount_ton=total or amount_ton,
                           comment=comment, confirm_method=str(resp.get("confirm_method") or ""),
+                          confirm_params=dict(resp.get("confirm_params") or {}))
+
+    # ------------------------------------------------------------------ Telegram Premium
+    # Подарок Premium на fragment.com/premium/gift: те же шаги, что у звёзд, но методы *Premium* и срок в месяцах.
+    async def search_premium_recipient(self, username: str, months: int) -> Recipient:
+        resp = await self.api("searchPremiumGiftRecipient", _page="premium/gift", query=username.lstrip("@"), months=int(months))
+        found = resp.get("found") or {}
+        if not found.get("recipient"):
+            err = _strip_html(str(resp.get("error") or ""))
+            raise FragmentError(err or f"пользователь @{username} не найден в Telegram",
+                                classify_error(err) if err else "not_found")
+        return Recipient(username=username.lstrip("@"), recipient=str(found["recipient"]),
+                         name=_strip_html(str(found.get("name") or "")))
+
+    async def init_premium(self, recipient: str, months: int) -> tuple[str, float]:
+        try:
+            await self.api("updatePremiumState", _page="premium/gift", mode="new", lv="false",
+                           dh=str(random.randint(100_000_000, 2_147_483_647)))
+        except FragmentError as e:
+            log.info("Fragment updatePremiumState: %s (продолжаем)", e)
+        try:
+            resp = await self.api("initGiftPremiumRequest", _page="premium/gift", recipient=recipient, months=int(months))
+        except FragmentAuthError as e:
+            if "access denied" in str(e).lower():
+                raise FragmentAuthError(
+                    "Fragment отказал в покупке Premium (Access denied). Проверьте в браузере на "
+                    "fragment.com/premium/gift, что можете сами подарить Premium этим аккаунтом (KYC, cookie)",
+                    "auth") from e
+            raise
+        req_id = str(resp.get("req_id") or "")
+        if not req_id:
+            raise FragmentError(f"Fragment не создал запрос на Premium: {str(resp)[:200]}", "layout")
+        try:
+            amount = float(str(resp.get("amount", "0")).replace(",", "."))
+        except ValueError:
+            amount = 0.0
+        return req_id, amount
+
+    async def get_premium_link(self, req_id: str, amount_ton: float = 0.0) -> FragmentTx:
+        await self.wallet.refresh()
+        resp = await self.api("getGiftPremiumLink", _page="premium/gift", account=self._account(), device=self._device(), transaction=1,
+                              id=req_id, show_sender=0)
+        return self._tx_from(resp, req_id, amount_ton)
+
+    def _tx_from(self, resp: dict, req_id: str, amount_ton: float) -> FragmentTx:
+        if resp.get("need_verify"):
+            raise FragmentAuthError("Fragment требует верификацию аккаунта (KYC): пройдите её на fragment.com", "kyc")
+        tx = resp.get("transaction") or {}
+        msgs = [TonMessage(address=str(m.get("address")), amount=int(m.get("amount")), payload=m.get("payload") or "",
+                           state_init=m.get("stateInit") or "") for m in tx.get("messages") or []]
+        if not msgs:
+            raise FragmentError(f"Fragment не вернул транзакцию: {str(resp)[:200]}", "layout")
+        valid_until = int(tx.get("validUntil") or (time.time() + 600))
+        total = sum(m.amount for m in msgs) / 1e9
+        return FragmentTx(req_id=req_id, valid_until=valid_until, messages=msgs, amount_ton=total or amount_ton,
+                          comment=decode_comment(msgs[0].payload), confirm_method=str(resp.get("confirm_method") or ""),
                           confirm_params=dict(resp.get("confirm_params") or {}))
 
     async def confirm(self, tx: FragmentTx, boc: str) -> None:
