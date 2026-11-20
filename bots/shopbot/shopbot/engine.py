@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import re
 import time
 from typing import Any
@@ -183,7 +182,7 @@ class Shop:
     async def on_paid(self, oid: str) -> None:
         async with self.lock:
             o = self.db.order(oid)
-            if o is None or o["status"] not in ("awaiting_payment", "expired"):
+            if o is None or o["status"] not in ("awaiting_payment", "awaiting_asset", "expired"):
                 return
             o = self.db.update_order(oid, status="paid", paid_at=time.time())
         if o["kind"] == "sell":
@@ -206,9 +205,12 @@ class Shop:
                                   int(o["amount"]), months)
         except SupplierError as e:
             self.rtba.supplier_failed(o["supplier"], str(e))
+            first = not self.db.scalar("SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind='supplier_retry'",
+                                       (oid,), 0)
             self.db.update_order(oid, event="supplier_retry", fail_reason=str(e))
-            await self.notify("WARNING", "supplier_error", f"#{oid}: поставщик {o['supplier']} не принял заказ "
-                                                           f"({e}) — повторю")
+            if first:                                       # одна тревога на заказ, дальше — тихие повторы
+                await self.notify("WARNING", "supplier_error", f"#{oid}: поставщик {o['supplier']} не принял заказ "
+                                                               f"({e}) — повторяю, при неудаче верну деньги на баланс")
             return
         if not res.get("ok"):
             self.rtba.supplier_failed(o["supplier"], str(res.get("error")))
@@ -321,10 +323,14 @@ class Shop:
 
     async def poll_deliveries(self) -> None:
         for o in self.db.q("SELECT * FROM orders WHERE kind='buy' AND status IN ('delivering','paid','manual')"):
-            if o["status"] == "paid" and time.time() - float(o["paid_at"] or 0) > 20:
-                await self.deliver(o["id"])            # поставщик был недоступен — повтор
-                continue
             if o["status"] == "paid":
+                retries = int(self.db.scalar("SELECT COUNT(*) FROM order_events WHERE order_id=? AND "
+                                             "kind='supplier_retry'", (o["id"],), 0))
+                if retries >= int(self.cfg.get("rtba.max_delivery_retries") or 5) or \
+                        time.time() - float(o["paid_at"] or 0) > 1800:
+                    await self._fail(o, "поставщик недоступен")      # не держим деньги клиента бесконечно
+                elif time.time() - float(o["paid_at"] or 0) > 20:
+                    await self.deliver(o["id"])                    # поставщик был недоступен — повтор
                 continue
             try:
                 st = await self.suppliers[o["supplier"]].status(o["supplier_ref"] or o["id"])
@@ -494,14 +500,11 @@ class Shop:
         active = self.db.scalar("SELECT COUNT(*) FROM orders WHERE status IN ('awaiting_payment','paid','delivering',"
                                 "'need_recipient','awaiting_asset','received')", (), 0)
         attention = self.db.scalar("SELECT COUNT(*) FROM orders WHERE status IN ('manual','payout_pending')", (), 0)
-        fee_buyback = float(self.db.scalar(
-            "SELECT SUM(payout_amount * 0.0) FROM orders WHERE kind='sell'", (), 0) or 0)
         return {"orders": buy["n"] or 0, "revenue": round(buy["rev"] or 0, 2), "margin": round(buy["margin"] or 0, 2),
                 "pay_fees": round(buy["fees"] or 0, 2), "ref_paid": round(buy["refs"] or 0, 2),
                 "buyback_n": sell["n"] or 0, "buyback_usdt": round(sell["usdt"] or 0, 2), "by_product": by_product,
                 "active": active, "attention": attention, "users": self.db.scalar("SELECT COUNT(*) FROM users", (), 0),
-                "new_users": self.db.scalar("SELECT COUNT(*) FROM users WHERE created_at>=?", (since,), 0),
-                "buyback_fee": fee_buyback}
+                "new_users": self.db.scalar("SELECT COUNT(*) FROM users WHERE created_at>=?", (since,), 0)}
 
     # ------------------------------------------------------------------ циклы
     async def _loop(self, name: str, every: float, fn) -> None:
@@ -539,14 +542,3 @@ class Shop:
         if self.bot is not None:
             await self.bot.close()
 
-
-def stars_price_table(shop: Shop, cost_per_star: float) -> list[tuple[int, float]]:
-    out = []
-    for n in shop.cfg.get("catalog.stars.denominations") or []:
-        price, _ = shop_price(shop.cfg, "stars", cost_per_star * n, n)
-        out.append((n, price))
-    return out
-
-
-def ceil2(x: float) -> float:
-    return math.ceil(x * 100) / 100

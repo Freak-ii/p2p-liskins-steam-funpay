@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block body %}<div class="card"><h2>{{ '🛒 Покупка' if o.kind == 'buy' else '💸 Выкуп' }} #{{ o.id }} — {{ STATUS.get(o.status, o.status) }}</h2>
+<p>Клиент: <a href="/customers/{{ u.id }}">{{ '@' ~ u.username if u.username else u.id }}</a> · товар: {{ PRODUCTS.get(o.product, o.product) }} {{ o.item }} · количество {{ o.amount }} · получатель {{ o.recipient }}</p>
+<h3>Что видел клиент</h3><table>{% for a, b in o.breakdown|j %}<tr><td>{{ a }}</td><td><b>{{ b }}</b></td></tr>{% endfor %}</table>
+{% if o.kind == 'buy' %}<h3>Внутренняя экономика</h3><table><tr><td>Себестоимость у поставщика</td><td>{{ o.cost_rub }} ₽</td></tr><tr><td>Цена / скидка</td><td>{{ o.price_rub }} / {{ o.discount_rub }} ₽</td></tr>
+<tr><td>Комиссия оплаты (клиенту)</td><td>{{ o.fee_rub }} ₽</td></tr><tr><td>Маржа</td><td><b>{{ o.margin_rub }} ₽</b></td></tr><tr><td>Реферальная награда</td><td>{{ o.ref_reward_rub }} ₽</td></tr>
+<tr><td>Поставщик</td><td>{{ o.supplier }} · {{ o.supplier_ref }} · {{ o.supplier_status }}</td></tr></table>{% endif %}
+{% if o.fail_reason %}<p class="warn">⚠ {{ o.fail_reason }}</p>{% endif %}
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+{% if o.status in ('manual','delivering') %}<form method="post"><input type="hidden" name="action" value="delivered"><button>✔ Выдано вручную</button></form>{% endif %}
+{% if o.status == 'payout_pending' %}<form method="post"><input type="hidden" name="action" value="payout"><button>✔ Выплатить</button></form>{% endif %}
+{% if o.kind == 'sell' and o.product == 'gift' and o.status == 'awaiting_asset' %}<form method="post"><input type="hidden" name="action" value="gift"><button>🎁 Подарок пришёл</button></form>{% endif %}
+{% if o.status in ('payout_pending','manual','awaiting_asset','need_recipient') %}<form method="post"><input type="hidden" name="action" value="reject"><input name="reason" placeholder="причина"><button class="ghost">Отклонить / вернуть</button></form>{% endif %}
+</div>
+<form method="post" style="margin-top:10px"><input type="hidden" name="action" value="note"><input name="text" value="{{ o.note }}" placeholder="заметка" style="width:60%"> <button class="ghost">Сохранить</button></form></div>
+<div class="card"><h2>Платежи</h2><table>{% for p in payments %}<tr><td>{{ p.provider }}</td><td>{{ p.id }}</td><td>{{ p.amount }} {{ p.currency }}</td><td>{{ p.status }}</td><td class="mute">{{ p.created_at|ts }}</td></tr>{% else %}<tr><td class="mute">—</td></tr>{% endfor %}</table></div>
+<div class="card"><h2>История</h2><table>{% for e in events %}<tr><td class="mute">{{ e.ts|ts }}</td><td>{{ e.kind }}</td><td class="mute">{{ e.data }}</td></tr>{% endfor %}</table></div>{% endblock %}

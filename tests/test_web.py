@@ -19,7 +19,7 @@ def test_auth_overview_and_secrets(tmp_path):
             r = await c.get(f"/login?token={token}", allow_redirects=False)
             assert r.status == 302
             d = await (await c.get("/api/overview")).json()
-            assert {b["name"] for b in d["bots"]} == {"lisbot", "mannbot", "starsbot"}
+            assert {b["name"] for b in d["bots"]} == {"lisbot", "mannbot", "starsbot", "shopbot"}
             r = await c.post("/api/lisbot/secrets", json={"LIS_API_KEY": "abc", "STEAM_PASSWORD": "pw"})
             assert (await r.json())["ok"]
             s = await (await c.get("/api/lisbot/secrets")).json()
@@ -44,13 +44,13 @@ def test_autostart_toggle_and_defaults(tmp_path):
             await c.get(f"/login?token={token}", allow_redirects=False)
             d = await (await c.get("/api/overview")).json()
             auto = {b["name"]: b["autostart"] for b in d["bots"]}
-            assert auto == {"starsbot": True, "mannbot": False, "lisbot": False}
+            assert auto == {"starsbot": True, "mannbot": False, "lisbot": False, "shopbot": False}
             r = await c.post("/api/workers/mannbot/autostart_on")
             assert (await r.json())["ok"]
             r = await c.post("/api/workers/starsbot/autostart_off")
             d = await (await c.get("/api/overview")).json()
             auto = {b["name"]: b["autostart"] for b in d["bots"]}
-            assert auto == {"starsbot": False, "mannbot": True, "lisbot": False}
+            assert auto == {"starsbot": False, "mannbot": True, "lisbot": False, "shopbot": False}
         assert Center(tmp_path).cfg.worker("mannbot")["autostart"] is True       # сохранено в center.yaml
         center.events.close()
     asyncio.run(go())

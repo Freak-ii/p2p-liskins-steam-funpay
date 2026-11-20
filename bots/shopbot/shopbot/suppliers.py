@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
 from typing import Any
 
@@ -146,7 +145,3 @@ def build_suppliers(cfg, *, demo: bool) -> dict[str, Any]:
         else:
             out[name] = HttpSupplier(name, s.get("url") or "", s.get("token") or "")
     return out
-
-
-def jitter() -> float:
-    return random.uniform(0.98, 1.02)

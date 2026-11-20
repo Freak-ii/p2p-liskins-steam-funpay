@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h2>💬 Демо-чат: вы — клиент бота</h2><p class="mute">Тот же код, что ответит в Telegram. Кнопки нажимаются, оплата — кнопкой «Оплатить (демо)». Клиент:
+<select id="uid" onchange="location='/demo?uid='+this.value"><option value="7777">новый клиент 7777</option>{% for u in users %}<option value="{{ u.id }}" {{ 'selected' if u.id == uid }}>{{ u.username or u.id }}</option>{% endfor %}</select></p></div>
+<div class="card" style="max-width:520px"><div id="chat" style="height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
+<form id="f" style="display:flex;gap:6px;margin-top:8px"><input id="t" style="flex:1" placeholder="сообщение, например /start" value="/start"><button>➤</button></form></div>
+<script>
+const uid={{ uid }};let since=0;const chat=document.getElementById('chat');
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function fmt(s){return esc(s).replace(/&lt;(\/?)(b|i|code)&gt;/g,'<$1$2>').replace(/\n/g,'<br>')}
+async function send(body){await fetch('/api/demo/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,...body})});poll()}
+async function poll(){const r=await fetch('/api/demo/chat?uid='+uid+'&since='+since);const d=await r.json();
+for(const m of d.messages){since=Math.max(since,m.ts);const el=document.createElement('div');el.style.cssText='background:var(--bg);border-radius:14px;padding:10px';el.innerHTML=fmt(m.text);
+if(m.buttons){for(const row of m.buttons.inline_keyboard){const line=document.createElement('div');line.style.cssText='display:flex;gap:4px;margin-top:6px';
+for(const b of row){const x=document.createElement(b.url?'a':'button');x.textContent=b.text;x.style.flex='1';if(b.url){x.href=b.url;x.target='_blank';x.className='btn';x.style.textAlign='center'}else{x.onclick=()=>send({data:b.callback_data})}line.appendChild(x)}el.appendChild(line)}}
+chat.appendChild(el);chat.scrollTop=chat.scrollHeight}}
+document.getElementById('f').onsubmit=e=>{e.preventDefault();const t=document.getElementById('t');const text=t.value;t.value='';
+const el=document.createElement('div');el.style.cssText='align-self:flex-end;background:var(--acc);color:#fff;border-radius:14px;padding:8px 12px';el.textContent=text;chat.appendChild(el);send({text})};
+poll();setInterval(poll,2500);
+</script>{% endblock %}

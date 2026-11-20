@@ -99,3 +99,12 @@ def test_center_remote_cmd_file(tmp_path):
     assert "неизвестный бот nobot" in out and "не запущен" in out
     assert c.cfg.worker("lisbot")["autostart"] is True and not (tmp_path / "remote_cmd.txt").exists()
     c.events.close()
+
+
+def test_shopbot_command(tmp_path):
+    from center.bots import ShopBotWorker
+    ev = EventStore(tmp_path / "ev.sqlite3")
+    shop = ShopBotWorker(tmp_path / "shopbot", ev, port=18806, demo=True)
+    cmd = shop.command()
+    assert cmd[1:3] == ["-m", "shopbot"] and "--demo" in cmd and "18806" in cmd
+    assert str(shop.src) in shop.env()["PYTHONPATH"] and shop.check_deps() is None

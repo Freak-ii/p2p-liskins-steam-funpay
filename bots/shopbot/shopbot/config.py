@@ -101,6 +101,7 @@ DEFAULTS: dict[str, Any] = {
         "interval_seconds": 30,
         "fail_window_minutes": 60,
         "fail_threshold": 3,              # столько сбоев поставщика за окно — пункт закрывается
+        "max_delivery_retries": 5,        # после стольких неудачных передач поставщику — возврат на баланс
         "reopen_after_minutes": 15,       # автоматическая повторная проверка закрытого пункта
         "user_daily_rub": 30000,
         "new_user_daily_rub": 5000,       # первые сутки клиента
@@ -115,7 +116,6 @@ DEFAULTS: dict[str, Any] = {
         "max_share_of_margin_pct": 40,    # не больше этой доли нашей маржи по заказу
         "friend_discount_pct": 3,         # скидка на первый заказ приглашённого
         "friend_discount_max_rub": 100,
-        "hold_hours": 24,                 # бонус становится доступен после выдачи заказа и паузы
     },
 }
 
