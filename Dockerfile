@@ -14,12 +14,13 @@ WORKDIR /app
 COPY requirements.txt ./
 COPY bots/mannbot/requirements.txt bots/mannbot/
 COPY bots/starsbot/requirements.txt bots/starsbot/
+COPY bots/shopbot/requirements.txt bots/shopbot/
 RUN pip install --no-cache-dir -r requirements.txt
 COPY center ./center
 COPY bots ./bots
 COPY --from=lisdeps /app/bots/lisbot/node_modules ./bots/lisbot/node_modules
 VOLUME ["/data"]
-EXPOSE 8800 8801 8802 8803
+EXPOSE 8800 8801 8802 8803 8806
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s \
   CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8800/api/ping',timeout=3)"
 # SIGTERM от docker stop → центр мягко останавливает обоих ботов (stop_grace_period в compose — 40 с)
