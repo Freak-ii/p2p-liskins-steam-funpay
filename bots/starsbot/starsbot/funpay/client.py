@@ -139,7 +139,9 @@ class FunPayClient:
         return P.parse_chat_bookmarks(page)
 
     async def get_chat_history(self, chat_id: str, last_message: int = 0) -> list[ChatMessage]:
-        _, body = await self._request("GET", f"/chat/history?node={chat_id}&last_message={last_message}",
+        """Последние сообщения чата новее last_message. FunPay /chat/history отдаёт страницу сообщений ДО
+        указанного id (это прокрутка вверх), поэтому всегда просим самую свежую страницу и фильтруем сами."""
+        _, body = await self._request("GET", f"/chat/history?node={chat_id}&last_message=99999999999999999999",
                                       ajax=True)
         data = json.loads(body)
         out: list[ChatMessage] = []
