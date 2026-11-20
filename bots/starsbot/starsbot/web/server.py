@@ -41,7 +41,7 @@ ROLE_TITLES = {"admin": "администратор", "operator": "операт�
 ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 CASHFLOW_KINDS = {"topup": "Пополнение кошелька TON", "withdraw_funpay": "Вывод с FunPay",
                   "withdraw_ton": "Вывод TON с кошелька", "withdraw_ozon": "Выплата с Ozon", "expense": "Расход (прочее)", "adjust": "Корректировка TON"}
-COOKIE = "sb_token"
+COOKIE_NAME = "sb_token"
 HEALTH_NAMES = {"funpay_poll": "FunPay", "ton_watch": "TON-транзакции", "wallet": "Баланс",
                 "fragment_session": "Fragment"}
 # сегменты мини-CRM: (код, название, цвет, SQL-условие по таблице customers)
@@ -96,6 +96,9 @@ def _deep_merge(a: dict, b: dict) -> dict:
 
 def make_app(sup, log_handler=None) -> web.Application:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(TPL_DIR), autoescape=True)
+    shop = getattr(sup, "profile", "stars") == "giftshop"
+    # у TG Gift своя cookie: оба бота на 127.0.0.1, а cookie браузер не различает по портам
+    COOKIE = "tg_token" if shop else COOKIE_NAME
     env.filters.update(ts=_ts, dur=fmt_dur, st=lambda s: M.status_text("ru", s),
                        jsonload=lambda s: json.loads(s or "{}"), tojson=lambda o: json.dumps(o, ensure_ascii=False))
     def _fnum(v):
@@ -170,6 +173,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("can_op", bool(role) and ROLE_LEVEL[role] >= 1)
         ctx.setdefault("is_admin", role == "admin")
         ctx.setdefault("ozon_on", "ozon" in sup.engine.channels)
+        ctx.setdefault("shop", shop)
         return web.Response(text=env.get_template(name).render(**ctx), content_type="text/html")
 
     @web.middleware
@@ -199,7 +203,8 @@ def make_app(sup, log_handler=None) -> web.Application:
             role = role_for(given)
             if role:
                 sup.db.audit(role, "login", "", "ok")
-                target = "/setup" if role == "admin" and not sup.configured and not sup.status()["demo"] else "/"
+                target = ("/shop" if shop else "/setup") if role == "admin" and not sup.configured and \
+                    not sup.status()["demo"] else "/"
                 resp = web.HTTPFound(target)
                 resp.set_cookie(COOKIE, given, httponly=True, samesite="Strict", max_age=90 * 86400)
                 raise resp
@@ -212,7 +217,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         raise resp
 
     async def ping(request: web.Request):
-        return web.json_response({"app": "starsbot", "ok": True})
+        return web.json_response({"app": "starsbot", "profile": "giftshop" if shop else "stars", "ok": True})
 
     def back(request: web.Request, msg: str, default: str = "/") -> web.HTTPFound:
         ref = request.headers.get("Referer")
@@ -221,6 +226,8 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     # ------------------------------------------------------------------ дашборд и CRM
     async def dashboard(request: web.Request):
+        if shop:
+            return await shop_dashboard(request)
         if not sup.configured and not sup.status()["demo"] and not sup.db.scalar("SELECT COUNT(*) FROM orders") \
                 and request[ROLE] == "admin":
             raise web.HTTPFound("/setup")
@@ -558,6 +565,14 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     async def api_status(request: web.Request):
         s = sup.analytics.summary(1)
+        if shop:
+            g = sup.engine.gifts
+            st = sup.db.kv_get("tg_stars") or {}
+            return web.json_response({**sup.status(), "summary": s, "role": request[ROLE], "profile": "giftshop",
+                                      "gifts": {"account": g.account, "balance": st.get("balance"),
+                                                "free": g.capacity(st.get("balance")), "supply": g.supply_status(),
+                                                "lots_on_sale": sum(1 for l in g.lots if l.get("offer_id") and
+                                                                    l.get("sell", True))}})
         return web.json_response({**sup.status(), "summary": s, "capacity": sup.econ.wallet_capacity(),
                                   "rate": sup.econ.effective_rate()[0], "role": request[ROLE]})
 
@@ -612,6 +627,8 @@ def make_app(sup, log_handler=None) -> web.Application:
     # ------------------------------------------------------------------ мастер настройки
     async def setup(request: web.Request):
         need(request, "admin")
+        if shop:
+            raise web.HTTPFound("/shop")
         cfg = sup.cfg
         if request.method == "POST":
             f = await request.post()
@@ -780,7 +797,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         q = {"msg": msg}
         if login_step:
             q["login"] = login_step
-        raise web.HTTPFound(URL("/gifts").with_query(**q))
+        raise web.HTTPFound(URL("/shop" if shop else "/gifts").with_query(**q))
 
     # ------------------------------------------------------------------ Лоты
     async def funpay_page(request: web.Request):
@@ -1029,6 +1046,10 @@ def make_app(sup, log_handler=None) -> web.Application:
         lines = [l for l in (log_handler.lines if log_handler else []) if l["n"] > after]
         return web.json_response({"lines": lines[-500:], "state": sup.status()})
 
+    from starsbot.giftshop.web import shop_routes
+    shop_dashboard, extra_routes = shop_routes(sup, render=render, friendly=friendly, need=need, audit=audit,
+                                               num_in=_num_in)
+
     app = web.Application(middlewares=[auth], client_max_size=2 * 1024 * 1024)
     app.add_routes([
         web.get("/login", login), web.post("/login", login), web.post("/logout", logout), web.get("/api/ping", ping),
@@ -1051,6 +1072,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/support/{name}", support_download),
         web.get("/crypto", crypto_page), web.post("/crypto", crypto_action),
         web.post("/api/wallet/addresses", api_wallet_addresses),
+        *extra_routes,
     ])
     return app
 

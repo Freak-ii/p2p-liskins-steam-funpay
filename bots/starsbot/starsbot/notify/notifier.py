@@ -57,8 +57,9 @@ class Notifier:
         self.sent.append((level, text))
         if LEVELS.get(level, 10) < LEVELS.get(str(self.cfg.min_level).upper(), 10):
             return
-        await self.telegram(f"{ICONS.get(level, '')} <b>{level}</b> · <code>{code}</code>\n{html.escape(text)}",
-                            buttons=buttons)
+        prefix = str(self.cfg.get("prefix") or "")
+        await self.telegram(f"{ICONS.get(level, '')} {html.escape(prefix) + ' · ' if prefix else ''}<b>{level}</b> · "
+                            f"<code>{code}</code>\n{html.escape(text)}", buttons=buttons)
 
     async def telegram(self, text: str, buttons: list[tuple[str, str]] | None = None) -> None:
         if not (self.tg.enabled and self.tg.bot_token and self.tg.admin_chat_ids):

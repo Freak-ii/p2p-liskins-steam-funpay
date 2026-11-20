@@ -117,20 +117,30 @@ class Engine:
             except (ValueError, TypeError, KeyError):
                 pass
         return {"order_id": o["order_id"], "buyer": o["buyer_username"], "stars": o["stars"],
-                "gifts": gifts, "value": value,
+                "gifts": gifts, "value": value, "gift": self.gift_title(o), "qty": o["quantity"] or 1,
                 "username": o["tg_username"] or "", "name_part": f" ({name})" if name else "",
                 "denominations": ", ".join(str(d) for d in self._denominations()),
                 "returning": returning, "last_hint": last_hint}
+
+    def gift_title(self, o) -> str:
+        """Название подарка заказа (магазин подарков TG Gift); у StarsBot пусто."""
+        return ""
 
     def channel_of(self, o):
         """Канал продаж заказа, если это не FunPay (у FunPay-заказов channel = 'funpay' или пусто)."""
         name = o["channel"] if o is not None and "channel" in o.keys() else None
         return self.channels.get(name) if name and name != "funpay" else None
 
+    def message_variants(self, o) -> list[str]:
+        """Суффиксы вариантов шаблона по типу заказа: для подарков сначала «…_gift»."""
+        return ["_gift"] if is_gift(o) else []
+
     async def say(self, o, key: str, **extra: Any) -> None:
         """Отправить шаблонное сообщение в чат заказа (для заказов подарками — вариант «…_gift», если он есть)."""
-        if is_gift(o) and f"{key}_gift" in M.TEMPLATES.get(o["lang"] or "ru", M.TEMPLATES["ru"]):
-            key = f"{key}_gift"
+        for suffix in self.message_variants(o):
+            if f"{key}{suffix}" in M.TEMPLATES.get(o["lang"] or "ru", M.TEMPLATES["ru"]):
+                key = f"{key}{suffix}"
+                break
         ch = self.channel_of(o)
         if ch is not None:
             await ch.say(o, key, {**self._order_vars(o), **extra})
@@ -206,6 +216,14 @@ class Engine:
     def is_gift_order(self, description: str) -> bool:
         return self.gifts is not None and self.gifts.is_gift_order(description)
 
+    def accepts_sale(self, so: FunPayOrder) -> bool:
+        """Брать ли новый оплаченный заказ из списка продаж. Заказы чужого раздела (например, «Подарки» —
+        их ведёт бот TG Gift на том же аккаунте) не трогаем, даже если в описании есть подходящее число звёзд."""
+        rx = self.cfg.funpay.get("foreign_subcategory_regex")
+        if rx and so.subcategory and re.search(rx, so.subcategory):
+            return False
+        return self.is_our_order(so.description) or self.is_gift_order(so.description)
+
     def _greeted(self, oid: str) -> bool:
         return bool(self.db.scalar("SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind IN "
                                    "('greeting_sent','greeting_with_username')", (oid,)))
@@ -217,7 +235,7 @@ class Engine:
         for so in sales:
             row = self.db.get_order(so.order_id)
             if row is None:
-                if so.status != "paid" or not (self.is_our_order(so.description) or self.is_gift_order(so.description)):
+                if so.status != "paid" or not self.accepts_sale(so):
                     continue
                 if not self.coord.claim_order(so.order_id):
                     log.info("заказ %s уже обрабатывает другой бот (%s)", so.order_id,
@@ -603,9 +621,8 @@ class Engine:
                 return
             # старый заказ закрыт, а покупатель снова пишет «привет / есть звёзды?» — отвечаем как новому
         text_in = msg.text or ""
-        about_stars = bool(M.STARS_TOPIC_RE.search(text_in))
-        hello = not about_stars and bool(M.HELLO_RE.search(text_in)) and not M.OTHER_GOODS_RE.search(text_in) and \
-            len(text_in) <= 200
+        about_stars = self.presale_topic(text_in)
+        hello = not about_stars and self.presale_hello(text_in)
         if not about_stars and not hello:
             return                               # не про звёзды и не «вы тут?» — не наш покупатель, молчим
         if last is None:
@@ -614,14 +631,27 @@ class Engine:
                                        f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
         if not self.cfg.funpay.presale_replies or self.paused or self.db.presale_recent(chat_id, 6 * 3600):
             return
+        if not self.coord.claim_presale(chat_id):
+            return                               # на этот вопрос уже отвечает другой бот аккаунта
         self.db.mark_presale(chat_id)
         lang = M.detect_lang(msg.text, self.cfg.general.language)
-        text = M.render(lang, "presale" if about_stars else "presale_hello",
-                        denominations=", ".join(str(d) for d in self._denominations()))
-        faq = M.detect_faq(msg.text)
+        await self.send_chat(chat_id, self.presale_text(lang, about_stars, msg.text))
+
+    # пресейл: о чём вопрос и что ответить (бот TG Gift переопределяет под подарки)
+    def presale_topic(self, text: str) -> bool:
+        return bool(M.STARS_TOPIC_RE.search(text or ""))
+
+    def presale_hello(self, text: str) -> bool:
+        t = text or ""
+        return bool(M.HELLO_RE.search(t)) and not M.OTHER_GOODS_RE.search(t) and len(t) <= 200
+
+    def presale_text(self, lang: str, about_topic: bool, text: str) -> str:
+        out = M.render(lang, "presale" if about_topic else "presale_hello",
+                       denominations=", ".join(str(d) for d in self._denominations()))
+        faq = M.detect_faq(text)
         if faq and faq != "faq_time":
-            text += "\n\n" + M.render(lang, faq, status_hint="")
-        await self.send_chat(chat_id, text)
+            out += "\n\n" + M.render(lang, faq, status_hint="")
+        return out
 
     # ================================================================== покупка звёзд
     def cost_per_star_ton(self) -> float | None:
@@ -1368,12 +1398,9 @@ class Engine:
             return ap.make_support_file(due) if due else "неподтверждённых заказов старше порога нет"
         lm = getattr(self, "lot_manager", None)
         if cmd == "lots_on":
-            for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:")):
-                for l in ((self.cfg.get(section) or {}).get("lots") or []):
-                    if l.get("offer_id"):
-                        self.db.kv_set(prefix + str(l["offer_id"]), None)
-            await self.wallet_watch()
-            return "лоты включены по балансу кошелька"
+            self.reset_lot_amounts()
+            await self.refresh_stock()
+            return "лоты включены по балансу"
         if cmd == "lots_off" and lm is not None:
             return await lm.close_all(reason="команда")
         if cmd == "lots_create" and lm is not None:
@@ -1644,6 +1671,26 @@ class Engine:
         except Exception:  # noqa: BLE001
             pass
 
+    LOT_AMOUNT_KEYS = (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:"), ("giftshop", "shop_lot_amount:"))
+
+    def reset_lot_amounts(self) -> None:
+        """Забыть записанное «наличие» лотов: следующая синхронизация выставит его на FunPay заново."""
+        for section, prefix in self.LOT_AMOUNT_KEYS:
+            for l in ((self.cfg.get(section) or {}).get("lots") or []):
+                if l.get("offer_id"):
+                    self.db.kv_set(prefix + str(l["offer_id"]), None)
+
+    async def refresh_stock(self) -> None:
+        """Пересчитать наличие лотов по балансу (у StarsBot — кошелёк TON)."""
+        await self.wallet_watch()
+
+    def no_lots_yet(self) -> bool:
+        return not any(l.get("offer_id") for l in (self.cfg.funpay.lots or []))
+
+    def start_banner(self) -> str:
+        return (f"🤖 Бот запущен. FunPay: {self.fp.username}, кошелёк: {self.wallet.friendly_address}, Fragment: "
+                f"{'ok' if self.fragment_ok else 'нет связи'}{' · DRY-RUN' if self.cfg.general.dry_run else ''}")
+
     async def start(self) -> None:
         other = self.take_lease()
         for _ in range(int(self.LEASE_TTL // 5) + 2):    # перезапуск: прежний процесс ещё закрывается
@@ -1660,10 +1707,7 @@ class Engine:
         if not self.cfg.general.dry_run:
             # остатки, записанные в тестовом режиме, на FunPay не отправлялись: первая синхронизация
             # в боевом режиме должна выставить наличие и включить лоты заново
-            for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:")):
-                for l in ((self.cfg.get(section) or {}).get("lots") or []):
-                    if l.get("offer_id"):
-                        self.db.kv_set(prefix + str(l["offer_id"]), None)
+            self.reset_lot_amounts()
         lm = getattr(self, "lot_manager", None)
         if lm is not None:
             try:
@@ -1672,7 +1716,7 @@ class Engine:
                     log.info("лоты: %s", msg)
             except Exception as e:  # noqa: BLE001
                 log.warning("обновление описаний лотов: %s", e)
-        no_lots = not any(l.get("offer_id") for l in (self.cfg.funpay.lots or []))
+        no_lots = self.no_lots_yet()
         if lm is not None and (self.cfg.funpay.get("auto_create_lots") or no_lots):
             try:
                 report = await lm.create_missing()
@@ -1680,10 +1724,7 @@ class Engine:
                     await self.notifier.notify("INFO", "lots_created", "Выставлены лоты: " + "; ".join(report))
             except Exception as e:  # noqa: BLE001
                 log.warning("автовыставление лотов: %s", e)
-        await self.notifier.notify("INFO", "started", f"🤖 Бот запущен. FunPay: {self.fp.username}, кошелёк: "
-                                   f"{self.wallet.friendly_address}, Fragment: "
-                                   f"{'ok' if self.fragment_ok else 'нет связи'}"
-                                   f"{' · DRY-RUN' if self.cfg.general.dry_run else ''}")
+        await self.notifier.notify("INFO", "started", self.start_banner())
         self.notifier.command_handler = self.handle_command
         loops = [
             self._loop("funpay", float(self.cfg.funpay.poll_interval), self.funpay_poll),
@@ -1707,6 +1748,8 @@ class Engine:
             loops.append(self._loop("gifts", 120, self.gifts.watch))
         if getattr(self, "autopilot", None) is not None:
             loops.append(self._loop("autopilot", 300, self.autopilot.tick))
+        if getattr(self, "supply", None) is not None and self.supply.enabled:
+            loops.append(self._loop("supply", 120, self.supply.tick))
         for ch in self.channels.values():
             loops += ch.loops(self._loop)
         self._tasks = [asyncio.create_task(c) for c in loops]
