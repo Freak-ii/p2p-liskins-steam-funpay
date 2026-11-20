@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at REAL, paid_at REAL, username_at REAL, purchase_started_at REAL, sent_at REAL,
     delivered_at REAL, completed_at REAL, last_buyer_msg_at REAL, updated_at REAL,
     channel TEXT DEFAULT 'funpay', payout REAL,
-    delivery TEXT DEFAULT 'fragment', gift_plan TEXT, gift_cost INTEGER, support_file TEXT, confirm_reminded INTEGER DEFAULT 0
+    delivery TEXT DEFAULT 'fragment', gift_plan TEXT, gift_cost INTEGER, support_file TEXT, confirm_reminded INTEGER DEFAULT 0,
+    premium_months INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
@@ -95,12 +96,14 @@ ORDER_COLUMNS = {
     "admin_alerted", "lang", "review_stars", "notes", "fail_reason", "created_at", "paid_at", "username_at",
     "purchase_started_at", "sent_at", "delivered_at", "completed_at", "last_buyer_msg_at",
     "channel", "payout", "delivery", "gift_plan", "gift_cost", "support_file", "confirm_reminded",
+    "premium_months",
 }
 
 # Колонки, добавленные после первых версий: в старых базах их создаёт миграция в Database.__init__
 MIGRATIONS = {"orders": [("channel", "TEXT DEFAULT 'funpay'"), ("payout", "REAL"),
                           ("delivery", "TEXT DEFAULT 'fragment'"), ("gift_plan", "TEXT"), ("gift_cost", "INTEGER"),
-                          ("support_file", "TEXT"), ("confirm_reminded", "INTEGER DEFAULT 0")]}
+                          ("support_file", "TEXT"), ("confirm_reminded", "INTEGER DEFAULT 0"),
+                          ("premium_months", "INTEGER")]}
 
 
 class Database:

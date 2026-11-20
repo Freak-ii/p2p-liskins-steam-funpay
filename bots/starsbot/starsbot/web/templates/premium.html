@@ -1,0 +1,74 @@
+{% extends "base.html" %}{% block title %}Premium{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>💎 Telegram Premium через Fragment</h1>
+{% if pr and is_admin %}<div class="row">
+<form method="post"><button name="action" value="find">Найти мои лоты Premium</button></form>
+<form method="post"><button name="action" value="quote">Обновить котировки</button></form>
+<form method="post"><button name="action" value="rtba">Пересчитать цены</button></form>
+<form method="post"><button name="action" value="sync">Пересчитать наличие</button></form>
+<form method="post"><button name="action" value="close" class="danger" onclick="return confirm('Выключить все лоты Premium на FunPay?')">Закрыть лоты Premium</button></form>
+</div>{% endif %}</div>
+
+<div class="card"><div class="help">Как это работает: покупатель оплачивает лот «Telegram Premium» (FunPay, раздел Telegram → Premium,
+или GGSEL), присылает @username — бот проверяет аккаунт на Fragment и дарит Premium на 3, 6 или 12 месяцев, оплачивая TON
+с того же кошелька, что и звёзды. Покупки звёзд и Premium идут в одной очереди, поэтому TON не тратятся дважды, а наличие
+лотов считается от общего свободного баланса. Вход в аккаунт покупателя не нужен (лоты «с заходом» бот не берёт).</div></div>
+
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ c.enabled and 'включён' or 'выключен' }}</div><div class="l">продажа Premium</div></div>
+  <div class="card kpi"><div class="v">{{ sm.sold_30d or 0 }}</div><div class="l">продано за 30 дней · {{ sm.revenue_30d|money }} ₽</div></div>
+  <div class="card kpi"><div class="v">{{ ((sm.revenue_30d or 0) - (sm.cost_30d or 0))|money }} ₽</div><div class="l">валовая прибыль за 30 дней (до вывода)</div></div>
+  <div class="card kpi"><div class="v">{{ sm.active or 0 }}</div><div class="l">в работе · резерв {{ sm.committed_ton|ton }} TON</div></div>
+</div>
+
+<div class="card tw"><h2>Сроки, себестоимость и цены</h2>
+<form method="post"><input type="hidden" name="action" value="save">
+<table>
+<tr><th>Срок</th><th>ID лота FunPay</th><th>Позиция</th><th>Себестоимость</th><th>Пол цены</th><th>Цена лота</th><th>Маржа</th><th>Место / лидер</th><th>Наличие</th><th>Продано</th>{% if ggsel_on %}<th>ID товара GGSEL</th>{% endif %}<th>TON, пока нет котировки</th></tr>
+{% for r in rows %}{% set gp = (gg_products|selectattr('months','equalto',r.months)|list or [{}])[0] %}
+<tr><td><b>{{ r.title }}</b></td>
+<td><input name="lot_{{r.months}}" value="{{ r.offer_id or '' }}" style="width:100px" {% if not is_admin %}disabled{% endif %}></td>
+<td><input name="pos_{{r.months}}" value="{{ r.position or '' }}" placeholder="авто" style="width:60px" {% if not is_admin %}disabled{% endif %}></td>
+<td>{% if r.cost_rub %}{{ r.cost_rub|money }} ₽<div class="help">{{ r.ton|ton }} TON</div>{% else %}<span class="muted">нет котировки</span>{% endif %}</td>
+<td>{{ r.floor|money }}</td><td>{{ r.price|money }}</td>
+<td>{% if r.margin is not none %}<span class="{{ 'c-red' if r.margin < (c.min_margin_pct or 0) else 'c-green' }}">{{ r.margin }}%</span>{% else %}—{% endif %}</td>
+<td>{{ r.rank or '—' }} / {{ r.best|money }}<div class="help">{{ r.reason }}</div></td>
+<td>{{ r.amount if r.amount is not none else '—' }}{% if r.capacity is not none %}<div class="help">хватит на {{ r.capacity }}</div>{% endif %}</td>
+<td>{{ r.sold }}<div class="help">{{ r.sold_rub|money }} ₽</div></td>
+{% if ggsel_on %}<td><input name="gg_{{r.months}}" value="{{ gp.offer_id or '' }}" style="width:100px" {% if not is_admin %}disabled{% endif %}><div class="help">цена вручную: <input name="ggprice_{{r.months}}" value="{{ gp.price or '' }}" style="width:70px" {% if not is_admin %}disabled{% endif %}></div></td>{% endif %}
+<td><input name="fb_{{r.months}}" value="{{ (c.fallback_ton or {}).get(r.months|string) or '' }}" style="width:70px" {% if not is_admin %}disabled{% endif %}></td></tr>
+{% endfor %}
+</table>
+<div class="cols" style="margin-top:12px">
+<div>
+<label class="f"><input type="checkbox" name="enabled" {% if c.enabled %}checked{% endif %} {% if not is_admin %}disabled{% endif %}> Продавать Telegram Premium</label>
+<label class="f">Цена лотов</label>
+<div class="row"><label><input type="radio" name="price_mode" value="rtba" {% if c.price_mode == 'rtba' %}checked{% endif %}> по рынку (позиция)</label>
+<label><input type="radio" name="price_mode" value="margin" {% if c.price_mode == 'margin' %}checked{% endif %}> себестоимость + маржа</label>
+<label><input type="radio" name="price_mode" value="manual" {% if c.price_mode == 'manual' %}checked{% endif %}> вручную</label></div>
+<div class="row" style="margin-top:6px">позиция по умолчанию <input name="target_position" value="{{ c.target_position }}" style="width:50px">
+· дешевле конкурента на <input name="undercut_abs" value="{{ c.undercut_abs }}" style="width:50px"> ₽</div>
+<div class="row" style="margin-top:6px">маржа <input name="margin_pct" value="{{ c.margin_pct }}" style="width:50px">%
+· минимум (пол цены и защита покупки) <input name="min_margin_pct" value="{{ c.min_margin_pct }}" style="width:50px">%</div>
+<div class="help">Пол цены = себестоимость (TON × ваш курс + газ сети) / (1 − комиссии вывода − минимальная маржа). Ниже пола бот цену не ставит, а заказ без прибыли не покупает без вашего одобрения.</div>
+</div>
+<div>
+<label class="f">Свой username для котировок Fragment</label>
+<input type="text" name="quote_username" value="{{ c.quote_username or '' }}" placeholder="без @">
+<div class="help">Раз в {{ c.quote_minutes }} мин. бот спрашивает у Fragment цену подарка Premium самому себе (заявка без оплаты, просто истекает) — так себестоимость и цены лотов свежие ещё до первой продажи.</div>
+<label class="f"><input type="checkbox" name="stock_sync" {% if c.stock_sync %}checked{% endif %}> Наличие лотов по балансу кошелька</label>
+<label class="f">Пилотные заказы (после вашего одобрения)</label>
+<input type="number" name="pilot_orders" value="{{ c.pilot_orders }}" style="width:80px">
+</div></div>
+{% if is_admin %}<p><button class="primary">Сохранить</button></p>{% endif %}
+</form></div>
+
+<div class="card tw"><h2>Заказы Premium</h2><table>
+<tr><th>Заказ</th><th>Площадка</th><th>Срок</th><th>Получатель</th><th>Цена</th><th>TON</th><th>Статус</th><th>Создан</th></tr>
+{% for o in orders %}<tr><td><a href="/orders/{{o.order_id}}">{{o.order_id}}</a></td><td>{{ o.channel or 'funpay' }}</td>
+<td>{{ o.premium_months }} мес.</td><td>{% if o.tg_username %}@{{o.tg_username}}{% else %}—{% endif %}</td>
+<td>{{ o.price|money }} {{ o.currency }}</td><td>{{ o.ton_amount|ton }}</td>
+<td><span class="chip c-{{ colors[o.status] }}">{{ o.status }}</span>{% if o.fail_reason %}<div class="help">{{ o.fail_reason }}</div>{% endif %}</td>
+<td>{{ o.created_at|hm }}</td></tr>
+{% else %}<tr><td colspan="8" class="muted">заказов пока нет</td></tr>{% endfor %}</table></div>
+{% endblock %}

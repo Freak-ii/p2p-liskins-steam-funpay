@@ -92,8 +92,8 @@ class Economics:
     # ------------------------------------------------------------------ один круг
     def fee_pcts(self, channel: str = "funpay") -> tuple[float, float]:
         """(комиссия площадки, комиссия вывода) в процентах для канала продаж."""
-        if channel == "ozon":
-            oz = self.cfg.get("ozon") or {}
+        if channel in ("ozon", "ggsel"):
+            oz = self.cfg.get(channel) or {}
             return float(oz.get("commission_pct") or 0), float(oz.get("withdraw_fee_pct") or 0)
         return float(self.e.funpay_fee_pct or 0), float(self.e.withdraw_fee_pct or 0)
 
@@ -156,8 +156,8 @@ class Economics:
 
     def calculator(self, prices: dict[int, float] | None = None, channel: str = "funpay") -> list[Flow]:
         prices = {**self.current_prices(channel), **(prices or {})}
-        if channel == "ozon":
-            items = (self.cfg.get("ozon") or {}).get("products") or []
+        if channel in ("ozon", "ggsel"):
+            items = (self.cfg.get(channel) or {}).get("products") or []
         else:
             items = self.cfg.funpay.lots or []
         denoms = sorted({int(l["stars"]) for l in items if l.get("stars")} | set(prices))
@@ -196,9 +196,9 @@ class Economics:
                                          (since,), 0) or 0)
         # реальные списания с кошелька: покупки на Fragment, включая пополнение звёзд аккаунта (у подарков TON
         # в заказе — только оценка себестоимости, с кошелька они не списываются)
-        spent = float(self.db.scalar("SELECT SUM(ton_amount) FROM orders WHERE COALESCE(delivery,'fragment')='fragment' "
+        spent = float(self.db.scalar("SELECT SUM(ton_amount) FROM orders WHERE COALESCE(delivery,'fragment') IN ('fragment','premium') "
                                      "AND delivered_at>=? AND ton_amount>0", (since,), 0) or 0)
-        gas = float(self.db.scalar("SELECT SUM(tx_fee_ton) FROM orders WHERE COALESCE(delivery,'fragment')='fragment' "
+        gas = float(self.db.scalar("SELECT SUM(tx_fee_ton) FROM orders WHERE COALESCE(delivery,'fragment') IN ('fragment','premium') "
                                    "AND delivered_at>=?", (since,), 0) or 0)
         expected = float(start["ton"]) + topped - withdrawn - spent - gas
         actual = w.get("balance")
@@ -283,7 +283,7 @@ class Economics:
         return out
 
     def add_cashflow(self, kind: str, rub: float, ton: float, note: str = "") -> None:
-        assert kind in ("topup", "withdraw_funpay", "withdraw_ozon", "withdraw_ton", "expense", "adjust")
+        assert kind in ("topup", "withdraw_funpay", "withdraw_ozon", "withdraw_ggsel", "withdraw_ton", "expense", "adjust")
         self.db.exec("INSERT INTO cashflow(ts,kind,rub,ton,note) VALUES(?,?,?,?,?)",
                      (time.time(), kind, float(rub or 0), float(ton or 0), note[:300]))
         self.db.emit({"type": "cashflow", "kind": kind})

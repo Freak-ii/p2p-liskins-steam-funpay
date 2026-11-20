@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 DENOMINATIONS = (50, 75, 100, 150, 250, 350, 500, 1000)   # 750 и 1500 в разделе FunPay нет
+PREMIUM_MONTHS = (3, 6, 12)                              # сроки, которые Fragment дарит (fragment.com/premium/gift)
 GIFT_DENOMINATIONS = (13, 21, 43, 85, 50, 100, 150, 250, 350, 500)
 
 DEFAULTS: dict[str, Any] = {
@@ -70,6 +71,31 @@ DEFAULTS: dict[str, Any] = {
         "topup": {"enabled": False, "min_stars": 1000, "amount": 2500, "username": "",
                   "cooldown_minutes": 20,     # пауза после пополнения: звёзды от Fragment приходят не мгновенно
                   "max_per_day": 10000},      # не больше N ⭐ пополнений за сутки (0 — без лимита)
+    },
+    # Продажа Telegram Premium: покупка подарком на Fragment тем же кошельком TON, продажа на FunPay
+    # (раздел «Telegram → Premium», funpay.com/lots/1391/), GGSEL (ggsel.premium_products) и в магазине (supply).
+    "premium": {
+        "enabled": False,
+        "node_id": 1391,
+        # Лоты: один лот на срок. offer_id — id лота FunPay; position — место в списке раздела (0 — по марже)
+        "lots": [{"months": m, "offer_id": 0, "position": 0} for m in PREMIUM_MONTHS],
+        "order_regex": r"(?i)(premium|премиум)",
+        "order_exclude_regex": r"(?i)(с заходом|со входом|вход на аккаунт|через вход|логин и пароль)",
+        "stock_sync": True, "max_display_amount": 50, "deactivate_when_empty": True,
+        "price_mode": "rtba",            # rtba — по рынку (позиция лота, не ниже пола), margin — себестоимость + маржа
+        "margin_pct": 8.0,               # цена в режиме margin: маржа с цены лота, %
+        "min_margin_pct": 3.0,           # пол цены и предохранитель покупки: не меньше N% чистой прибыли
+        "target_position": 3,            # позиция лота в режиме rtba, если у лота не задана своя
+        "undercut_abs": 1.0,             # насколько дешевле конкурента на позиции, ₽ (цена покупателя)
+        "min_change": 2.0, "max_updates_per_hour": 4, "interval_seconds": 300,
+        "ignore_competitors": [],
+        "competitor_regex": r"(?i)(подар|gift|username|юзернейм|без входа|fragment)",   # такие же лоты, без входа
+        # себестоимость в TON, пока не было ни одной котировки Fragment (обновляется после первой покупки/котировки)
+        "fallback_ton": {"3": 0.0, "6": 0.0, "12": 0.0},
+        "quote_username": "",            # свой username: раз в quote_minutes бот берёт котировку Fragment (без оплаты)
+        "quote_minutes": 30,
+        "pilot_orders": 1,               # первые N боевых заказов Premium — после одобрения
+        "lot_texts": {},                 # ручные тексты карточки: summary_ru, desc_ru, summary_en, desc_en ({months})
     },
     # Автономный цикл: напоминания о подтверждении, файлы для поддержки, вывод с FunPay на кошелёк
     "autopilot": {
@@ -182,6 +208,33 @@ DEFAULTS: dict[str, Any] = {
         "activation_web": {"enabled": False, "host": "0.0.0.0", "port": 8084, "public_url": ""},
         "messages": {},                  # свои тексты для покупателей Ozon (ключи как в starsbot/ozon/texts.py)
     },
+    # Третий канал продаж: маркетплейс GGSEL (ggsel.net, Seller API). Покупатель указывает @username в поле
+    # заказа при оформлении (или пишет его в чат заказа), дальше — тот же путь, что у FunPay: Fragment → TON.
+    "ggsel": {
+        "enabled": False,
+        "seller_id": "", "api_key": "",          # кабинет GGSEL → Настройки → API (ID продавца и ключ API)
+        "api_base": "https://seller.ggsel.com",
+        "poll_interval": 20,             # опрос новых продаж и чатов, сек
+        "refresh_seconds": 120,          # как часто перечитывать статус незакрытых счетов
+        "sales_top": 50,                 # сколько последних продаж читать за опрос
+        # Товары: ID товара на GGSEL → сколько звёзд в одной штуке (цена — для ручного режима цен)
+        "products": [{"stars": n, "offer_id": "", "price": 0} for n in DENOMINATIONS],
+        # Telegram Premium на GGSEL (нужен включённый раздел premium): ID товара → срок в месяцах
+        "premium_products": [{"months": m, "offer_id": "", "price": 0} for m in PREMIUM_MONTHS],
+        "stock_sync": True,              # остаток товара на GGSEL = сколько раз хватит баланса кошелька
+        "max_stock": 100,
+        "price_mode": "margin",          # margin — цена = себестоимость + маржа по курсу TON; manual — цены из таблицы
+        "margin_pct": 6.0,               # желаемая маржа с цены, %
+        "min_margin_pct": 3.0,           # ниже — товар скрывается (остаток 0) и приходит алерт
+        "hide_below_min_margin": True,
+        "price_push_minutes": 10,        # не чаще, чем раз в N минут менять цену на GGSEL
+        "commission_pct": 10.0,          # комиссия GGSEL с цены — уточните в кабинете для вашей категории
+        "withdraw_fee_pct": 3.0,         # комиссия вывода с GGSEL (зависит от способа: карта, USDT и т.д.)
+        "sla_warn_minutes": 30,          # алерт, если заказ не выдан
+        "sla_critical_hours": 6,         # срочный алерт: после 12 ч GGSEL вправе вернуть деньги сам (п. 7.5)
+        "confirm_reminder_hours": 24,    # одно напоминание подтвердить получение (0 — не напоминать)
+        "messages": {},                  # свои тексты для покупателей GGSEL (ключи как в starsbot/ggsel/texts.py)
+    },
 }
 
 _ENV_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
@@ -262,8 +315,40 @@ def validate_config(cfg: Section) -> list[str]:
         problems.append("dashboard.token должен быть не короче 12 символов")
     if cfg.rates.source == "manual" and float(cfg.rates.ton_rub or 0) <= 0:
         problems.append("rates.ton_rub: при ручном курсе укажите курс TON в рублях")
+    problems += validate_premium(cfg)
     problems += validate_ozon(cfg)
+    problems += validate_ggsel(cfg)
     return problems
+
+
+def validate_premium(cfg: Section) -> list[str]:
+    pr = cfg.get("premium") or {}
+    if not pr.get("enabled"):
+        return []
+    out = []
+    for lot in pr.get("lots") or []:
+        if int(lot.get("months") or 0) not in PREMIUM_MONTHS:
+            out.append(f"premium.lots: срок {lot.get('months')} мес. — Fragment дарит только 3, 6 и 12 месяцев")
+    if str(pr.get("price_mode") or "rtba") not in ("rtba", "margin", "manual"):
+        out.append("premium.price_mode: rtba, margin или manual")
+    return out
+
+
+def validate_ggsel(cfg: Section) -> list[str]:
+    gg = cfg.get("ggsel") or {}
+    if not gg.get("enabled"):
+        return []
+    out = []
+    if not str(gg.get("seller_id") or "").strip().isdigit() or not str(gg.get("api_key") or "").strip():
+        out.append("ggsel: укажите ID продавца (число) и ключ API GGSEL")
+    if not any(str(p.get("offer_id") or "").strip().isdigit() and (p.get("stars") or p.get("months"))
+               for p in (gg.get("products") or []) + (gg.get("premium_products") or [])):
+        out.append("ggsel.products: укажите ID товара GGSEL хотя бы для одного номинала")
+    if str(gg.get("price_mode") or "manual") not in ("manual", "margin"):
+        out.append("ggsel.price_mode: manual или margin")
+    if float(gg.get("min_margin_pct") or 0) > float(gg.get("margin_pct") or 0) and gg.get("price_mode") == "margin":
+        out.append("ggsel.margin_pct должна быть не меньше min_margin_pct")
+    return out
 
 
 def validate_ozon(cfg: Section) -> list[str]:

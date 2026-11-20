@@ -2,14 +2,14 @@
 {% block body %}<div class="row" style="justify-content:space-between"><h1>Заказы</h1>
 {% if can_op %}<a class="chip" href="/export/orders.csv?days=30">⬇ CSV за 30 дн.</a>{% endif %}</div>
 <form class="card row" method="get"><input name="q" value="{{q}}" placeholder="ID заказа, ник FunPay, @username получателя" style="flex:1">
-{% if ozon_on %}<select name="channel"><option value="">все площадки</option>{% for c, t in [('funpay','FunPay'),('ozon','Ozon')] %}<option value="{{c}}" {% if c==channel %}selected{% endif %}>{{t}}</option>{% endfor %}</select>{% endif %}
+{% if market_on %}<select name="channel"><option value="">все площадки</option>{% for c, t in [('funpay','FunPay'),('ozon','Ozon'),('ggsel','GGSEL')] %}<option value="{{c}}" {% if c==channel %}selected{% endif %}>{{t}}</option>{% endfor %}</select>{% endif %}
 <select name="status"><option value="">все статусы</option>{% for s in statuses %}<option value="{{s}}" {% if s==st %}selected{% endif %}>{{s|st}}</option>{% endfor %}</select>
 <button>Найти</button></form>
 <div class="card tw"><table>
 <tr><th>Заказ</th><th>Покупатель</th><th>⭐</th><th>Получатель</th><th>Сумма</th><th>TON</th><th>Статус</th><th>Площадка</th><th>Риск</th><th>Оплачен</th><th>Выдан</th></tr>
-{% for o in rows %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{{o.stars}}</td>
+{% for o in rows %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{% if o.delivery == 'premium' %}💎 {{o.premium_months}} мес.{% else %}{{o.stars}}{% endif %}</td>
 <td>{{ ('@' ~ o.tg_username) if o.tg_username else '—' }}</td>
-<td>{{o.price|money}} {{o.currency}}</td><td>{{o.ton_amount|ton}}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{% if o.channel == 'ozon' %}<span class="chip c-blue">Ozon</span>{% else %}FunPay · {{o.fp_status}}{% endif %}</td>
+<td>{{o.price|money}} {{o.currency}}</td><td>{{o.ton_amount|ton}}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{% if o.channel == 'ozon' %}<span class="chip c-blue">Ozon</span>{% elif o.channel == 'ggsel' %}<span class="chip c-amber">GGSEL</span> · {{o.fp_status}}{% else %}FunPay · {{o.fp_status}}{% endif %}</td>
 <td>{{o.risk_score or 0}}</td><td>{{o.paid_at|ts}}</td><td>{{o.delivered_at|ts}}</td></tr>
 {% else %}<tr><td colspan="11" class="muted">Ничего не найдено</td></tr>{% endfor %}</table></div>
 <script>onLive(ev=>{if(ev.type==='order'&&!document.querySelector('input:focus'))setTimeout(()=>location.reload(),1500)})</script>{% endblock %}

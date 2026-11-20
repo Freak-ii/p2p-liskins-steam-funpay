@@ -51,7 +51,7 @@
 <div class="cols">
   <div class="card"><h2>Активные заказы <span class="muted" id="act-hint"></span></h2><div class="tw"><table id="active">
   <tr><th>Заказ</th><th>Покупатель</th><th>⭐</th><th>Получатель</th><th>Статус</th><th>Оплачен</th></tr>
-  {% for o in active %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{{o.stars}}</td>
+  {% for o in active %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{% if o.delivery == 'premium' %}💎 {{o.premium_months}} мес.{% else %}{{o.stars}}{% endif %}</td>
   <td>{{ ('@' ~ o.tg_username) if o.tg_username else '—' }}</td>
   <td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{{o.paid_at|ts}}</td></tr>
   {% else %}<tr><td colspan="6" class="muted">Нет активных заказов</td></tr>{% endfor %}</table></div></div>

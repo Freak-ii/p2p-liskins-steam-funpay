@@ -44,9 +44,19 @@
 <td class="profit {{ 'c-green' if (f.profit or 0) >= 0 else 'c-red' }}"><b>{{f.profit|money}}</b></td><td class="margin">{{ (f.margin_pct ~ '%') if f.margin_pct is not none else '—' }}</td>
 <td class="be">{{f.breakeven_price|money}}</td></tr>{% endfor %}</table></div>{% endif %}
 
-{% if period.by_channel and period.by_channel|length > 1 or ozon_calc %}<div class="card tw"><h2>По площадкам за {{days|int}} дн.</h2><table>
+{% if ggsel_calc %}<div class="card tw"><h2>Калькулятор: GGSEL</h2>
+<div class="help" style="margin-bottom:8px">Покупатель платит на GGSEL → GGSEL −{{gg.commission_pct}}% → вывод{% if gg.withdraw_fee_pct %} −{{gg.withdraw_fee_pct}}%{% endif %} → тот же TON-кошелёк → Fragment. Цена по умолчанию — из последнего заказа GGSEL. Комиссия меняется в <a href="/settings#s-ggsel">Настройки → GGSEL</a>.</div>
+<table id="calc_ggsel"><tr><th>Номинал</th><th>Цена на GGSEL, ₽</th><th>− GGSEL</th><th>− вывод</th><th>= чистыми</th><th>TON (звёзды + газ)</th><th>Себестоимость, ₽</th><th>Прибыль, ₽</th><th>Маржа</th><th>Безубыток, ₽</th></tr>
+{% for f in ggsel_calc %}<tr data-stars="{{f.stars}}"><td><b>{{f.stars}}⭐</b></td>
+<td><input type="number" step="0.01" style="width:100px" value="{{ f.price if f.price else '' }}" oninput="recalc('ggsel')"></td>
+<td class="fp">{{f.funpay_fee|money}}</td><td class="wd">{{f.withdraw_fee|money}}</td><td class="net"><b>{{f.net_rub|money}}</b></td>
+<td class="ton">{{f.ton_total|ton}}</td><td class="cost">{{f.cost_rub|money}}</td>
+<td class="profit {{ 'c-green' if (f.profit or 0) >= 0 else 'c-red' }}"><b>{{f.profit|money}}</b></td><td class="margin">{{ (f.margin_pct ~ '%') if f.margin_pct is not none else '—' }}</td>
+<td class="be">{{f.breakeven_price|money}}</td></tr>{% endfor %}</table></div>{% endif %}
+
+{% if period.by_channel and period.by_channel|length > 1 or ozon_calc or ggsel_calc %}<div class="card tw"><h2>По площадкам за {{days|int}} дн.</h2><table>
 <tr><th>Площадка</th><th>Заказов</th><th>Звёзд</th><th>Выручка</th><th>Комиссии</th><th>Чистыми</th><th>Себестоимость</th><th>Прибыль</th><th>Маржа</th></tr>
-{% for name, c in period.by_channel.items() %}<tr><td>{{ {'funpay':'FunPay','ozon':'Ozon'}.get(name, name) }}</td><td>{{c.orders}}</td><td>{{c.stars}}</td><td>{{c.gross|money}}</td><td>{{c.fees|money}}</td><td>{{c.net|money}}</td><td>{{c.cost|money}}</td>
+{% for name, c in period.by_channel.items() %}<tr><td>{{ {'funpay':'FunPay','ozon':'Ozon','ggsel':'GGSEL'}.get(name, name) }}</td><td>{{c.orders}}</td><td>{{c.stars}}</td><td>{{c.gross|money}}</td><td>{{c.fees|money}}</td><td>{{c.net|money}}</td><td>{{c.cost|money}}</td>
 <td class="{{ 'c-green' if c.profit >= 0 else 'c-red' }}">{{c.profit|money}}</td><td>{{ (c.margin_pct ~ '%') if c.margin_pct is not none else '—' }}</td></tr>
 {% else %}<tr><td colspan="9" class="muted">Нет выданных заказов за период</td></tr>{% endfor %}</table></div>{% endif %}
 
@@ -61,7 +71,7 @@
 <tr><td>Пополнено кошелёк</td><td>{{period.topup_rub|money}} ₽ → {{period.topup_ton|ton}} TON ({{period.topups}} раз)</td></tr>
 </table></div>
 <div class="card"><h2>Ушло и осталось</h2><table>
-<tr><td>Комиссия {{ 'площадок (FunPay, Ozon)' if ozon_calc else 'FunPay' }}</td><td>{{period.funpay_fee|money}} ₽</td></tr>
+<tr><td>Комиссия {{ 'площадок' if (ozon_calc or ggsel_calc) else 'FunPay' }}</td><td>{{period.funpay_fee|money}} ₽</td></tr>
 <tr><td>Комиссия вывода</td><td>{{period.withdraw_fee|money}} ₽</td></tr>
 <tr><td>Чистыми после комиссий</td><td><b>{{period.net|money}} ₽</b></td></tr>
 <tr><td>TON на звёзды</td><td>{{period.ton_spent|ton}} TON</td></tr>
@@ -105,7 +115,7 @@
 <script>
 const fmt=v=>v==null?'—':(+v).toLocaleString('ru-RU',{maximumFractionDigits:2}),fmtT=v=>v==null?'—':(+(+v).toFixed(4)).toString();
 let calcT=null;
-function recalc(channel){const tid=channel==='ozon'?'#calc_ozon':'#calc';clearTimeout(calcT);calcT=setTimeout(async()=>{const prices={};
+function recalc(channel){const tid=channel?'#calc_'+channel:'#calc';clearTimeout(calcT);calcT=setTimeout(async()=>{const prices={};
  for(const tr of document.querySelectorAll(tid+' tr[data-stars]')){const v=tr.querySelector('input').value;if(v)prices[tr.dataset.stars]=v}
  const res=await postJSON('/api/calc',{prices,channel:channel||'funpay'});
  for(const f of res.rows){const tr=document.querySelector(tid+' tr[data-stars="'+f.stars+'"]');if(!tr)continue;

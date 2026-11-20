@@ -58,8 +58,8 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
   <span class="logo">⭐ StarsBot</span>
   <nav>
     {% set groups = [('', [('/', 'Главная'), ('/orders', 'Заказы'), ('/customers', 'Покупатели'), ('/analytics', 'Статистика')]),
-                     ('Продажи', [('/funpay', 'Лоты'), ('/pricing', 'Цены'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else [])),
-                     ('Выдача', [('/gifts', 'Подарки')]),
+                     ('Продажи', [('/funpay', 'Лоты'), ('/pricing', 'Цены'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else []) + ([('/ggsel', 'GGSEL')] if ggsel_on else [])),
+                     ('Выдача', [('/gifts', 'Подарки'), ('/premium', 'Premium')]),
                      ('Финансы', [('/crypto', 'Кошелёк и автопилот'), ('/money', 'Деньги')]),
                      ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')])] %}
     {% for gname, items in groups %}<span class="navgroup">{% if gname %}<span class="navlabel">{{gname}}</span>{% endif %}

@@ -40,7 +40,7 @@ STATE_TEXT = {"stopped": ("Остановлен", "gray"), "starting": ("Зап�
 ROLE_TITLES = {"admin": "администратор", "operator": "оператор", "viewer": "наблюдатель"}
 ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 CASHFLOW_KINDS = {"topup": "Пополнение кошелька TON", "withdraw_funpay": "Вывод с FunPay",
-                  "withdraw_ton": "Вывод TON с кошелька", "withdraw_ozon": "Выплата с Ozon", "expense": "Расход (прочее)", "adjust": "Корректировка TON"}
+                  "withdraw_ton": "Вывод TON с кошелька", "withdraw_ozon": "Выплата с Ozon", "withdraw_ggsel": "Вывод с GGSEL", "expense": "Расход (прочее)", "adjust": "Корректировка TON"}
 COOKIE = "sb_token"
 HEALTH_NAMES = {"funpay_poll": "FunPay", "ton_watch": "TON-транзакции", "wallet": "Баланс",
                 "fragment_session": "Fragment"}
@@ -170,6 +170,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("can_op", bool(role) and ROLE_LEVEL[role] >= 1)
         ctx.setdefault("is_admin", role == "admin")
         ctx.setdefault("ozon_on", "ozon" in sup.engine.channels)
+        ctx.setdefault("ggsel_on", "ggsel" in sup.engine.channels)
+        ctx.setdefault("market_on", bool({"ozon", "ggsel"} & set(sup.engine.channels)))
         return web.Response(text=env.get_template(name).render(**ctx), content_type="text/html")
 
     @web.middleware
@@ -265,7 +267,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         return render("order.html", request, o=o, events=db.events(oid), flow=flow,
                       msgs=db.q("SELECT * FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 80", (o["chat_id"],)),
                       purchases=db.q("SELECT * FROM purchases WHERE order_id=? ORDER BY id", (oid,)),
-                      customer=db.customer(o["buyer_id"]) if o["channel"] != "ozon" else None,
+                      customer=db.customer(o["buyer_id"]) if o["channel"] not in ("ozon", "ggsel") else None,
                       risk=json.loads(o["risk_reasons"] or "[]"),
                       ozon_code=db.one("SELECT * FROM ozon_codes WHERE order_id=?", (oid,))
                       if o["channel"] == "ozon" and "ozon" in sup.engine.channels else None)
@@ -366,8 +368,10 @@ def make_app(sup, log_handler=None) -> web.Application:
                 custom[d] = v
         rate, rate_src = econ.effective_rate()
         ozon_calc = econ.calculator(channel="ozon") if "ozon" in sup.engine.channels else []
+        ggsel_calc = econ.calculator(channel="ggsel") if "ggsel" in sup.engine.channels else []
         return render("money.html", request, days=days, period=econ.period(days), calc=econ.calculator(custom),
                       ozon_calc=ozon_calc, oz=sup.cfg.get("ozon") or {},
+                      ggsel_calc=ggsel_calc, gg=sup.cfg.get("ggsel") or {},
                       custom=custom, rate=rate, rate_src=rate_src, market=getattr(sup.engine.rates, "value", None),
                       tps=econ.ton_per_star(), cps=econ.cost_per_star_rub(), cap=econ.wallet_capacity(),
                       rec=econ.reconcile(), wallet=wallet_kv(), e=sup.cfg.economics,
@@ -444,7 +448,7 @@ def make_app(sup, log_handler=None) -> web.Application:
     async def api_calc(request: web.Request):
         data = await request.json()
         prices = {int(k): float(v) for k, v in (data.get("prices") or {}).items() if _num(v, None)}
-        channel = "ozon" if data.get("channel") == "ozon" else "funpay"
+        channel = data.get("channel") if data.get("channel") in ("ozon", "ggsel") else "funpay"
         return web.json_response({"rows": [f.as_dict() for f in sup.econ.calculator(prices, channel=channel)]})
 
     # ------------------------------------------------------------------ Ozon
@@ -505,6 +509,155 @@ def make_app(sup, log_handler=None) -> web.Application:
             msg = "?"
         audit(request, f"ozon.{act}", str(f.get("posting", "")), msg)
         raise web.HTTPFound(URL("/ozon").with_query(msg=msg))
+
+    # ------------------------------------------------------------------ GGSEL
+    async def ggsel_page(request: web.Request):
+        ch = sup.engine.channels.get("ggsel")
+        gg = sup.cfg.get("ggsel") or {}
+        from starsbot.ggsel import texts as GT
+        if ch is None:
+            return render("ggsel.html", request, ch=None, gg=gg, T=GT)
+        db = sup.db
+        rows = db.q("SELECT o.*, s.invoice_id, s.state inv_state FROM orders o LEFT JOIN ggsel_sales s ON "
+                    "s.order_id=o.order_id WHERE o.channel='ggsel' ORDER BY o.created_at DESC LIMIT 100")
+        margins = {str(p["offer_id"]): ch.margin_at(p, s) for p in ch.products()
+                   for s in [ch.target_price(p)] if s}
+        return render("ggsel.html", request, ch=ch, gg=gg, s=ch.summary(), rows=rows, margins=margins, T=GT,
+                      calc=sup.econ.calculator(channel="ggsel"))
+
+    @friendly("/ggsel")
+    async def ggsel_action(request: web.Request):
+        need(request, "admin")
+        ch = sup.engine.channels.get("ggsel")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        if act == "products":
+            products = []
+            for d in sorted({int(x) for x in DENOMINATIONS} | {int(p.get("stars") or 0) for p in
+                                                                  ((sup.cfg.get("ggsel") or {}).get("products") or [])
+                                                                  if p.get("stars")}):
+                offer = str(f.get(f"offer_{d}", "")).strip()
+                price = _num(f.get(f"price_{d}"), 0) or 0
+                products.append({"stars": d, "offer_id": offer if offer.isdigit() else "", "price": price})
+            extra = str(f.get("extra_stars", "")).strip()
+            if extra.isdigit() and int(extra) >= 1 and str(f.get("extra_offer", "")).strip().isdigit():
+                products.append({"stars": int(extra), "offer_id": str(f.get("extra_offer")).strip(),
+                                 "price": _num(f.get("extra_price"), 0) or 0})
+            mode = "margin" if f.get("price_mode") == "margin" else "manual"
+            upd: dict = {"products": products, "price_mode": mode}
+            for k in ("margin_pct", "min_margin_pct"):
+                v = _num(f.get(k), None)
+                if v is not None:
+                    upd[k] = v
+            sup.save({"ggsel": upd})
+            msg = "Товары GGSEL сохранены" + (". Перезапустите бота, чтобы применить" if sup.restart_required else "")
+        elif ch is None:
+            msg = "Сначала включите GGSEL в настройках"
+        elif act == "poll":
+            try:
+                await ch.poll()
+                msg = "GGSEL проверен" + (f": {ch.last_error}" if ch.last_error else "")
+            except Exception as e:  # noqa: BLE001
+                msg = f"GGSEL: {e}"
+        elif act == "take":
+            try:
+                msg = await ch.take(int(_num(f.get("invoice"), 0) or 0))
+            except Exception as e:  # noqa: BLE001
+                msg = f"GGSEL: {e}"
+        elif act == "sync":
+            w = sup.engine.wallet_info or {}
+            ch._last_price_push = 0
+            for p in ch.products():
+                sup.db.kv_set(f"ggsel_stock:{p['offer_id']}", None)
+            await ch.stock_sync(float(w.get("balance") or 0), sup.engine.cost_per_star_ton(), sup.db.stars_committed())
+            msg = "Цены и остатки отправлены на GGSEL"
+        elif act == "test":
+            try:
+                sales = await ch.client.last_sales(10)
+                msg = f"GGSEL API отвечает: последних продаж — {len(sales)}"
+            except Exception as e:  # noqa: BLE001
+                msg = f"GGSEL API: {e}"
+        else:
+            msg = "?"
+        audit(request, f"ggsel.{act}", str(f.get("invoice", "")), msg)
+        raise web.HTTPFound(URL("/ggsel").with_query(msg=msg))
+
+    # ------------------------------------------------------------------ Telegram Premium
+    async def premium_page(request: web.Request):
+        pr = sup.engine.premium
+        c = sup.cfg.get("premium") or {}
+        gg = sup.cfg.get("ggsel") or {}
+        rows = pr.rows() if pr is not None else []
+        return render("premium.html", request, pr=pr, c=c, rows=rows, orders=pr.orders(100) if pr else [],
+                      sm=pr.summary() if pr else {}, gg_products=gg.get("premium_products") or [],
+                      ggsel_on="ggsel" in sup.engine.channels)
+
+    @friendly("/premium")
+    async def premium_action(request: web.Request):
+        need(request, "admin")
+        pr = sup.engine.premium
+        f = await request.post()
+        act = str(f.get("action", ""))
+        from starsbot.config import PREMIUM_MONTHS
+        if act == "save":
+            lots, gprods, fb = [], [], {}
+            for m in PREMIUM_MONTHS:
+                oid = str(f.get(f"lot_{m}", "")).strip()
+                lots.append({"months": m, "offer_id": int(oid) if oid.isdigit() else 0,
+                             "position": _num_in(f.get(f"pos_{m}"), 0)})
+                goid = str(f.get(f"gg_{m}", "")).strip()
+                gprods.append({"months": m, "offer_id": goid if goid.isdigit() else "",
+                               "price": _num(f.get(f"ggprice_{m}"), 0) or 0})
+                fb[str(m)] = _num(f.get(f"fb_{m}"), 0) or 0.0
+            mode = str(f.get("price_mode", "rtba"))
+            upd = {
+                "enabled": f.get("enabled") == "on", "lots": lots, "fallback_ton": fb,
+                "price_mode": mode if mode in ("rtba", "margin", "manual") else "rtba",
+                "margin_pct": _num_in(f.get("margin_pct"), 8.0, float),
+                "min_margin_pct": _num_in(f.get("min_margin_pct"), 3.0, float),
+                "target_position": max(1, _num_in(f.get("target_position"), 3)),
+                "undercut_abs": _num_in(f.get("undercut_abs"), 1.0, float),
+                "quote_username": str(f.get("quote_username", "")).strip().lstrip("@")[:32],
+                "pilot_orders": _num_in(f.get("pilot_orders"), 1),
+                "stock_sync": f.get("stock_sync") == "on",
+            }
+            was_on = bool((sup.cfg.get("premium") or {}).get("enabled"))
+            sup.save({"premium": upd, "ggsel": {"premium_products": gprods}}, rebuild=False)
+            live = sup.engine.cfg.get("premium")
+            if live is not None:
+                live.update(upd)
+            if sup.engine.cfg.get("ggsel") is not None:
+                sup.engine.cfg.ggsel["premium_products"] = gprods
+            msg = "Настройки Premium сохранены"
+            if was_on != upd["enabled"] and sup.state == "running":
+                sup.restart_required = True
+                msg += ". Перезапустите бота, чтобы включить/выключить циклы Premium"
+        elif pr is None:
+            msg = "Бот ещё не собран — запустите его"
+        elif act == "find":
+            report = await pr.find_own_lots()
+            lots = [dict(l) for l in (pr.c.get("lots") or [])]
+            sup.save({"premium": {"lots": lots}}, rebuild=False)
+            msg = "; ".join(report)
+        elif act == "sync":
+            for l in pr.lots:
+                if l.get("offer_id"):
+                    sup.db.kv_set(f"premium_lot_amount:{l['offer_id']}", None)
+            await sup.engine.wallet_watch()
+            msg = "Наличие лотов Premium пересчитано по балансу кошелька"
+        elif act == "rtba":
+            await pr.rtba_step()
+            msg = "Цены Premium пересчитаны"
+        elif act == "quote":
+            await pr.refresh_quotes()
+            msg = "Котировки Fragment обновлены" if pr.c.get("quote_username") else \
+                "Укажите свой username для котировок, иначе себестоимость берётся из последних покупок"
+        elif act == "close":
+            msg = await sup.engine.lot_manager.close_all(kind="premium", reason="кнопка Premium")
+        else:
+            msg = "?"
+        audit(request, f"premium.{act}", "", msg)
+        raise web.HTTPFound(URL("/premium").with_query(msg=msg))
 
     async def analytics_page(request: web.Request):
         a = sup.analytics
@@ -1048,7 +1201,9 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/messages", messages_page), web.post("/messages", messages_page),
         web.post("/api/preview", preview_message), web.get("/logs", logs), web.get("/api/logs", api_logs),
         web.get("/ozon", ozon_page), web.post("/ozon", ozon_action),
+        web.get("/ggsel", ggsel_page), web.post("/ggsel", ggsel_action),
         web.get("/gifts", gifts_page), web.post("/gifts", gifts_action),
+        web.get("/premium", premium_page), web.post("/premium", premium_action),
         web.get("/funpay", funpay_page), web.post("/funpay", funpay_action),
         web.get("/support/{name}", support_download),
         web.get("/crypto", crypto_page), web.post("/crypto", crypto_action),

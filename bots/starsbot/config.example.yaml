@@ -264,3 +264,30 @@ ozon:
     host: 0.0.0.0
     port: 8084
     public_url: ''
+
+# Третий канал продаж: маркетплейс GGSEL (ggsel.net, Seller API). Покупатель указывает @username в поле товара
+# при оформлении (или пишет его в чат заказа), бот покупает звёзды на Fragment с того же кошелька, что и для FunPay.
+ggsel:
+  enabled: false
+  # Кабинет GGSEL → Настройки → API
+  seller_id: ${STARSBOT_GGSEL_SELLER_ID}
+  api_key: ${STARSBOT_GGSEL_API_KEY}
+  poll_interval: 20
+  # ID товара на GGSEL → звёзд в одной штуке (stars: 1 — товар «за звезду» с количеством). price — для ручных цен
+  products:
+    - {stars: 50, offer_id: '', price: 0}
+    - {stars: 100, offer_id: '', price: 0}
+    - {stars: 250, offer_id: '', price: 0}
+    - {stars: 500, offer_id: '', price: 0}
+  stock_sync: true
+  max_stock: 100
+  # margin — цена = себестоимость + маржа по курсу TON; manual — цены из products
+  price_mode: margin
+  margin_pct: 6.0
+  # ниже этой маржи товар скрывается (остаток 0) и приходит алерт
+  min_margin_pct: 3.0
+  # комиссия GGSEL и вывода — уточните в кабинете
+  commission_pct: 10.0
+  withdraw_fee_pct: 3.0
+  sla_critical_hours: 6
+  confirm_reminder_hours: 24

@@ -188,6 +188,22 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("commission_pct", "Комиссия Ozon, %", "float", "Игровая валюта — 10%, прочие цифровые товары — 15%"),
         ("withdraw_fee_pct", "Комиссия вывода с Ozon, %", "float", "Обычно 0"),
     ]),
+    ("ggsel", [
+        ("enabled", "Продавать на GGSEL", "bool", "Маркетплейс ggsel.net, работа через Seller API"),
+        ("seller_id", "ID продавца", "str", "Кабинет GGSEL → Настройки → API"),
+        ("api_key", "Ключ API", "secret", "Там же. Ключ нужен с правами на продажи, чаты и товары"),
+        ("poll_interval", "Проверять продажи и чаты GGSEL, сек", "int", ""),
+        ("stock_sync", "Остатки на GGSEL по балансу кошелька", "bool", "Товар уходит в 0, когда TON не хватает"),
+        ("max_stock", "Максимальный остаток на GGSEL", "int", ""),
+        ("price_mode", "Цены на GGSEL", "str", "margin — себестоимость + маржа (сам следит за курсом TON); manual — "
+         "цены из таблицы на странице GGSEL"),
+        ("margin_pct", "Желаемая маржа, %", "float", "Для режима margin"),
+        ("min_margin_pct", "Минимальная маржа, %", "float", "Ниже — товар скрывается и приходит алерт"),
+        ("commission_pct", "Комиссия GGSEL, %", "float", "Уточните в кабинете для категории Telegram"),
+        ("withdraw_fee_pct", "Комиссия вывода с GGSEL, %", "float", "Зависит от способа вывода"),
+        ("sla_critical_hours", "Срочный алерт, если не выдан, ч", "float", "GGSEL требует выдать за 12 ч"),
+        ("confirm_reminder_hours", "Напомнить подтвердить получение через, ч", "float", "0 — не напоминать"),
+    ]),
     ("ozon.activation_bot", [
         ("enabled", "Бот активации в Telegram", "bool", "Покупатель присылает боту код и @username"),
         ("bot_token", "Токен бота активации (@BotFather)", "secret",
@@ -207,7 +223,7 @@ SECTION_TITLES = {
     "safety": "Предохранители денег", "rtba": "RTBA — автоцена",
     "notifications.telegram": "Telegram", "notifications": "Уведомления", "dashboard": "Доступ к панели (роли)",
     "sla": "Сроки (SLA)", "ozon": "Ozon: продажи", "ozon.activation_bot": "Ozon: бот активации",
-    "ozon.activation_web": "Ozon: страница активации",
+    "ozon.activation_web": "Ozon: страница активации", "ggsel": "GGSEL: продажи",
     "gifts": "Подарки: выдача подарками Telegram", "gifts.topup": "Подарки: автопополнение звёзд",
     "autopilot": "Автопилот", "autopilot.withdraw": "Автопилот: вывод с FunPay",
 }
