@@ -20,6 +20,8 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 40
+    env:
+      PYTHONIOENCODING: utf-8      # консоль раннера в cp1252: русский вывод сборки и smoke-теста её ронял
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
