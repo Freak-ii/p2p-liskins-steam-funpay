@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}StarsBot{% endblock %} · StarsBot</title>
+<title>{% block title %}{{ 'TG Gift' if shop else 'StarsBot' }}{% endblock %} · {{ 'TG Gift' if shop else 'StarsBot' }}</title>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--text:#1b1f24;--muted:#677283;--line:#e3e6eb;--accent:#c4552b;
 --blue:#2f6fde;--green:#1f8a4c;--amber:#b7791f;--red:#c53030;--gray:#718096;--chip:#eef1f5}
@@ -48,20 +48,23 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
 </head>
 <body>
 {% if path != '/login' %}
-{% if app.demo %}<div class="banner" style="background:var(--blue)">ДЕМО: эмуляция FunPay, Fragment и TON-кошелька — реальные аккаунты и деньги не используются</div>
-{% elif dry_run %}<div class="banner">Тестовый режим (dry-run): бот не отправляет сообщения и не платит TON
-  {% if is_admin %}<form method="post" action="/control" style="display:inline"><button name="action" value="dry_off" class="btn-mini" onclick="return confirm('Включить боевой режим? Бот начнёт отвечать покупателям и оплачивать звёзды TON с кошелька.')">Включить боевой режим</button></form>{% endif %}</div>{% endif %}
+{% if app.demo %}<div class="banner" style="background:var(--blue)">ДЕМО: эмуляция FunPay, {{ 'Telegram' if shop else 'Fragment и TON-кошелька' }} — реальные аккаунты и деньги не используются</div>
+{% elif dry_run %}<div class="banner">Тестовый режим (dry-run): бот не отправляет сообщения и {{ 'подарки' if shop else 'не платит TON' }}
+  {% if is_admin %}<form method="post" action="/control" style="display:inline"><button name="action" value="dry_off" class="btn-mini" onclick="return confirm('{{ 'Включить боевой режим? Бот начнёт отвечать покупателям и отправлять подарки со звёзд аккаунта.' if shop else 'Включить боевой режим? Бот начнёт отвечать покупателям и оплачивать звёзды TON с кошелька.' }}')">Включить боевой режим</button></form>{% endif %}</div>{% endif %}
 {% if paused %}<div class="banner" style="background:var(--red)">⏸ Бот на паузе — заказы фиксируются, но не обрабатываются</div>{% endif %}
 {% if app.restart_required %}<div class="banner" style="background:var(--blue)">Настройки изменены —
   <form method="post" action="/control" style="display:inline"><button name="action" value="restart" class="btn-mini">перезапустить бота</button></form></div>{% endif %}
 <header>
-  <span class="logo">⭐ StarsBot</span>
+  <span class="logo">{{ '🎁 TG Gift' if shop else '⭐ StarsBot' }}</span>
   <nav>
-    {% set groups = [('', [('/', 'Главная'), ('/orders', 'Заказы'), ('/customers', 'Покупатели'), ('/analytics', 'Статистика')]),
+    {% if shop %}{% set groups = [('', [('/', 'Главная'), ('/orders', 'Заказы'), ('/customers', 'Покупатели'), ('/analytics', 'Статистика')]),
+                     ('Продажи', [('/shop', 'Подарки и лоты'), ('/messages', 'Сообщения')]),
+                     ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')])] %}
+    {% else %}{% set groups = [('', [('/', 'Главная'), ('/orders', 'Заказы'), ('/customers', 'Покупатели'), ('/analytics', 'Статистика')]),
                      ('Продажи', [('/funpay', 'Лоты'), ('/pricing', 'Цены'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else [])),
                      ('Выдача', [('/gifts', 'Подарки')]),
                      ('Финансы', [('/crypto', 'Кошелёк и автопилот'), ('/money', 'Деньги')]),
-                     ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')])] %}
+                     ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')])] %}{% endif %}
     {% for gname, items in groups %}<span class="navgroup">{% if gname %}<span class="navlabel">{{gname}}</span>{% endif %}
     {% for href, name in items %}<a href="{{href}}" class="{{ 'active' if path == href else '' }}">{{name}}</a>{% endfor %}</span>{% endfor %}
   </nav>
@@ -76,7 +79,7 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
       {% else %}
         <button class="primary" name="action" value="start">▶ Запустить бота</button>
       {% endif %}
-      {% if is_admin %}<button name="action" value="quit" title="Закрыть приложение" onclick="return confirm('Закрыть StarsBot? Бот перестанет работать.')">⏻</button>{% endif %}
+      {% if is_admin %}<button name="action" value="quit" title="Закрыть приложение" onclick="return confirm('Закрыть {{ 'TG Gift' if shop else 'StarsBot' }}? Бот перестанет работать.')">⏻</button>{% endif %}
     </form>{% endif %}
     <form method="post" action="/logout" class="row"><span class="chip muted" title="Ваша роль">{{ role_titles.get(role, '') }}</span><button title="Выйти">⎋</button></form>
   </div>

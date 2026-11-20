@@ -83,10 +83,20 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
                   mem: MemoryLogHandler) -> None:
     from starsbot.web.server import start_web
     from starsbot.ozon.fake import DEMO_PRODUCTS
+    shop = os.environ.get("STARSBOT_PROFILE") == "giftshop"
     demo_over = {**DEMO_OVERRIDES, "ozon": {"enabled": True, "products": DEMO_PRODUCTS}}
+    if shop:
+        demo_over = {k: v for k, v in DEMO_OVERRIDES.items() if k in ("general", "notifications")}
+        demo_over["gifts"] = {"pause_between_gifts": 0}
     sup = Supervisor(home, demo=demo, overrides=demo_over if demo else None)
     token = sup.ensure_token()
-    if demo:
+    if demo and shop:
+        from starsbot.giftshop.demo import run_shop_demo
+        sup.engine.cfg.deal.message_rate_limit_seconds = 0
+        await sup.engine.lot_manager.create_missing()
+        await run_shop_demo(sup.engine, sup.engine.fp)
+        log.info("Демо TG Gift: лоты выставлены, 2 заказа подарков в CRM")
+    elif demo:
         from starsbot.demo import run_scenario
         sup.engine.cfg.deal.message_rate_limit_seconds = 0
         await run_scenario(sup.engine, sup.engine.fp, sup.engine.wallet, verbose=False)
@@ -101,7 +111,8 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
     url = f"http://{shown_host}:{port}/login?token={token}"
     log.info("Интерфейс запущен: http://%s:%s/", shown_host, port)   # токен в журнал не пишем
     if sys.stdout is not None:
-        print(f"\n  {APP_NAME} открыт: {url}\n  Данные: {home}\n  Закройте это окно или нажмите Ctrl+C для выхода.\n",
+        name = "TG Gift" if shop else APP_NAME
+        print(f"\n  {name} открыт: {url}\n  Данные: {home}\n  Закройте это окно или нажмите Ctrl+C для выхода.\n",
               flush=True)
     if open_browser:
         webbrowser.open(url)
@@ -137,7 +148,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--no-browser", action="store_true", help="не открывать браузер")
     ap.add_argument("--headless", action="store_true", help="сервер/VPS: без браузера, бот стартует сам")
     ap.add_argument("--demo", action="store_true", help="демо с эмуляцией FunPay, Fragment и TON-кошелька")
+    ap.add_argument("--profile", choices=("stars", "giftshop"), default=None,
+                    help="giftshop — бот TG Gift (подарки Telegram в разделе FunPay «Подарки»)")
     args = ap.parse_args(argv)
+    if args.profile:
+        os.environ["STARSBOT_PROFILE"] = args.profile
 
     home = app_home(args.home)
     if args.demo:
