@@ -89,6 +89,11 @@ TEMPLATES: dict[str, dict[str, str]] = {
         ),
         "refunded": "💸 По заказу #{order_id} оформлен возврат средств.",
         "completed_thanks": "🙏 Спасибо за подтверждение заказа #{order_id}! Будем рады видеть вас снова ⭐",
+        "presale_hello": (
+            "Здравствуйте! 👋 Я на связи, отвечаю сразу, 24/7. Если вы за Telegram Stars — выдача автоматическая: "
+            "выберите лот нужного номинала ({denominations} ⭐), оплатите и пришлите @username получателя — звёзды "
+            "придут за 1–5 минут через Fragment. Есть вопросы — пишите здесь."
+        ),
         "presale": (
             "Здравствуйте! 👋 Telegram Stars выдаются автоматически: выберите лот нужного номинала "
             "({denominations} ⭐), оплатите и укажите ваш username — звёзды придут за 1–5 минут через официальную "
@@ -202,6 +207,9 @@ TEMPLATES: dict[str, dict[str, str]] = {
                                  "can't be changed now. Type \"!seller\" if this is a mistake."),
         "refunded": "💸 Order #{order_id} has been refunded.",
         "completed_thanks": "🙏 Thank you for confirming order #{order_id}!",
+        "presale_hello": ("Hi! 👋 I'm here and reply right away, 24/7. If you need Telegram Stars — delivery is "
+                          "automatic: pick the lot ({denominations} ⭐), pay and send the recipient's @username — the "
+                          "stars arrive in 1–5 minutes via Fragment. Any questions — write here."),
         "presale": ("Hi! 👋 Telegram Stars are delivered automatically: pick the lot ({denominations} ⭐), pay and "
                     "send your username — the stars arrive in 1–5 minutes via Fragment. Any questions — write here."),
         "faq_gift": "Stars are credited directly to the account by username (not as a gift).",
@@ -358,6 +366,13 @@ FAQ = [
 
 QUESTION_RE = re.compile(r"\?|^(как|когда|что|почему|зачем|сколько|где|можно|а если|how|when|what|why|can)\b", re.I)
 STARS_TOPIC_RE = re.compile(r"зв[её]зд|stars?\b|⭐|старс", re.I)
+# «есть кто?», «здравствуйте», «актуально?» — человек проверяет, живой ли продавец, прежде чем платить
+HELLO_RE = re.compile(r"привет|здравств|здрасьт|добр(ый|ое|ого|ой)\s|доброй|ты\s+тут|вы\s+тут|на\s+месте|есть\s+кто|"
+                      r"кто[-\s]?нибудь|продавец|актуальн|в\s+наличии|можно\s+(купить|оплат)|ответ(ь|ьте)|алло|ау\b|"
+                      r"^\s*(hi|hello|hey)\b|are\s+you\s+there|is\s+anyone", re.I)
+# не наш товар — на такие сообщения бот звёзд не отвечает (на аккаунте могут продаваться и другие товары)
+OTHER_GOODS_RE = re.compile(r"steam|стим|скин|skin|кс\b|cs2|csgo|dota|дота|ключ|аккаунт\s+(steam|стим)|робукс|"
+                            r"robux|premium|премиум|прем\b|nft|юзернейм\s+прода", re.I)
 _LINK_RE = re.compile(r"(https?://|www\.)\S+", re.I)
 
 

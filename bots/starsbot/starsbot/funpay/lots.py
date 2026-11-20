@@ -72,27 +72,46 @@ OLD_DESCRIPTIONS = {"⚡ Автовыдача 1–5 минут. Укажите @
                     "их можно конвертировать в звёзды."}
 
 
-def lot_texts(stars: int, kind: str, description: str = "") -> dict[str, str]:
-    """Краткое и полное описание лота на русском и английском (FunPay проверяет английские поля отдельно)."""
+TEXT_KEYS = ("summary_ru", "desc_ru", "summary_en", "desc_en")
+
+
+def custom_texts(cfg, kind: str) -> dict[str, str]:
+    """Тексты карточки, заданные вручную в панели (funpay.lot_texts / funpay.gift_lot_texts); пустые — стандартные."""
+    raw = (cfg.funpay.get("gift_lot_texts" if kind == "gift" else "lot_texts") or {}) if cfg is not None else {}
+    return {k: str(raw.get(k) or "").strip() for k in TEXT_KEYS if str(raw.get(k) or "").strip()}
+
+
+def _fmt(text: str, stars: int) -> str:
+    try:
+        return text.format(stars=stars)
+    except (KeyError, IndexError, ValueError):
+        return text
+
+
+def lot_texts(stars: int, kind: str, description: str = "", custom: dict | None = None) -> dict[str, str]:
+    """Краткое и полное описание лота на русском и английском (FunPay проверяет английские поля отдельно).
+    custom — ручные тексты из панели, {stars} подставляется номиналом."""
     gift = kind != "username"
+    custom = custom or {}
     desc = description if description and description not in OLD_DESCRIPTIONS else \
         (DESC_RU_GIFT if gift else DESC_RU_USERNAME)
-    try:
-        desc = desc.format(stars=stars)
-    except (KeyError, IndexError, ValueError):
-        pass
-    return {
+    out = {
         "summary_ru": (f"🎁 {stars} ⭐ Telegram подарками | Автовыдача 1–5 мин | По username" if gift else
                        f"⭐ {stars} звёзд Telegram | Автовыдача 1–5 мин | По username | Fragment"),
         "summary_en": (f"{stars} Telegram Stars as gifts | Instant delivery | By username" if gift else
                        f"{stars} Telegram Stars | Instant delivery 1-5 min | By username | Fragment"),
-        "desc_ru": desc,
+        "desc_ru": _fmt(desc, stars),
         "desc_en": (DESC_EN_GIFT if gift else DESC_EN_USERNAME).format(stars=stars),
     }
+    for k, v in custom.items():
+        if k in out and v:
+            out[k] = _fmt(v, stars)
+    return out
 
 
-def apply_lot_texts(f: dict[str, str], *, stars: int, kind: str, description: str = "") -> dict[str, str]:
-    t = lot_texts(stars, kind, description)
+def apply_lot_texts(f: dict[str, str], *, stars: int, kind: str, description: str = "",
+                    custom: dict | None = None) -> dict[str, str]:
+    t = lot_texts(stars, kind, description, custom)
     for key in list(f):
         if key.startswith("fields[desc]"):
             f[key] = t["desc_ru"] if key.endswith("[ru]") else t["desc_en"]
@@ -103,7 +122,8 @@ def apply_lot_texts(f: dict[str, str], *, stars: int, kind: str, description: st
 
 
 def build_lot_fields(base: dict[str, str], selects: dict[str, list[tuple[str, str]]], *, stars: int, kind: str,
-                     price: float, amount: int, description: str = "", active: bool = True) -> dict[str, str]:
+                     price: float, amount: int, description: str = "", active: bool = True,
+                     custom: dict | None = None) -> dict[str, str]:
     """Поля формы нового лота из образца: количество, способ, цена, наличие, описание."""
     f = {k: v for k, v in base.items() if k not in ("offer_id", "csrf_token")}
     qty_set = method_set = False
@@ -130,7 +150,7 @@ def build_lot_fields(base: dict[str, str], selects: dict[str, list[tuple[str, st
     else:
         f.pop("active", None)                 # чекбокс не отправлен = лот выключен
     f.pop("deleted", None)
-    apply_lot_texts(f, stars=stars, kind=kind, description=description)
+    apply_lot_texts(f, stars=stars, kind=kind, description=description, custom=custom)
     return f
 
 
@@ -200,7 +220,7 @@ class LotManager:
                     test_mode = bool(e.fp.dry_run)
                     fields = build_lot_fields(base, selects, stars=stars, kind=kind,
                                               price=self._start_price(stars, kind), amount=1, description=desc,
-                                              active=not test_mode)
+                                              active=not test_mode, custom=custom_texts(self.cfg, kind))
                     new_id = await e.fp.create_lot(fields, force=True)
                     if not new_id:
                         new_id = await self._find_new(node, stars, kind)
@@ -242,8 +262,12 @@ class LotManager:
         import hashlib
         e = self.engine
         node = int(self.cfg.funpay.node_id)
-        sig_src = repr((lot_texts(50, "username", str(self.cfg.funpay.get("lot_description") or "")),
-                        lot_texts(50, "gift", str(self.cfg.funpay.get("gift_lot_description") or ""))))
+        if not force and self.cfg.funpay.get("manage_lot_texts") is False:
+            return "тексты лотов ведёте вы — бот их не меняет"
+        sig_src = repr((lot_texts(50, "username", str(self.cfg.funpay.get("lot_description") or ""),
+                                  custom_texts(self.cfg, "username")),
+                        lot_texts(50, "gift", str(self.cfg.funpay.get("gift_lot_description") or ""),
+                                  custom_texts(self.cfg, "gift"))))
         sig = hashlib.sha1(sig_src.encode()).hexdigest()[:12]
         if not force and e.db.kv_get("lot_texts_sig") == sig:
             return "описания лотов актуальны"
@@ -254,7 +278,8 @@ class LotManager:
             desc = str(self.cfg.funpay.get("gift_lot_description" if r["kind"] == "gift" else "lot_description") or "")
             try:
                 fields = await e.fp.get_lot_fields(int(r["offer_id"]), node)
-                apply_lot_texts(fields, stars=r["stars"], kind=r["kind"], description=desc)
+                apply_lot_texts(fields, stars=r["stars"], kind=r["kind"], description=desc,
+                                custom=custom_texts(self.cfg, r["kind"]))
                 await e.fp.save_lot(fields)
                 done += 1
             except FunPayError as err:

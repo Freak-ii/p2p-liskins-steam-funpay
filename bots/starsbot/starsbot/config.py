@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-DENOMINATIONS = (50, 75, 100, 150, 250, 350, 500)
+DENOMINATIONS = (50, 75, 100, 150, 250, 350, 500, 750, 1000, 1500)
 GIFT_DENOMINATIONS = (13, 21, 43, 85, 50, 100, 150, 250, 350, 500)
 
 DEFAULTS: dict[str, Any] = {
@@ -40,6 +40,9 @@ DEFAULTS: dict[str, Any] = {
         "auto_create_lots": False,
         "lot_price_per_star": 1.6,       # стартовая цена нового лота, ₽ за звезду (дальше её ведёт RTBA)
         "lot_description": "⚡ Автовыдача 1–5 минут. Укажите @username — звёзды придут на аккаунт.",
+        "manage_lot_texts": True,        # бот сам обновляет тексты карточек (выключите, если правите их на FunPay)
+        "lot_texts": {},                 # ручные тексты карточки «По username»: summary_ru, desc_ru, summary_en, desc_en
+        "gift_lot_texts": {},            # то же для «Подарком»; {stars} — номинал
         "gift_lot_description": "🎁 Автовыдача подарками 1–5 минут. Укажите @username — подарки придут на аккаунт, "
                                 "их можно конвертировать в звёзды.",
     },

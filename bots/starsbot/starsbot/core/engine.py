@@ -597,8 +597,12 @@ class Engine:
             await self.notifier.notify("INFO", "chat_message", f"💬 {msg.author_name} (заказ #{last['order_id']}): "
                                        f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
             return
-        if not M.STARS_TOPIC_RE.search(msg.text or ""):
-            return                               # не про звёзды — не наш покупатель, ничего не пишем
+        text_in = msg.text or ""
+        about_stars = bool(M.STARS_TOPIC_RE.search(text_in))
+        hello = not about_stars and bool(M.HELLO_RE.search(text_in)) and not M.OTHER_GOODS_RE.search(text_in) and \
+            len(text_in) <= 200
+        if not about_stars and not hello:
+            return                               # не про звёзды и не «вы тут?» — не наш покупатель, молчим
         self.db.log_message(chat_id, None, "in", msg.text)
         await self.notifier.notify("INFO", "presale_question", f"💬 Вопрос о звёздах от {msg.author_name}: "
                                    f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
@@ -606,7 +610,8 @@ class Engine:
             return
         self.db.mark_presale(chat_id)
         lang = M.detect_lang(msg.text, self.cfg.general.language)
-        text = M.render(lang, "presale", denominations=", ".join(str(d) for d in self._denominations()))
+        text = M.render(lang, "presale" if about_stars else "presale_hello",
+                        denominations=", ".join(str(d) for d in self._denominations()))
         faq = M.detect_faq(msg.text)
         if faq and faq != "faq_time":
             text += "\n\n" + M.render(lang, faq, status_hint="")

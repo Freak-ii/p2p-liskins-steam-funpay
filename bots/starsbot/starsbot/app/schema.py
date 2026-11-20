@@ -221,7 +221,7 @@ MESSAGE_TITLES = {
     "status": "Ответ на !статус", "help": "Ответ на !помощь", "call_seller": "Продавец вызван",
     "off_platform": "Отказ от общения вне FunPay", "unknown": "Непонятное сообщение", "after_delivery": "Вопрос после выдачи",
     "change_username_late": "Смена username после оплаты", "refunded": "Возврат", "completed_thanks": "Спасибо за подтверждение",
-    "presale": "Вопрос о звёздах без заказа", "faq_gift": "FAQ: подарком?", "faq_safe": "FAQ: это безопасно?",
+    "presale": "Вопрос о звёздах без заказа", "presale_hello": "«Вы тут?» без заказа", "faq_gift": "FAQ: подарком?", "faq_safe": "FAQ: это безопасно?",
     "faq_time": "FAQ: когда придут?", "faq_not_arrived": "FAQ: звёзды не пришли",
     "faq_refund": "FAQ: просьба о возврате/отмене", "faq_premium": "FAQ: про Telegram Premium",
     "faq_where": "FAQ: где посмотреть звёзды",

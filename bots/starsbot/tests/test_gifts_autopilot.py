@@ -364,3 +364,55 @@ def test_remote_inbox_runs_commands(tmp_path):
     assert seen == [("approve", ["AB12"]), ("lots_off", [])]
     assert not (tmp_path / "data" / "remote_cmd.txt").exists()
     assert "approve AB12" in (tmp_path / "data" / "remote_cmd.out.txt").read_text(encoding="utf-8")
+
+
+def test_presale_hello_and_other_goods(tmp_path):
+    from starsbot.core.models import ChatMessage
+    sup, e, fp, wallet = make(tmp_path)
+    e.coord.chat_is_foreign = lambda chat_id: False
+    n0 = len(fp.outbox)
+    asyncio.run(e.on_chat_without_order("c1", ChatMessage(1, "c1", 7, "ivan", "Здравствуйте, вы тут?")))
+    assert len(fp.outbox) == n0 + 1 and "на связи" in fp.outbox[-1][1]
+    asyncio.run(e.on_chat_without_order("c1", ChatMessage(2, "c1", 7, "ivan", "ау")))
+    assert len(fp.outbox) == n0 + 1                     # не чаще раза в 6 часов на чат
+    asyncio.run(e.on_chat_without_order("c2", ChatMessage(3, "c2", 8, "petr", "привет, скины cs2 есть?")))
+    asyncio.run(e.on_chat_without_order("c3", ChatMessage(4, "c3", 9, "olga", "ок")))
+    assert len(fp.outbox) == n0 + 1                     # чужой товар и пустая болтовня — молчим
+    asyncio.run(e.on_chat_without_order("c4", ChatMessage(5, "c4", 10, "max", "сколько стоят 100 звезд?")))
+    assert "Fragment" in fp.outbox[-1][1] and len(fp.outbox) == n0 + 2
+
+
+def test_custom_lot_texts_and_manage_switch(tmp_path):
+    from starsbot.funpay.lots import custom_texts, lot_texts
+    sup, e, fp, wallet = make(tmp_path)
+    e.cfg.funpay["lot_texts"] = {"summary_ru": "⭐ {stars} звёзд — мгновенно", "desc_en": "{stars} stars, fast."}
+    t = lot_texts(100, "username", "", custom_texts(e.cfg, "username"))
+    assert t["summary_ru"] == "⭐ 100 звёзд — мгновенно" and t["desc_en"] == "100 stars, fast."
+    assert "Fragment" in t["summary_en"]                # незаданные поля — стандартные
+    e.cfg.funpay["manage_lot_texts"] = False
+    assert "не меняет" in asyncio.run(e.lot_manager.refresh_texts())
+
+
+def test_web_saves_lot_card(tmp_path):
+    sup, e, fp, wallet = make(tmp_path)
+
+    async def go():
+        app = make_app(sup)
+        async with TestClient(TestServer(app)) as cl:
+            tok = sup.ensure_token()
+            await cl.get(f"/login?token={tok}")
+            r = await cl.get("/funpay")
+            assert r.status == 200 and "Карточка товара" in await r.text()
+            r = await cl.post("/funpay", data={"action": "texts_save", "kind": "username", "summary_ru": "Звёзды {stars}",
+                                              "desc_ru": "Моё описание", "summary_en": "Stars {stars}",
+                                              "desc_en": "Мой текст", "manage": "on"})
+            assert "латиницей" in await r.text()
+            r = await cl.post("/funpay", data={"action": "texts_save", "kind": "username", "summary_ru": "Звёзды {stars}",
+                                              "desc_ru": "Моё описание", "summary_en": "Stars {stars}",
+                                              "desc_en": "My text", "manage": "on"})
+            assert r.status == 200
+            assert sup.cfg.funpay.lot_texts["desc_ru"] == "Моё описание"
+            assert e.cfg.funpay["lot_texts"]["summary_en"] == "Stars {stars}"
+            await cl.post("/funpay", data={"action": "texts_reset", "kind": "username", "manage": "on"})
+            assert not sup.cfg.funpay.lot_texts
+    asyncio.run(go())

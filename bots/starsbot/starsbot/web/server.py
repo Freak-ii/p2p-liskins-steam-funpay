@@ -787,7 +787,13 @@ def make_app(sup, log_handler=None) -> web.Application:
         lm = sup.engine.lot_manager
         ap = sup.engine.autopilot
         unconfirmed = ap.unconfirmed(0, include_done=True)
-        return render("funpay.html", request, rows=lm.rows(), fr=sup.engine.fragment_status,
+        from starsbot.funpay.lots import custom_texts, lot_texts
+        texts = {}
+        for kind, dkey in (("username", "lot_description"), ("gift", "gift_lot_description")):
+            texts[kind] = lot_texts("{stars}", kind, str(sup.cfg.funpay.get(dkey) or ""), custom_texts(sup.cfg, kind))
+            texts[kind]["custom"] = bool(custom_texts(sup.cfg, kind))
+        return render("funpay.html", request, rows=lm.rows(), texts=texts,
+                      manage_texts=sup.cfg.funpay.get("manage_lot_texts") is not False, fr=sup.engine.fragment_status,
                       fr_age=sup.engine.fragment_cookie_age_days(), files=ap.support_files(), unconfirmed=unconfirmed,
                       ap=ap.status(), fp=sup.cfg.funpay, rtba=sup.cfg.rtba, gifts_on=bool((sup.cfg.get("gifts") or {})
                                                                                            .get("enabled")))
@@ -822,6 +828,34 @@ def make_app(sup, log_handler=None) -> web.Application:
             msg = "; ".join(await lm.create_missing(template_offer=_num_in(f.get("template"), 0)))
         elif act == "close_all":
             msg = await lm.close_all(reason="кнопка в панели")
+        elif act in ("texts_save", "texts_reset"):
+            kind = "gift" if f.get("kind") == "gift" else "username"
+            key = "gift_lot_texts" if kind == "gift" else "lot_texts"
+            if act == "texts_reset":
+                vals: dict = {}
+            else:
+                from starsbot.funpay.lots import lot_texts
+                dflt = lot_texts("{stars}", kind)
+                vals = {}
+                for k in ("summary_ru", "desc_ru", "summary_en", "desc_en"):
+                    v = str(f.get(k, "")).replace("\r\n", "\n").strip()
+                    if v and v != dflt[k]:
+                        vals[k] = v[:1500] if k.startswith("desc") else v[:120]
+                bad = [k for k in ("summary_en", "desc_en") if vals.get(k) and not vals[k].isascii()]
+                if bad:
+                    raise back(request, "Английские поля FunPay принимает только латиницей — уберите русские буквы и "
+                               "эмодзи из английского текста", "/funpay")
+            manage = f.get("manage") == "on"
+            sup.raw.setdefault("funpay", {})[key] = {}          # словарь заменяется целиком, а не сливается
+            sup.save({"funpay": {key: vals, "manage_lot_texts": manage}}, rebuild=False)
+            sup.engine.cfg.funpay[key] = vals                   # работающий бот видит тексты сразу
+            sup.engine.cfg.funpay["manage_lot_texts"] = manage
+            if sup.state == "running":
+                res = await lm.refresh_texts(force=True)
+            else:
+                res = "применится при запуске бота"
+            msg = ("Стандартный текст карточки возвращён" if act == "texts_reset" else "Карточка сохранена") + \
+                f" — {res}"
         elif act == "open_all":
             e = sup.engine
             for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:")):
