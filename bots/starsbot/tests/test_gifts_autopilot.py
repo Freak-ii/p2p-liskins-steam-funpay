@@ -529,3 +529,19 @@ def test_never_read_chats_are_fetched_once(tmp_path):
         assert len(calls) == n                                        # все прочитаны, повторно не запрашиваем
         assert all(sup.db.last_seen_message(f"9{i}") > 0 for i in range(10))
     asyncio.run(go())
+
+
+def test_rtba_tight_prices_keep_third_place():
+    """Плотные цены (387.85 / 387.86 / 387.90): подрезка 0.5 ₽ не должна выкидывать нас на 1-е место."""
+    cfg = load_config(None).rtba
+    eng = RTBAEngine(cfg)
+    prices = [387.85, 387.86, 387.90, 388.5, 390.0, 395.0]
+    lots = [CompetitorLot(str(i), f"s{i}", p, 10, description="250 звёзд, По username",
+                          fields={"quantity": "250 звёзд", "method": "по username"}) for i, p in enumerate(prices)]
+    kw = dict(offer_id="500", stars=250, own_offer_ids={"500"}, own_username="me", cost_per_star_rub=1.0,
+              overrides={"strategy": "topN", "target_position": 3})
+    d = eng.decide(lots, current_lot_price=340.03, **kw)               # сейчас 340.03×1.1406 ≈ 387.84 → 1-е место
+    assert 387.86 < d.target_buyer_price < 387.90, d
+    assert d.position == 3 and d.apply                                  # мелкое, но нужное изменение применяем
+    d2 = eng.decide(lots, current_lot_price=d.target_lot_price, **kw)
+    assert not d2.apply                                                 # уже на 3-м месте — не трогаем
