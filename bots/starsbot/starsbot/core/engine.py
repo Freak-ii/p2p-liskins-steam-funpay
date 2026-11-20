@@ -678,9 +678,13 @@ class Engine:
             self._set(oid, S.AWAITING_USERNAME, "no_recipient")
             await self.accept_username(self.db.get_order(oid), o["tg_username"], source=o["username_source"] or "chat")
             return
-        # 1. котировка Fragment
+        # 1. котировка Fragment. recipient от Fragment привязан к сессии и живёт недолго — как сайт, ищем
+        # получателя заново прямо перед заявкой (старый recipient даёт «Access denied»)
         try:
-            req_id, amount = await self.fragment.init_buy(o["tg_recipient"], stars)
+            rec = await self.fragment.search_recipient(o["tg_username"], stars)
+            if rec.recipient != o["tg_recipient"]:
+                self.db.update_order(oid, tg_recipient=rec.recipient)
+            req_id, amount = await self.fragment.init_buy(rec.recipient, stars)
         except FragmentAuthError as e:
             await self.fragment_auth_problem(e)
             self.enqueue(oid, 60)
