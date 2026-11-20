@@ -1436,7 +1436,7 @@ class Engine:
     async def start(self) -> None:
         await self.fp.login()
         await self.recover()
-        await self.ensure_fragment()
+        await self.ensure_fragment(force=True)
         if not self.cfg.general.dry_run:
             # остатки, записанные в тестовом режиме, на FunPay не отправлялись: первая синхронизация
             # в боевом режиме должна выставить наличие и включить лоты заново
