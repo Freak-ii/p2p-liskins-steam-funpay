@@ -354,6 +354,11 @@ def find_iscc() -> str | None:
 
 
 def main() -> None:
+    for stream in (sys.stdout, sys.stderr):          # Windows-раннер пишет в cp1252: стрелки и кириллица роняли сборку
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--lisbot", action="store_true", help="включить LisBot и Node.js (только при сборке на Windows)")
     ap.add_argument("--installer", action="store_true", help="собрать установщик Inno Setup (нужен ISCC.exe)")

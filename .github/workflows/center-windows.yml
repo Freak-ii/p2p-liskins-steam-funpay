@@ -4,11 +4,10 @@
 # Минуты Windows в Actions считаются вдвое, поэтому на обычные пуши и PR эта сборка не запускается:
 # их проверяет «Tests» на Linux.
 name: Center Windows
+# Выпуски center-v* собирает «Build Windows» (packaging/windows, установщик StarsCenter); эта старая
+# портативная сборка запускается только вручную, чтобы два workflow не публиковали один выпуск.
 on:
   workflow_dispatch:
-  push:
-    tags: ["center-v*"]
-    branches: ["claude/center-*"]
 concurrency:
   group: center-windows-${{ github.ref }}
   cancel-in-progress: true

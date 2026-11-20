@@ -47,7 +47,7 @@ jobs:
       - run: docker build -t resale-center .
       - name: Центр стартует в контейнере и останавливается мягко
         run: |
-          docker run -d --name rc -p 127.0.0.1:8800:8800 -e CENTER_SECRET_KEY=ci resale-center python -m center --no-browser --host 0.0.0.0 --demo
+          docker run -d --name rc -p 127.0.0.1:8800:8800 -e CENTER_SECRET_KEY=ci resale-center python -m center --no-browser --host 0.0.0.0 --demo --port 8800
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:8800/api/ping && break; sleep 2; done
           sleep 10
           docker stop rc
