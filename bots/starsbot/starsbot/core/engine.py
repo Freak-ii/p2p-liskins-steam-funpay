@@ -586,6 +586,7 @@ class Engine:
         last = self.db.last_order_for_chat(chat_id)
         if last is not None:
             self.db.log_message(chat_id, last["order_id"], "in", msg.text)
+            replied = True
             if M.is_off_platform_request(msg.text):
                 await self.say(last, "off_platform")
             elif M.detect_faq(msg.text) and S(last["status"]) in (S.DELIVERED, S.COMPLETED) and \
@@ -594,18 +595,23 @@ class Engine:
             elif S(last["status"]) == S.DELIVERED or (S(last["status"]) == S.COMPLETED and M.is_question(msg.text)
                                                       and time.time() - (last["delivered_at"] or 0) < 3 * 86400):
                 await self.say(last, "after_delivery")
+            else:
+                replied = False
             await self.notifier.notify("INFO", "chat_message", f"💬 {msg.author_name} (заказ #{last['order_id']}): "
                                        f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
-            return
+            if replied or not S(last["status"]).is_final:
+                return
+            # старый заказ закрыт, а покупатель снова пишет «привет / есть звёзды?» — отвечаем как новому
         text_in = msg.text or ""
         about_stars = bool(M.STARS_TOPIC_RE.search(text_in))
         hello = not about_stars and bool(M.HELLO_RE.search(text_in)) and not M.OTHER_GOODS_RE.search(text_in) and \
             len(text_in) <= 200
         if not about_stars and not hello:
             return                               # не про звёзды и не «вы тут?» — не наш покупатель, молчим
-        self.db.log_message(chat_id, None, "in", msg.text)
-        await self.notifier.notify("INFO", "presale_question", f"💬 Вопрос о звёздах от {msg.author_name}: "
-                                   f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
+        if last is None:
+            self.db.log_message(chat_id, None, "in", msg.text)
+            await self.notifier.notify("INFO", "presale_question", f"💬 Вопрос о звёздах от {msg.author_name}: "
+                                       f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
         if not self.cfg.funpay.presale_replies or self.paused or self.db.presale_recent(chat_id, 6 * 3600):
             return
         self.db.mark_presale(chat_id)
@@ -1490,17 +1496,75 @@ class Engine:
             await self.sync_orders()
             self.db.kv_set("last_orders_sync", time.time())
         init = self.db.kv_get("chats_initialized", False)
-        for bm in upd["bookmarks"]:
+        bookmarks = upd["bookmarks"]
+        now = time.time()
+        if bookmarks:
+            self._runner_bm_at = now
+        elif now - getattr(self, "_runner_bm_at", 0) > 60 and now - getattr(self, "_page_bm_at", 0) > 20:
+            # runner давно не присылал список диалогов — берём его со страницы /chat/
+            self._page_bm_at = now
+            try:
+                bookmarks = await self.fp.get_bookmarks_page()
+            except FunPayError as e:
+                log.warning("список диалогов /chat/: %s", e)
+        for bm in bookmarks:
             seen = self.db.last_seen_message(bm.chat_id)
             if not init:
                 self.db.set_last_seen_message(bm.chat_id, bm.last_message_id)
                 continue
             if bm.last_message_id > seen:
-                msgs = await self.fp.get_chat_history(bm.chat_id, seen)
+                try:
+                    msgs = await self.fp.get_chat_history(bm.chat_id, seen)
+                except FunPayError as e:
+                    log.warning("чат %s: %s", bm.chat_id, e)
+                    continue
+                if seen == 0:
+                    msgs = self._unanswered_tail(msgs)
                 await self.process_chat(bm.chat_id, msgs)
         if not init:                     # первый опрос: старую переписку не обрабатываем, дальше — всё новое
             self.db.kv_set("chats_initialized", True)
+        else:
+            await self.poll_order_chats()
         self.last_ok["funpay_poll"] = time.time()
+
+    def _unanswered_tail(self, msgs: list[ChatMessage]) -> list[ChatMessage]:
+        """Чат, который бот ещё не читал: берём только то, что пришло после нашего последнего ответа
+        (а если мы там ещё не писали — последние 3 сообщения), чтобы не отвечать на старую переписку."""
+        msgs = sorted(msgs, key=lambda m: m.message_id)
+        own = [i for i, m in enumerate(msgs) if m.author_id == self.fp.user_id]
+        return msgs[own[-1] + 1:] if own else msgs[-3:]
+
+    async def poll_order_chats(self) -> None:
+        """Чаты заказов, где ждём ответа покупателя (username), читаем напрямую — не полагаясь на список диалогов."""
+        now = time.time()
+        if now - getattr(self, "_order_chats_at", 0) < 12:
+            return
+        self._order_chats_at = now
+        for o in self.db.orders_by_status(S.AWAITING_USERNAME)[:10]:
+            chat = o["chat_id"]
+            if not chat:
+                continue
+            seen = self.db.last_seen_message(chat)
+            try:
+                msgs = await self.fp.get_chat_history(chat, seen)
+            except FunPayError as e:
+                log.warning("чат заказа #%s: %s", o["order_id"], e)
+                continue
+            if not msgs:
+                continue
+            if seen == 0:
+                # чат ещё не читали: переписку до оплаты этого заказа не разбираем
+                self.db.set_last_seen_message(chat, max(m.message_id for m in msgs))
+                start = 0
+                for m in msgs:
+                    k = classify_system(m.text) if m.is_system else None
+                    if k and k[0] == "paid" and k[1] == o["order_id"]:
+                        start = m.message_id
+                if start:
+                    msgs = [m for m in msgs if m.message_id > start]
+                else:                    # отметки об оплате нет в истории — читаем после нашего последнего ответа
+                    msgs = self._unanswered_tail(msgs)
+            await self.process_chat(chat, msgs)
 
     async def recover(self) -> None:
         """После перезапуска: заказы с транзакцией «в полёте» сверяются с блокчейном, READY — снова в очередь."""

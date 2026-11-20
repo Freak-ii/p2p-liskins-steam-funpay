@@ -416,3 +416,83 @@ def test_web_saves_lot_card(tmp_path):
             await cl.post("/funpay", data={"action": "texts_reset", "kind": "username", "manage": "on"})
             assert not sup.cfg.funpay.lot_texts
     asyncio.run(go())
+
+
+def test_chats_read_without_runner_bookmarks(tmp_path):
+    """FunPay runner не присылает список диалогов: username из чата заказа и «привет» всё равно видим."""
+    from starsbot.funpay.parsers import ChatBookmark
+    sup, e, fp, wallet = make(tmp_path)
+    e.coord.chat_is_foreign = lambda chat_id: False
+    e.fragment.users["good_user"] = "Good"
+    real_poll = fp.poll_updates
+
+    async def poll_no_bookmarks():
+        upd = await real_poll()
+        upd["bookmarks"] = []
+        return upd
+    fp.poll_updates = poll_no_bookmarks
+
+    async def page():
+        return [ChatBookmark(c, fp.chat_users.get(c, "?"), m[-1].message_id, m[-1].text, True)
+                for c, m in fp.chats.items() if m]
+    fp.get_bookmarks_page = page
+
+    async def go():
+        await boot(e)
+        oid = fp.buyer_pays("Bob", 41, 50, username="no_such_user_x")
+        await drain(e, wallet)
+        assert sup.db.get_order(oid)["status"] == S.AWAITING_USERNAME.value
+        fp.buyer_says(41, "ой, правильно @good_user")
+        e._order_chats_at = 0
+        await drain(e, wallet)
+        o = sup.db.get_order(oid)
+        assert o["tg_username"] == "good_user" and o["status"] in (S.DELIVERED.value, S.COMPLETED.value)
+        # новый чат без заказа: «привет» → ответ через запасной список диалогов /chat/
+        n = len(fp.outbox)
+        fp.buyer_says(42, "привет, вы тут?")
+        e._runner_bm_at = e._page_bm_at = 0
+        await e.funpay_poll()
+        assert len(fp.outbox) == n + 1 and fp.outbox[-1][0] == "542"
+        # старый закрытый заказ, покупатель снова здоровается — отвечаем как новому
+        fp.buyer_confirms(oid)
+        await drain(e, wallet)
+        assert sup.db.get_order(oid)["status"] == S.COMPLETED.value
+        n = len(fp.outbox)
+        fp.buyer_says(41, "привет")
+        e._runner_bm_at = e._page_bm_at = 0
+        await e.funpay_poll()
+        assert len(fp.outbox) == n + 1 and fp.outbox[-1][0] == "541"
+    asyncio.run(go())
+
+
+def test_never_read_chat_answers_only_unanswered_tail(tmp_path):
+    from starsbot.core.models import ChatMessage
+    sup, e, fp, wallet = make(tmp_path)
+    mk = lambda i, a, t: ChatMessage(i, "c", a, "x", t)
+    msgs = [mk(1, 7, "старое"), mk(2, fp.user_id, "ответ"), mk(3, 7, "новое 1"), mk(4, 7, "новое 2")]
+    assert [m.message_id for m in e._unanswered_tail(msgs)] == [3, 4]
+    assert [m.message_id for m in e._unanswered_tail([mk(i, 7, "a") for i in range(1, 8)])] == [5, 6, 7]
+
+
+def test_order_chat_username_read_directly(tmp_path):
+    """Ни runner, ни /chat/ не отдают диалог — чат заказа, ждущего username, читаем напрямую."""
+    sup, e, fp, wallet = make(tmp_path)
+    e.fragment.users["good_user"] = "Good"
+    real_poll = fp.poll_updates
+
+    async def poll_no_bookmarks():
+        upd = await real_poll()
+        upd["bookmarks"] = []
+        return upd
+    fp.poll_updates = poll_no_bookmarks
+
+    async def go():
+        await boot(e)
+        oid = fp.buyer_pays("Bob", 43, 50, username="no_such_user_x")
+        await drain(e, wallet)
+        assert sup.db.get_order(oid)["status"] == S.AWAITING_USERNAME.value
+        fp.buyer_says(43, "@good_user")
+        e._order_chats_at = 0
+        await drain(e, wallet)
+        assert sup.db.get_order(oid)["tg_username"] == "good_user"
+    asyncio.run(go())

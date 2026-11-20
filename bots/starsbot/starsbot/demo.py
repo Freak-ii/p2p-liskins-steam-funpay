@@ -85,6 +85,9 @@ class FakeFunPay:
         changed, self._orders_tag = self._orders_tag > 0, 0
         return {"orders_changed": changed, "bookmarks": bms, "counters": {}}
 
+    async def get_bookmarks_page(self):
+        return []
+
     async def get_chat_history(self, chat_id, last_message=0):
         return [m for m in self.chats.get(chat_id, []) if m.message_id > last_message]
 

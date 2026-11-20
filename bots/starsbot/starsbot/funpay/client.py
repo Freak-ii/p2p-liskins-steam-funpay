@@ -133,6 +133,11 @@ class FunPayClient:
         return result
 
     # ------------------------------------------------------------------ chat
+    async def get_bookmarks_page(self) -> list:
+        """Список диалогов со страницы /chat/ — запасной путь, если runner не присылает chat_bookmarks."""
+        _, page = await self._request("GET", "/chat/")
+        return P.parse_chat_bookmarks(page)
+
     async def get_chat_history(self, chat_id: str, last_message: int = 0) -> list[ChatMessage]:
         _, body = await self._request("GET", f"/chat/history?node={chat_id}&last_message={last_message}",
                                       ajax=True)
