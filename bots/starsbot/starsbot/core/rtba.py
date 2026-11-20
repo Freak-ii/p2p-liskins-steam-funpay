@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import math
 import re
 import statistics
 import time
@@ -169,6 +170,9 @@ class RTBAEngine:
         t = max(d.target_lot_price or floor, floor)
         if ceil:
             t = min(t, ceil)
+        if cfg.strategy == "topN" and t > floor:
+            # округляем вниз: при округлении вверх цена покупателя выходит выше конкурента и мы съезжаем на место ниже
+            t = max(floor, math.floor(t * 100 + 1e-6) / 100)
         d.target_lot_price = round(t, 2)
         d.target_buyer_price = round(t * markup, 2)
         ups = [u for u in self.updates.get(offer_id, []) if now - u < 3600]
@@ -176,7 +180,7 @@ class RTBAEngine:
         if d.target_lot_price <= 0:
             d.notes.append("нет ориентира цены — не трогаем")
             return d
-        if current is not None and (abs(d.target_lot_price - current) < 0.01 or
+        if current is not None and (round(abs(d.target_lot_price - current), 2) < 0.01 or
                                     (not d.fix_position and abs(d.target_lot_price - current) < float(cfg.min_change))):
             d.notes.append("изменение меньше min_change — не трогаем")
             return d

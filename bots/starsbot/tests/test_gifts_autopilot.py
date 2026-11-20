@@ -545,3 +545,14 @@ def test_rtba_tight_prices_keep_third_place():
     assert d.position == 3 and d.apply                                  # мелкое, но нужное изменение применяем
     d2 = eng.decide(lots, current_lot_price=d.target_lot_price, **kw)
     assert not d2.apply                                                 # уже на 3-м месте — не трогаем
+
+
+def test_rtba_rounds_down_to_stay_below_competitor():
+    cfg = load_config(None).rtba
+    eng = RTBAEngine(cfg)
+    prices = [115.5, 116.02, 116.32, 117.0, 118.0]
+    lots = [CompetitorLot(str(i), f"s{i}", p, 10, description="75 звёзд, По username",
+                          fields={"quantity": "75 звёзд", "method": "по username"}) for i, p in enumerate(prices)]
+    d = eng.decide(lots, offer_id="500", stars=75, own_offer_ids={"500"}, own_username="me", current_lot_price=101.99,
+                   cost_per_star_rub=1.0, overrides={"strategy": "topN", "target_position": 3})
+    assert d.target_buyer_price < 116.32 and d.apply, d                  # 101.99 → 116.33: были 4-ми
