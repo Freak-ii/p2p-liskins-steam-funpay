@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from starsbot.core.models import OrderStatus as S
 
 DAY = 86400
+MARKETS = ("ozon", "avito", "wb")        # площадки кроме FunPay: комиссии и товары — в своих разделах конфига
 
 
 @dataclass
@@ -92,8 +93,8 @@ class Economics:
     # ------------------------------------------------------------------ один круг
     def fee_pcts(self, channel: str = "funpay") -> tuple[float, float]:
         """(комиссия площадки, комиссия вывода) в процентах для канала продаж."""
-        if channel == "ozon":
-            oz = self.cfg.get("ozon") or {}
+        if channel in MARKETS:
+            oz = self.cfg.get(channel) or {}
             return float(oz.get("commission_pct") or 0), float(oz.get("withdraw_fee_pct") or 0)
         return float(self.e.funpay_fee_pct or 0), float(self.e.withdraw_fee_pct or 0)
 
@@ -156,12 +157,43 @@ class Economics:
 
     def calculator(self, prices: dict[int, float] | None = None, channel: str = "funpay") -> list[Flow]:
         prices = {**self.current_prices(channel), **(prices or {})}
-        if channel == "ozon":
-            items = (self.cfg.get("ozon") or {}).get("products") or []
+        if channel in MARKETS:
+            items = (self.cfg.get(channel) or {}).get("products") or []
         else:
             items = self.cfg.funpay.lots or []
         denoms = sorted({int(l["stars"]) for l in items if l.get("stars")} | set(prices))
         return [self.flow(d, float(prices.get(d) or 0), channel=channel) for d in denoms]
+
+    def min_price(self, stars: int, channel: str = "funpay", margin_pct: float | None = None) -> float | None:
+        """Самая низкая цена, при которой маржа (прибыль / цена) не ниже margin_pct.
+
+        Прибыль = цена × (1 − комиссия площадки) × (1 − комиссия вывода) − себестоимость звёзд и газа, поэтому
+        цена ≥ себестоимость / (доля, что доходит до вас − маржа). None — нет курса TON или цены звезды."""
+        if margin_pct is None:
+            margin_pct = float((self.cfg.get(channel) or {}).get("min_margin_pct") or 3.0)
+        cost = self.flow(int(stars), 0.0, channel=channel).cost_rub
+        fee_pct, wd_pct = self.fee_pcts(channel)
+        keep = (1 - fee_pct / 100) * (1 - wd_pct / 100) - float(margin_pct) / 100
+        if cost is None or keep <= 0:
+            return None
+        return round(cost / keep, 2)
+
+    def target_price(self, stars: int, channel: str, manual: float | None = None) -> dict:
+        """Цена для площадки: ручная цена, но не ниже пола по марже; в режиме margin — по целевой марже."""
+        c = self.cfg.get(channel) or {}
+        floor = self.min_price(stars, channel, float(c.get("min_margin_pct") or 3.0))
+        mode = str(c.get("price_mode") or "fixed")
+        if mode == "margin":
+            want = self.min_price(stars, channel, float(c.get("target_margin_pct") or 8.0))
+        else:
+            want = float(manual) if manual else None
+        price = max(x for x in (want, floor) if x is not None) if (want or floor) else None
+        step = float(c.get("price_round") or 1)
+        if price is not None and step > 0:
+            import math
+            price = math.ceil(price / step - 1e-9) * step   # округляем вверх: маржа не опускается ниже пола
+        return {"stars": int(stars), "price": round(price, 2) if price is not None else None, "floor": floor,
+                "want": want, "raised": bool(floor and want is not None and want < floor), "mode": mode}
 
     # ------------------------------------------------------------------ кошелёк
     def wallet_capacity(self) -> list[dict]:

@@ -28,7 +28,8 @@ log = logging.getLogger("app")
 
 SECRET_FIELDS = {("gifts", "api_hash"), ("funpay", "golden_key"), ("fragment", "cookies"), ("ton", "mnemonic"), ("ton", "toncenter_api_key"),
                  ("notifications.telegram", "bot_token"), ("dashboard", "token"), ("dashboard", "operator_token"),
-                 ("dashboard", "viewer_token"), ("ozon", "api_key"), ("ozon.activation_bot", "bot_token")}
+                 ("dashboard", "viewer_token"), ("ozon", "api_key"), ("ozon.activation_bot", "bot_token"),
+                 ("avito", "client_secret"), ("wb.activation_bot", "bot_token")}
 
 
 class MemoryLogHandler(logging.Handler):
@@ -219,6 +220,14 @@ class Supervisor:
         ozon = build_channel(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
         if ozon is not None:
             self.engine.channels["ozon"] = ozon
+        from starsbot.avito.channel import build_channel as build_avito
+        avito = build_avito(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
+        if avito is not None:
+            self.engine.channels["avito"] = avito
+        from starsbot.wb.channel import build_channel as build_wb
+        wb = build_wb(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
+        if wb is not None:
+            self.engine.channels["wb"] = wb
 
     async def start(self) -> str:
         if self.state in ("running", "starting"):
