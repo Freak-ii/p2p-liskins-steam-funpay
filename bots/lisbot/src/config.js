@@ -52,10 +52,10 @@ export function loadConfig({ configPath, env, dataDir } = {}) {
 
   cfg.secrets = {
     lisApiKey: env.LIS_API_KEY || '',
-    steamAccountName: env.STEAM_ACCOUNT_NAME || '',
+    steamAccountName: (env.STEAM_ACCOUNT_NAME || '').trim(),
     steamPassword: env.STEAM_PASSWORD || '',
-    sharedSecret: env.STEAM_SHARED_SECRET || '',
-    identitySecret: env.STEAM_IDENTITY_SECRET || '',
+    sharedSecret: (env.STEAM_SHARED_SECRET || '').trim(),
+    identitySecret: (env.STEAM_IDENTITY_SECRET || '').trim(),
     tradeUrl: env.STEAM_TRADE_URL || '',
     telegramToken: env.TELEGRAM_BOT_TOKEN || '',
     telegramChatId: env.TELEGRAM_CHAT_ID || '',
@@ -65,6 +65,11 @@ export function loadConfig({ configPath, env, dataDir } = {}) {
   return cfg;
 }
 
+/** shared_secret/identity_secret из maFile: base64 от 20 байт. */
+export function isSteamSecret(v) {
+  return /^[A-Za-z0-9+/]{27}=$/.test(v || '');
+}
+
 /** Возвращает список проблем конфигурации. Пустой массив — всё ок. */
 export function validateConfig(cfg) {
   const errs = [];
@@ -72,6 +77,8 @@ export function validateConfig(cfg) {
   if (!s.lisApiKey) errs.push('LIS_API_KEY не задан');
   if (!s.steamAccountName || !s.steamPassword) errs.push('STEAM_ACCOUNT_NAME / STEAM_PASSWORD не заданы');
   if (!s.sharedSecret) errs.push('STEAM_SHARED_SECRET не задан (нужен для входа без ручного кода)');
+  else if (!isSteamSecret(s.sharedSecret)) errs.push('STEAM_SHARED_SECRET не похож на shared_secret из maFile SDA (28 символов base64, оканчивается на «=»). Возможно, maFile зашифрован или скопирован не тот ключ');
+  if (s.identitySecret && !isSteamSecret(s.identitySecret)) errs.push('STEAM_IDENTITY_SECRET не похож на identity_secret из maFile SDA (28 символов base64)');
   if (!s.identitySecret) errs.push('STEAM_IDENTITY_SECRET не задан (нужен для подтверждения лотов на ТП)');
   if (!cfg.trade) errs.push('STEAM_TRADE_URL не задан или некорректен');
   if (cfg.telegram.enabled && (!s.telegramToken || !s.telegramChatId)) errs.push('Telegram включён, но TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID не заданы');
@@ -82,6 +89,8 @@ export function validateConfig(cfg) {
   if (st.balanceReservePct < 0 || st.balanceReservePct >= 1) errs.push('strategy.balanceReservePct должен быть в [0;1)');
   if (cfg.lis.allowLockedDays < 0 || cfg.lis.allowLockedDays > 8) errs.push('lis.allowLockedDays должен быть 0..8');
   if (cfg.watchlist.mode === 'list' && !(cfg.watchlist.items || []).length) errs.push('watchlist.items пуст');
+  // пустая ссылка — MannBot на этом же аккаунте Steam: ключи остаются в общем инвентаре
+  if (cfg.keyBridge?.enabled && String(cfg.keyBridge.tradeUrl || '').trim() && !parseTradeUrl(cfg.keyBridge.tradeUrl)) errs.push('keyBridge.tradeUrl: нужна трейд-ссылка аккаунта MannBot или пусто, если MannBot на этом же аккаунте');
   return errs;
 }
 
@@ -122,10 +131,18 @@ export const EDITABLE_SETTINGS = {
   'risk.lowBalanceUsd': { type: 'num', min: 0, max: 1e6, label: 'Уведомлять о низком балансе, $' },
   'risk.unknownSpendIsCritical': { type: 'bool', label: 'Неизвестная трата баланса = аварийная остановка' },
   'risk.strictConfirmations': { type: 'bool', label: 'Отменять чужие мобильные подтверждения' },
+  'risk.acceptFreeOffers': { type: 'bool', label: 'Принимать входящие обмены от любого, если от нас ничего не требуется' },
   'watchlist.mode': { type: 'enum', values: ['list', 'auto'], label: 'Вотчлист: список / авто' },
   'watchlist.auto.minPriceUsd': { type: 'num', min: 0, max: 1e5, label: 'Автовотчлист: цена от, $' },
   'watchlist.auto.maxPriceUsd': { type: 'num', min: 0, max: 1e5, label: 'Автовотчлист: цена до, $' },
   'watchlist.auto.maxItems': { type: 'int', min: 1, max: 1000, label: 'Автовотчлист: макс. предметов' },
+  'keyBridge.enabled': { type: 'bool', label: 'Мост ключей: ключи Mann Co. для MannBot' },
+  'keyBridge.tradeUrl': { type: 'str', optional: true, label: 'Мост ключей: трейд-ссылка аккаунта MannBot (пусто — MannBot на этом же аккаунте)' },
+  'keyBridge.minKeysToSend': { type: 'int', min: 1, max: 1000, label: 'Мост ключей: отправлять от, ключей' },
+  'keyBridge.buy.enabled': { type: 'bool', label: 'Мост ключей: покупать ключи на ТП Steam за кошелёк' },
+  'keyBridge.buy.maxKeyPrice': { type: 'num', min: 0, max: 100000, label: 'Мост ключей: макс. цена ключа (валюта кошелька)' },
+  'keyBridge.buy.keysPerDay': { type: 'int', min: 0, max: 1000, label: 'Мост ключей: ключей в день, максимум' },
+  'keyBridge.buy.walletReserve': { type: 'num', min: 0, max: 1e7, label: 'Мост ключей: оставлять на кошельке' },
   timezone: { type: 'str', label: 'Часовой пояс (IANA)' },
 };
 
@@ -151,7 +168,8 @@ export function saveSettings(cfg, changes) {
       if (!Number.isFinite(v) || (def.type === 'int' && !Number.isInteger(v))) { errs.push(`${def.label}: не число`); continue; }
       if (v < def.min || v > def.max) { errs.push(`${def.label}: допустимо ${def.min}…${def.max}`); continue; }
     } else if (def.type === 'enum') { if (!def.values.includes(v)) { errs.push(`${def.label}: недопустимое значение`); continue; } }
-    else if (typeof v !== 'string' || !v.trim()) { errs.push(`${def.label}: пусто`); continue; }
+    else if (typeof v !== 'string' || (!v.trim() && !def.optional)) { errs.push(`${def.label}: пусто`); continue; }
+    if (k === 'keyBridge.tradeUrl' && String(v).trim() && !parseTradeUrl(v)) { errs.push(`${def.label}: нужна ссылка вида https://steamcommunity.com/tradeoffer/new/?partner=…&token=…`); continue; }
     if (k === 'timezone') { try { new Intl.DateTimeFormat('en', { timeZone: v }); } catch { errs.push('Неизвестный часовой пояс'); continue; } }
     clean[k] = v;
   }

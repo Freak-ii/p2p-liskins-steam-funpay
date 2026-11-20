@@ -14,6 +14,7 @@ import { Seller } from '../src/engine/seller.js';
 import { BalanceWatcher } from '../src/engine/balanceWatcher.js';
 import { Valuator } from '../src/engine/pricing.js';
 import { summary, daily, perItem, textReport } from '../src/analytics.js';
+import { rtbaReport } from '../src/web/server.js';
 
 const DAY = 86400_000;
 const baseCfg = JSON.parse(fs.readFileSync(new URL('../config.example.json', import.meta.url)));
@@ -178,6 +179,7 @@ test('полный цикл: скан → покупка → трейд → Trad
 
 test('безопасность трейдов: оффер с запросом наших предметов отклоняется, неизвестный — игнорируется', async () => {
   const { cfg, db, notify, guard, sent } = makeEnv();
+  cfg.risk.acceptFreeOffers = false;
   const trades = new TradeHandler({ cfg, db, session: { manager: { on() {} } }, guard, notify, log: silent });
   let declined = false, accepted = false;
   const base = { partner: { getSteamID64: () => '1' }, isGlitched: () => false, accept: (_a, cb) => { accepted = true; cb(null, 'accepted'); }, decline: (cb) => { declined = true; cb(null); } };
@@ -186,6 +188,36 @@ test('безопасность трейдов: оффер с запросом н
   await trades.onNewOffer({ ...base, id: '2', itemsToGive: [], itemsToReceive: [{ market_hash_name: 'Random gift' }] });
   assert.ok(!accepted, 'не совпадает с покупками — не принимаем');
   assert.ok(sent.filter((m) => m.level === 'warn').length >= 2);
+  assert.equal(guard.state.halted, false);
+});
+
+test('правило «обмены без отдачи»: принимаем от любого, если от нас ничего не требуется', async () => {
+  const { cfg, db, notify, guard, sent } = makeEnv();
+  assert.equal(cfg.risk.acceptFreeOffers, true, 'по умолчанию включено');
+  const trades = new TradeHandler({ cfg, db, session: { manager: { on() {} } }, guard, notify, log: silent });
+  trades.assignAssetIds = async () => {};
+  const id = db.insertItem({ name: 'AK-47 | Redline (Field-Tested)', status: 'trade_sent', buy_price_usd: 10 });
+  const res = {};
+  const offer = (oid, give, receive) => ({
+    id: oid, partner: { getSteamID64: () => `7656${oid}` }, isGlitched: () => false, itemsToGive: give, itemsToReceive: receive,
+    accept: (_a, cb) => { res[oid] = 'accepted'; cb(null, 'accepted'); }, decline: (cb) => { res[oid] = 'declined'; cb(null); },
+  });
+  // незнакомый отправитель, неизвестный предмет, от нас ничего — принимаем
+  await withFastTimers(() => trades.onNewOffer(offer('1', [], [{ market_hash_name: 'Random gift' }])));
+  assert.equal(res['1'], 'accepted');
+  assert.ok(sent.some((m) => /🎁/.test(m.text) && /Random gift/.test(m.text)));
+  // смешанный оффер: совпавший с покупкой предмет учитывается в CRM
+  await withFastTimers(() => trades.onNewOffer(offer('2', [], [{ market_hash_name: 'AK-47 | Redline (Field-Tested)' }, { market_hash_name: 'Sticker' }])));
+  assert.equal(res['2'], 'accepted');
+  const it = db.itemsByStatus('protected').find((x) => x.id === Number(id));
+  assert.ok(it && it.trade_offer_id === '2');
+  // если от нас что-то требуется — по-прежнему отклоняем
+  await withFastTimers(() => trades.onNewOffer(offer('3', [{ market_hash_name: 'Knife' }], [{ market_hash_name: 'Gift' }])));
+  assert.equal(res['3'], 'declined');
+  // правило выключено — неизвестный оффер остаётся без ответа
+  cfg.risk.acceptFreeOffers = false;
+  await withFastTimers(() => trades.onNewOffer(offer('4', [], [{ market_hash_name: 'Random gift' }])));
+  assert.equal(res['4'], undefined);
   assert.equal(guard.state.halted, false);
 });
 
@@ -258,6 +290,14 @@ test('серия ошибок → остановка; RTBA покупает мг
   // дорогой лот вне коридора — не покупаем
   await buyer.onRealtimeListing({ id: '51', name: NAME, price: 47, unlockAt: null }, { receivedAt: Date.now() });
   assert.equal(state.buyBodies.length, 1);
+  // журнал решений RTBA для центра: покупка и отказ с причиной
+  assert.deepEqual(buyer.rtbaLog.map((r) => r.outcome), ['buy', 'skip']);
+  assert.ok(buyer.rtbaLog[0].latencyMs >= 0 && /куплено/.test(buyer.rtbaLog[0].reason));
+  const rep = rtbaReport(db, cfg, { buyer, ws: null }, 7);
+  assert.equal(rep.recent[0].id, '51');
+  assert.equal(rep.buys.length, 1);
+  assert.equal(rep.latency.n, 1);
+  assert.equal(rep.settings['strategy.minRoi'], cfg.strategy.minRoi);
 });
 
 test('dry-run: ничего не покупает по-настоящему', async () => {

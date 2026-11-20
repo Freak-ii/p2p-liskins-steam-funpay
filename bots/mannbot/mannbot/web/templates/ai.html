@@ -1,0 +1,74 @@
+{% extends "base.html" %}{% block title %}ИИ-ответы{% endblock %}
+{% block body %}<div class="row" style="justify-content:space-between"><h1>ИИ-агент для покупателей</h1>
+<a href="/settings" class="btn">Настройки агента</a></div>
+
+<div class="card">
+  {% if ai.active %}
+    <span class="chip c-green">● работает</span>
+    режим: <b>{{ 'черновики на одобрение' if ai.mode == 'suggest' else 'автоответ на безопасные темы' }}</b>
+    · модель <code>{{ ai.model }}</code>
+    {% if ai.mode == 'auto_safe' %}· сам отвечает: {% for t in cfg.auto_topics %}{{ topic_text.get(t, t) }}{% if not loop.last %}, {% endif %}{% endfor %}
+      (уверенность от {{ (cfg.min_confidence * 100)|round|int }}%){% endif %}
+  {% else %}
+    <span class="chip c-gray">● выключен</span> {{ ai.problem }}.
+    <span class="muted">Включите агент и задайте API-ключ Claude в настройках. Пока он выключен, непонятные сообщения
+    покупателей, как и раньше, пересылаются вам.</span>
+  {% endif %}
+</div>
+
+<h2>Качество за {{ days|int }} дн.</h2>
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ stats.total }}</div><div class="l">сообщений обработано</div></div>
+  <div class="card kpi"><div class="v">{{ stats.pending }}</div><div class="l">ждут решения</div></div>
+  <div class="card kpi"><div class="v">{{ stats.auto_sent }}</div><div class="l">отправлено автоматически</div></div>
+  <div class="card kpi"><div class="v">{{ stats.approve_rate if stats.approve_rate is not none else '—' }}{% if stats.approve_rate is not none %}%{% endif %}</div><div class="l">одобрено без правок</div></div>
+  <div class="card kpi"><div class="v">{{ stats.edit_rate if stats.edit_rate is not none else '—' }}{% if stats.edit_rate is not none %}%{% endif %}</div><div class="l">исправлено продавцом</div></div>
+  <div class="card kpi"><div class="v">{{ stats.reject_rate if stats.reject_rate is not none else '—' }}{% if stats.reject_rate is not none %}%{% endif %}</div><div class="l">отклонено</div></div>
+  <div class="card kpi"><div class="v">{{ stats.block_rate if stats.block_rate is not none else '—' }}{% if stats.block_rate is not none %}%{% endif %}</div><div class="l">остановлено проверкой правил</div></div>
+  <div class="card kpi"><div class="v">👍 {{ stats.rating_up }} · 👎 {{ stats.rating_down }}</div><div class="l">ваши оценки</div></div>
+  <div class="card kpi"><div class="v">{{ stats.avg_latency_ms if stats.avg_latency_ms is not none else '—' }}</div><div class="l">мс на ответ, в среднем</div></div>
+  <div class="card kpi"><div class="v">{{ stats.tokens_in }} / {{ stats.tokens_out }}</div><div class="l">токенов: вход / выход</div></div>
+</div>
+{% if stats.topics %}<div class="card"><h2>Темы</h2><div class="row">{% for t, n in stats.topics.items() %}<span class="chip">{{ topic_text.get(t, t) }}: {{ n }}</span>{% endfor %}</div></div>{% endif %}
+
+<div class="row" style="margin-bottom:10px">
+  {% for code, name in [('', 'Все'), ('pending', 'Ждут решения'), ('blocked', 'Заблокированы'), ('sent_auto', 'Автоответы'), ('approved', 'Одобрены'), ('edited', 'С правкой'), ('rejected', 'Отклонены'), ('error', 'Ошибки')] %}
+  <a class="chip {{ 'c-blue' if st == code else '' }}" href="/ai{% if code %}?status={{code}}{% endif %}">{{ name }}</a>{% endfor %}
+</div>
+
+{% for r in rows %}{% set issues = r.issues|jsonload %}
+<div class="card" id="r{{r.id}}">
+  <div class="row" style="justify-content:space-between">
+    <div><b>№{{ r.id }}</b> · {{ r.ts|ts }} · {{ r.buyer or 'покупатель' }}
+      {% if r.order_id %}· <a href="/orders/{{r.order_id}}">#{{ r.order_id }}</a>{% endif %}
+      · {{ topic_text.get(r.topic, r.topic or '—') }}{% if r.confidence is not none %} · {{ (r.confidence * 100)|round|int }}%{% endif %}</div>
+    {% set c = {'pending':'amber','blocked':'red','sent_auto':'green','approved':'green','edited':'green','rejected':'gray','expired':'gray','error':'red'} %}
+    <span class="chip c-{{ c.get(r.status, 'gray') }}">{{ status_text.get(r.status, r.status) }}{% if r.decided_by %} · {{ r.decided_by }}{% endif %}</span>
+  </div>
+  <div class="cols" style="margin-top:8px">
+    <div><div class="muted">Покупатель написал</div><pre>{{ r.buyer_text }}</pre></div>
+    <div><div class="muted">{% if r.final_text and r.final_text != r.draft %}Черновик ИИ (отправлен исправленный){% else %}Ответ ИИ{% endif %}</div>
+      <pre>{{ r.draft or '—' }}</pre>
+      {% if r.final_text and r.final_text != r.draft %}<div class="muted" style="margin-top:6px">Отправлено</div><pre>{{ r.final_text }}</pre>{% endif %}</div>
+  </div>
+  {% if r.reason %}<div class="help">{{ r.reason }}{% if r.needs_seller %} · <b class="c-amber">нужен продавец</b>{% endif %}</div>{% endif %}
+  {% if issues %}<div class="help c-red">⛔ {% for i in issues %}{{ guard_text.get(i, i) }}{% if not loop.last %}; {% endif %}{% endfor %}</div>{% endif %}
+  {% if r.status in ('pending', 'blocked') %}
+  <form method="post" action="/ai/{{r.id}}" style="margin-top:8px">
+    <textarea name="text" placeholder="Свой вариант ответа (для «Отправить мой текст»)">{{ r.draft }}</textarea>
+    <div class="row" style="margin-top:6px">
+      {% if r.status == 'pending' %}<button class="primary" name="action" value="approve">✅ Отправить черновик</button>{% endif %}
+      <button name="action" value="edit">✏️ Отправить мой текст</button>
+      <button name="action" value="reject" class="danger">✖ Не отвечать</button>
+    </div>
+  </form>
+  {% elif r.status not in ('error', 'skipped') %}
+  <form method="post" action="/ai/{{r.id}}" class="row" style="margin-top:8px">
+    <span class="muted">Оценка ответа:</span>
+    <button name="action" value="rate_up" {% if r.rating == 1 %}class="primary"{% endif %}>👍</button>
+    <button name="action" value="rate_down" {% if r.rating == -1 %}class="primary"{% endif %}>👎</button>
+  </form>
+  {% endif %}
+</div>
+{% else %}<div class="card muted">Пока нет ответов ИИ{% if st %} с таким статусом{% endif %}.</div>{% endfor %}
+{% endblock %}

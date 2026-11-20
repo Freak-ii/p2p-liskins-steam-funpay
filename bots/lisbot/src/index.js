@@ -16,11 +16,14 @@ import { TradeHandler } from './engine/trades.js';
 import { ConfirmationWatcher } from './engine/confirmations.js';
 import { Seller } from './engine/seller.js';
 import { BalanceWatcher } from './engine/balanceWatcher.js';
+import { KeyBridge } from './engine/keyBridge.js';
+import { SharedSteam } from './engine/sharedSteam.js';
 import { summary, textReport, perItem } from './analytics.js';
 import { startDashboard } from './web/server.js';
+import { startDemo } from './emu/demo.js';
 
 export class Bot {
-  /** hooks: { onRestartRequest(), appMode } — для десктоп-приложения */
+  /** hooks: { onRestartRequest(), appMode } — для десктоп-приложения; emu — эмулятор LIS/Steam (демо, src/emu) */
   constructor(cfg, hooks = {}) {
     this.cfg = cfg;
     this.hooks = hooks;
@@ -32,6 +35,7 @@ export class Bot {
     this.balanceRef = { value: this.db.get('balance.last')?.balance ?? null };
     this.loops = new Map();
     this.stopped = false;
+    this.emu = hooks.emu || null;
   }
 
   seedWatchlist() {
@@ -80,7 +84,7 @@ export class Bot {
   runtimeStats() {
     return {
       steam: this.session?.stats, lis: this.lis.sched.stats, ws: this.ws ? { connected: this.ws.connected, ...this.ws.stats } : null,
-      buyer: this.buyer?.stats, fx: this.fx ? { rate: this.fx.rate, updatedAt: this.fx.updatedAt } : null,
+      buyer: this.buyer?.stats, keyBridge: this.bridge?.stats, fx: this.fx ? { rate: this.fx.rate, updatedAt: this.fx.updatedAt } : null,
       loops: Object.fromEntries([...this.loops].map(([k, v]) => [k, v])),
     };
   }
@@ -91,14 +95,16 @@ export class Bot {
     if (cfg.dashboard.enabled) this.dashboard = startDashboard({ cfg, db, guard, bot: this, log: log.child('web') });
     this.registerCommands();
     this.notify.startPolling();
-    await this.notify.send('ok', `Бот запущен${cfg.dryRun ? ' в режиме <b>DRY-RUN</b> (покупки и продажи не выполняются)' : ''}. Вотчлист: ${db.watchlist().length} предм.`);
+    if (this.emu) log.warn('ДЕМО: LIS-SKINS и Steam эмулируются (src/emu), деньги и предметы ненастоящие');
+    await this.notify.send('ok', `Бот запущен${this.emu ? ' в <b>демо-режиме</b> (эмуляция LIS-SKINS и Steam)' : ''}${cfg.dryRun ? ' в режиме <b>DRY-RUN</b> (покупки и продажи не выполняются)' : ''}. Вотчлист: ${db.watchlist().length} предм.`);
     if (guard.state.halted) await this.notify.send('warn', `Бот был остановлен ранее: ${esc(guard.state.haltReason)}. Закупки/продажи не начнутся до /resume.`);
 
     // --- LIS ---
     this.balanceWatcher = new BalanceWatcher({ cfg, db, lis: this.lis, guard, notify: this.notify, log: log.child('balance'), lock: null, balanceRef: this.balanceRef });
 
     // --- Steam ---
-    this.session = new SteamSession({ cfg, secrets: cfg.secrets, db, log: log.child('steam') });
+    this.session = this.emu ? this.emu.session({ log: log.child('steam') }) : new SteamSession({ cfg, secrets: cfg.secrets, db, log: log.child('steam') });
+    this.emu?.world.adoptDb(db);
     this.session.on('critical', (c) => (c.fatal || c.code === 'STEAM_RATE_LIMIT' ? guard.critical(c.code, c.message) : guard.warn(c.code, c.message)));
     this.market = new SteamMarket({ session: this.session, db, cfg, log: log.child('market') });
     this.fx = new FxService({ cfg, market: this.market, db, guard, log: log.child('fx') });
@@ -107,8 +113,14 @@ export class Bot {
     this.balanceWatcher.lock = this.buyer.lock;
     this.tracker = new PurchaseTracker({ cfg, db, lis: this.lis, guard, log: log.child('track'), notify: this.notify });
     this.trades = new TradeHandler({ cfg, db, session: this.session, guard, notify: this.notify, log: log.child('trade') });
-    this.conf = new ConfirmationWatcher({ session: this.session, db, guard, log: log.child('conf'), strict: cfg.risk.strictConfirmations });
+    // один аккаунт Steam с MannBot: его обмены, записанные в центре, не считаются взломом
+    this.shared = SharedSteam.fromEnv(process.env, log.child('shared'));
+    if (this.shared.enabled) log.info('Steam: общий аккаунт с MannBot, его обмены сверяются с реестром центра');
+    this.trades.shared = this.shared;
+    this.conf = new ConfirmationWatcher({ session: this.session, db, guard, log: log.child('conf'), strict: cfg.risk.strictConfirmations, shared: this.shared });
     this.seller = new Seller({ cfg, db, session: this.session, market: this.market, conf: this.conf, valuator: this.valuator, fx: this.fx, guard, notify: this.notify, log: log.child('sell') });
+    this.bridge = new KeyBridge({ cfg, db, session: this.session, market: this.market, conf: this.conf, guard, notify: this.notify, log: log.child('keys') });
+    this.trades.bridge = this.bridge;
 
     await this.balanceWatcher.poll();
 
@@ -135,6 +147,7 @@ export class Bot {
     this.loop('audit-outgoing', 10 * 60_000, () => (steamReady() ? this.trades.auditOutgoing() : null), { initialDelayMs: 120_000 });
     this.loop('fx', cfg.fx.refreshHours * HOUR, () => (steamReady() ? this.fx.refresh() : null), { initialDelayMs: cfg.fx.refreshHours * HOUR });
     if (cfg.watchlist.mode === 'auto') this.loop('discover', cfg.watchlist.auto.refreshHours * HOUR, () => this.discoverWatchlist(), { initialDelayMs: 2_000 });
+    this.loop('key-bridge', (cfg.keyBridge?.checkIntervalMin || 30) * 60_000, () => (steamReady() && !this.emu ? this.bridge.cycle() : null), { initialDelayMs: 150_000 });
     this.loop('housekeeping', 15 * 60_000, () => this.housekeeping(), { initialDelayMs: 60_000 });
 
     if (st.rtbaEnabled) {
@@ -157,7 +170,13 @@ export class Bot {
       await this.session.syncTime();
       if (!initial) this.notify.send('ok', 'Сессия Steam восстановлена');
     } catch (e) {
-      this.guard.critical('STEAM_START', `Не удалось войти в Steam: ${errMsg(e)}`);
+      if (e.network) {
+        // сеть/DNS: Steam попытку не видел, останавливать бота незачем — повторим вход через пару минут
+        this.guard.warn('STEAM_NETWORK', `Нет связи со Steam, повтор входа через 2 мин: ${errMsg(e)}`);
+        clearTimeout(this.steamRetry);
+        this.steamRetry = setTimeout(() => this.ensureSteam(), 2 * 60_000);
+        this.steamRetry.unref?.();
+      } else this.guard.critical('STEAM_START', `Не удалось войти в Steam: ${errMsg(e)}`);
     } finally { this.loggingIn = false; }
   }
 
@@ -204,6 +223,7 @@ export class Bot {
   async stop(reason = 'завершение процесса') {
     if (this.stopped) return;
     this.stopped = true;
+    clearTimeout(this.steamRetry);
     this.ws?.stop();
     this.notify.stop();
     this.session?.stop();
@@ -212,6 +232,7 @@ export class Bot {
     this.dashboard?.closeAllConnections?.();
     await Promise.race([this.notify.send('info', `Бот остановлен (${reason})`), sleep(5000)]);
     await sleep(300);
+    await this.emu?.close().catch(() => {});
     try { this.db.db.close(); } catch { /* уже закрыта */ }
   }
 }
@@ -238,6 +259,8 @@ async function check(cfg) {
 // pathToFileURL: корректно и для путей с пробелами/кириллицей, и для Windows (C:\...)
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const cfg = loadConfig();
+  // демо: LIS-SKINS и Steam эмулируются, ключи не нужны (так LisBot запускает центр в демо-режиме)
+  const emu = process.argv.includes('--demo') || process.env.LISBOT_DEMO === '1' ? await startDemo(cfg) : null;
   if (process.argv.includes('--check')) {
     process.exit(await check(cfg));
   }
@@ -246,8 +269,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     console.error('Ошибки конфигурации:\n - ' + errs.join('\n - ') + '\n\nЗапустите `npm run check` после исправления.');
     process.exit(1);
   }
-  const bot = new Bot(cfg);
+  const bot = new Bot(cfg, { emu });
   const shutdown = async (sig) => { bot.log.info(`Получен ${sig}, завершаю…`); await bot.stop().catch(() => {}); process.exit(0); };
+  bot.hooks.onShutdownRequest = async (why) => { bot.log.info(`Остановка: ${why}`); await bot.stop(why).catch(() => {}); process.exit(0); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   process.on('unhandledRejection', (e) => bot.log.error(`unhandledRejection: ${errMsg(e)}`));

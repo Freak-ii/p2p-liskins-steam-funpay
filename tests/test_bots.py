@@ -17,14 +17,15 @@ def test_lisbot_secrets_and_config(tmp_path):
     w.save_secrets({"LIS_API_KEY": "k", "STEAM_PASSWORD": "pw"})
     tok = w.token()
     assert len(tok) >= 16                                        # токен панели создаётся автоматически
-    w.save_secrets({"LIS_API_KEY": "k2", "STEAM_PASSWORD": ""})  # пустой пароль не затирает сохранённый
-    s = read_env_file(w.secrets_path)
-    assert s["LIS_API_KEY"] == "k2" and s["STEAM_PASSWORD"] == "pw" and s["DASHBOARD_TOKEN"] == tok
+    w.save_secrets({"LIS_API_KEY": "lis-key-2", "STEAM_PASSWORD": ""})  # пустой пароль не затирает сохранённый
+    s = w.secrets()
+    assert not w.secrets_path.exists() and b"lis-key-2" not in (tmp_path / "secrets.dat").read_bytes()
+    assert s["LIS_API_KEY"] == "lis-key-2" and s["STEAM_PASSWORD"] == "pw" and s["DASHBOARD_TOKEN"] == tok
     m = w.masked_secrets()
     assert m["STEAM_PASSWORD"] == "" and m["STEAM_PASSWORD_SET"] is True
-    w.config_path.write_text(json.dumps({"strategy": {"minRoi": 0.1}}))
+    w.config_path.write_text(json.dumps({"strategy": {"minRoi": 0.1}}), encoding="utf-8")
     w.prepare()
-    cfg = json.loads(w.config_path.read_text())
+    cfg = json.loads(w.config_path.read_text(encoding="utf-8"))
     assert cfg["strategy"]["minRoi"] == 0.1                       # настройки, сохранённые панелью бота, не теряются
     assert cfg["dataDir"] == str(w.data_dir) and cfg["dashboard"]["port"] == w.port
     assert cfg["telegram"]["enabled"] is False

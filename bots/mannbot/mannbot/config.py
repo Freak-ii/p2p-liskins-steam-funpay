@@ -50,13 +50,21 @@ DEFAULTS: dict[str, Any] = {
         "lot_filter_regex": r"(?i)(mann\s*co.*key|ключ)", "scarcity_stock_threshold": 5,
         "scarcity_premium_pct": 5.0, "raise_gap_pct": 3.0,
     },
-    "security": {"cancel_foreign_offers": False, "decline_incoming_requests": True, "inventory_drop_alert": True},
+    "security": {"cancel_foreign_offers": False, "decline_incoming_requests": True, "inventory_drop_alert": True,
+                 "accept_gifts_from": []},
     "notifications": {
         "telegram": {"enabled": False, "bot_token": "", "admin_chat_ids": [], "commands": True},
         "min_level": "INFO", "throttle_seconds": 300, "daily_report_hour": 10,
     },
     "dashboard": {"enabled": True, "host": "127.0.0.1", "port": 8080, "token": ""},
     "sla": {"link_wait_minutes": 120, "offer_accept_hours": 12, "order_total_hours": 24},
+    "ai": {
+        "enabled": False, "backend": "claude", "api_key": "", "model": "claude-opus-5-5", "effort": "low",
+        "mode": "suggest", "auto_topics": ["order_status", "trade_link_help", "delivery_help"],
+        "min_confidence": 0.8, "seller_tone": "Вежливо, коротко, на «вы», можно один эмодзи",
+        "max_reply_chars": 700, "history_messages": 12, "max_calls_per_chat_hour": 6,
+        "draft_ttl_minutes": 60, "timeout_seconds": 40, "server_fallback": True,
+    },
 }
 
 _ENV_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")

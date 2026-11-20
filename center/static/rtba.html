@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RTBA центра</title>
+<link rel="stylesheet" href="/static/center.css">
+</head>
+<body>
+<header>
+  <a class="btn" href="/">← Центр</a>
+  <h1>RTBA: мгновенные покупки, автоцена и лимиты</h1>
+  <span class="spacer"></span>
+  <span id="hdr" class="muted small"></span>
+</header>
+<main>
+  <div id="flash"></div>
+  <div class="grid">
+    <div class="card" id="lis"></div>
+    <div class="card" id="mann"></div>
+  </div>
+
+  <h2>Общий бюджет и лимиты центра</h2>
+  <div class="card" id="budget"></div>
+
+  <h2>Бэктест правил RTBA на истории цен</h2>
+  <div class="card">
+    <div class="row"><span class="tabs" id="btBot" style="margin:0"></span><span class="spacer" style="flex:1"></span>
+      <span class="muted small" id="btHint"></span></div>
+    <div id="btForm" style="margin-top:10px"></div>
+    <div id="btOut" style="margin-top:12px"></div>
+  </div>
+</main>
+
+<dialog id="applyDlg">
+  <form method="dialog">
+    <h3>Применить лимиты к ботам?</h3>
+    <div id="applyList"></div>
+    <p class="muted small">Работающему боту настройки уходят через его API и действуют сразу; остановленному — записываются в его файл настроек.
+      Тестовый/боевой режим ботов центр не меняет.</p>
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" value="apply">Применить</button>
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/rtba.js"></script>
+</body>
+</html>

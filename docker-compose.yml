@@ -1,0 +1,22 @@
+# Центр на VPS: CENTER_SECRET_KEY=длинный-пароль docker compose up -d
+# Панели слушают только 127.0.0.1 сервера: заходите через SSH-туннель
+#   ssh -L 8800:127.0.0.1:8800 -L 8801:127.0.0.1:8801 -L 8802:127.0.0.1:8802 user@vps
+# и откройте http://127.0.0.1:8800 (токен входа: docker compose logs center | grep login).
+services:
+  center:
+    build: .
+    image: resale-center
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 40s
+    environment:
+      # ключ шифрования секретов (secrets.dat в томе). Без него ключ лёг бы в том рядом с секретами.
+      CENTER_SECRET_KEY: ${CENTER_SECRET_KEY:?задайте CENTER_SECRET_KEY в .env или окружении}
+    volumes:
+      - center-data:/data
+    ports:
+      - "127.0.0.1:8800:8800"
+      - "127.0.0.1:8801:8801"
+      - "127.0.0.1:8802:8802"
+volumes:
+  center-data:
