@@ -16,7 +16,8 @@ LEVELS = {"INFO": 10, "WARNING": 20, "CRITICAL": 30}
 ICONS = {"INFO": "ℹ️", "WARNING": "⚠️", "CRITICAL": "🚨"}
 
 # что можно сделать кнопкой: обратимые действия (возврат денег — только командой /refund или в панели)
-BUTTON_COMMANDS = {"approve", "reject", "status", "orders", "balance"}
+BUTTON_COMMANDS = {"approve", "reject", "status", "orders", "balance", "withdraw_ok", "withdraw_no",
+                   "treasury_ok", "treasury_no", "treasury_done", "treasury_skip", "treasury"}
 
 CommandHandler = Callable[[str, list[str]], Awaitable[str]]
 
