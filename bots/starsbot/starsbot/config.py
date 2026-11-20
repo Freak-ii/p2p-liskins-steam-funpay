@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-DENOMINATIONS = (50, 75, 100, 150, 250, 350, 500, 750, 1000, 1500)
+DENOMINATIONS = (50, 75, 100, 150, 250, 350, 500, 1000)   # 750 и 1500 в разделе FunPay нет
 GIFT_DENOMINATIONS = (13, 21, 43, 85, 50, 100, 150, 250, 350, 500)
 
 DEFAULTS: dict[str, Any] = {
