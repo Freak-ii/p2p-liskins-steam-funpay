@@ -193,7 +193,10 @@ def install_lisbot_modules(app_lisbot: Path, node_dir: Path) -> None:
     несёт готовые сборки под все ОС (prebuilds/win32-x64.node), поэтому собрать можно и на Linux."""
     if sys.platform == "win32":
         env = {**os.environ, "PATH": str(node_dir) + os.pathsep + os.environ.get("PATH", "")}
-        run([str(node_dir / "npm.cmd"), "ci", "--omit=dev", "--no-audit", "--no-fund"], cwd=app_lisbot, env=env)
+        # --ignore-scripts: готовая сборка уже лежит в prebuilds, а скрипт установки на раннере без Visual Studio
+        # уходил в node-gyp rebuild и падал; работоспособность модуля проверяет строка ниже
+        run([str(node_dir / "npm.cmd"), "ci", "--omit=dev", "--no-audit", "--no-fund", "--ignore-scripts"],
+            cwd=app_lisbot, env=env)
         run([str(node_dir / "node.exe"), "-e", "require('better-sqlite3')(':memory:').prepare('select 1').get()"],
             cwd=app_lisbot, env=env)
         return
