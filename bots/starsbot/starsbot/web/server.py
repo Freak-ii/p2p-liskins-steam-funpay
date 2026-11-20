@@ -533,8 +533,10 @@ def make_app(sup, log_handler=None) -> web.Application:
             return render("avito.html", request, ch=None, av=av)
         orders = sup.db.q("SELECT * FROM orders WHERE channel='avito' ORDER BY created_at DESC LIMIT 50")
         chats = sup.db.q("SELECT * FROM avito_chats ORDER BY updated_at DESC LIMIT 30")
-        return render("avito.html", request, ch=ch, av=av, s=ch.summary(), orders=orders, chats=chats,
-                      calc=sup.econ.calculator(channel="avito"))
+        summ = ch.summary()
+        prices = {int(p["stars"]): float(p.get("live") or p.get("target") or 0) for p in summ["prices"]}
+        return render("avito.html", request, ch=ch, av=av, s=summ, orders=orders, chats=chats,
+                      calc=sup.econ.calculator({k: v for k, v in prices.items() if v}, channel="avito"))
 
     @friendly("/avito")
     async def avito_action(request: web.Request):
@@ -590,8 +592,8 @@ def make_app(sup, log_handler=None) -> web.Application:
             return render("wb.html", request, ch=None, wb=wb)
         codes = sup.db.q("SELECT c.*, o.status, o.tg_username FROM wb_codes c LEFT JOIN orders o ON "
                          "o.order_id=c.order_id WHERE c.state<>'pool' ORDER BY c.updated_at DESC LIMIT 50")
-        return render("wb.html", request, ch=ch, wb=wb, s=ch.summary(), codes=codes,
-                      calc=sup.econ.calculator(channel="wb"))
+        summ = ch.summary()
+        return render("wb.html", request, ch=ch, wb=wb, s=summ, codes=codes)
 
     @friendly("/wb")
     async def wb_action(request: web.Request):

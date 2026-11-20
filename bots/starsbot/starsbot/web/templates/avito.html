@@ -29,26 +29,26 @@ Fragment с общего кошелька и пишет в чат, что всё
 <div class="card"><h2>Объявления и цены</h2>
 <div class="help" style="margin-bottom:8px">ID объявления — число из ссылки avito.ru/…_<b>1234567890</b> (можно вставить ссылку целиком).
 Ваша цена — сколько вы хотите; бот не опустит её ниже пола маржи {{ av.min_margin_pct }}% и сам выставит на Авито{% if not av.price_sync %} (автоцена выключена){% endif %}.</div>
-<form method="post"><input type="hidden" name="action" value="products"><table>
-<tr><th>Номинал</th><th>ID объявления</th><th>Ваша цена, ₽</th><th>Пол маржи</th><th>Будет на Авито</th><th>Сейчас</th></tr>
+<form method="post"><input type="hidden" name="action" value="products"><div style="overflow-x:auto"><table>
+<tr><th>Номинал</th><th>ID объявления</th><th>Ваша цена, ₽</th><th>Пол маржи</th><th>Будет</th><th>Сейчас</th></tr>
 {% set info = {} %}{% if s %}{% for p in s.prices %}{% set _ = info.update({p.stars: p}) %}{% endfor %}{% endif %}
 {% for p in av.products %}{% set i = info.get(p.stars, {}) %}<tr><td><b>{{p.stars}}⭐</b>{% if i.out %} <span class="chip c-red">нет TON</span>{% endif %}</td>
-<td><input name="id_{{p.stars}}" value="{{p.item_id or ''}}" style="width:130px" {% if not is_admin %}disabled{% endif %}></td>
+<td><input name="id_{{p.stars}}" value="{{p.item_id or ''}}" style="width:110px" {% if not is_admin %}disabled{% endif %}></td>
 <td><input name="price_{{p.stars}}" value="{{p.price or ''}}" style="width:80px" {% if not is_admin %}disabled{% endif %}></td>
 <td>{{ i.floor|money if i.floor else '—' }}</td>
 <td class="{{ 'c-red' if i.raised else '' }}">{{ i.target|money if i.target else '—' }}{% if i.raised %} ↑{% endif %}</td>
 <td>{{ i.live if i.live else '—' }}</td></tr>{% endfor %}
-{% if is_admin %}<tr><td><input name="extra_stars" placeholder="ещё, ⭐" style="width:80px"></td><td><input name="extra_id" placeholder="ID"></td><td><input name="extra_price" placeholder="₽" style="width:80px"></td><td colspan="3" class="muted">например, 200 ⭐</td></tr>{% endif %}
-</table>{% if is_admin %}<button>Сохранить объявления</button>{% endif %}</form></div>
+{% if is_admin %}<tr><td><input name="extra_stars" placeholder="ещё, ⭐" style="width:80px"></td><td><input name="extra_id" placeholder="ID"></td><td><input name="extra_price" placeholder="₽" style="width:80px"></td><td colspan="3" class="muted">200 ⭐</td></tr>{% endif %}
+</table></div>{% if is_admin %}<button>Сохранить объявления</button>{% endif %}</form></div>
 
 <div class="card"><h2>Правила цены</h2>
 <form method="post"><input type="hidden" name="action" value="pricing">
-<label>Режим<br><select name="price_mode" {% if not is_admin %}disabled{% endif %}>
+<label style="display:block;margin:6px 0">Режим<br><select name="price_mode" {% if not is_admin %}disabled{% endif %}>
 <option value="fixed" {% if av.price_mode != 'margin' %}selected{% endif %}>моя цена, но не ниже пола маржи</option>
 <option value="margin" {% if av.price_mode == 'margin' %}selected{% endif %}>по целевой марже (следует за курсом TON)</option></select></label>
-<label>Минимальная маржа, % от цены<br><input name="min_margin_pct" value="{{ av.min_margin_pct }}" style="width:80px"></label>
-<label>Целевая маржа, % (режим «по марже»)<br><input name="target_margin_pct" value="{{ av.target_margin_pct }}" style="width:80px"></label>
-<label><input type="checkbox" name="price_sync" value="1" {% if av.price_sync %}checked{% endif %}> менять цены объявлений автоматически</label>
+<label style="display:block;margin:6px 0">Минимальная маржа, % от цены<br><input name="min_margin_pct" value="{{ av.min_margin_pct }}" style="width:80px"></label>
+<label style="display:block;margin:6px 0">Целевая маржа, % (режим «по марже»)<br><input name="target_margin_pct" value="{{ av.target_margin_pct }}" style="width:80px"></label>
+<label style="display:block;margin:6px 0"><input type="checkbox" name="price_sync" value="1" {% if av.price_sync %}checked{% endif %}> менять цены объявлений автоматически</label>
 {% if is_admin %}<button>Сохранить</button>{% endif %}</form>
 <div class="help" style="margin-top:8px">Маржа = (цена − комиссия Авито {{ av.commission_pct }}% − вывод {{ av.withdraw_fee_pct }}% − себестоимость TON) / цена.
 Себестоимость — по вашему курсу TON со страницы «Деньги». Если TON дорожает, пол растёт, и бот поднимает цену.</div></div>

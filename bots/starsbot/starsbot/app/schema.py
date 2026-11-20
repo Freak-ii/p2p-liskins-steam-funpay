@@ -186,7 +186,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("stock_sync", "Остатки на Ozon по балансу кошелька", "bool", "Товар уходит в 0, когда TON не хватает"),
         ("max_stock", "Максимальный остаток на Ozon", "int", ""),
         ("commission_pct", "Комиссия Ozon, %", "float", "Игровая валюта — 10%, прочие цифровые товары — 15%"),
-        ("withdraw_fee_pct", "Комиссия вывода с Ozon, %", "float", "Обычно 0"),
+        ("withdraw_fee_pct", "Вывод и налог с Ozon, %", "float", "Налог (НПД 6%, УСН 6%) + комиссия вывода"),
         ("min_margin_pct", "Минимальная маржа, %", "float", "Панель подсветит цену ниже"),
     ]),
     ("ozon.activation_bot", [
@@ -209,7 +209,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("presale_replies", "Отвечать до оплаты", "bool", "Как купить, номиналы; username можно прислать заранее"),
         ("presale_cooldown_minutes", "Автоответ до оплаты не чаще, мин", "int", "В одном чате"),
         ("commission_pct", "Комиссия Авито, %", "float", "За безопасную сделку — уточните в кабинете"),
-        ("withdraw_fee_pct", "Комиссия вывода с Авито, %", "float", ""),
+        ("withdraw_fee_pct", "Вывод и налог с Авито, %", "float", "Налог (НПД 4–6%, УСН 6%) + комиссия вывода — иначе маржа завышена"),
         ("min_margin_pct", "Минимальная маржа, %", "float", "Цена объявления не опустится ниже"),
         ("price_sync", "Менять цены объявлений автоматически", "bool", ""),
         ("price_interval", "Пересчитывать цены, сек", "int", ""),
@@ -220,7 +220,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("code_prefix", "Префикс кодов", "str", "Коды вида TGW-ABCD-EFGH-JKMN, не совпадает с Ozon"),
         ("pool_warn_low", "Предупредить, когда кодов номинала меньше", "int", ""),
         ("commission_pct", "Комиссия WB, %", "float", "Уточните в кабинете для ключей активации"),
-        ("withdraw_fee_pct", "Комиссия вывода с WB, %", "float", ""),
+        ("withdraw_fee_pct", "Вывод и налог с WB, %", "float", "Налог (НПД 6%, УСН 6%) + комиссия вывода"),
         ("min_margin_pct", "Минимальная маржа, %", "float", "Панель подскажет цену не ниже"),
     ]),
     ("wb.activation_bot", [
