@@ -74,10 +74,14 @@ test('оценка: ликвидный стабильный предмет пр�
 });
 
 test('оценка: неликвид, падающий тренд и волатильность отсекаются', () => {
-  assert.equal(computeValuation({ name: 'X', history: history({ perDay: 4 }), book: null, fx: 90, cfg, holdDays: 9 }).ok, false);
-  assert.match(computeValuation({ name: 'X', history: history({ drift: -0.3 }), book: null, fx: 90, cfg, holdDays: 9 }).reason, /тренд/);
-  const wild = history({}).map((h, i) => ({ ...h, price: h.price * (Math.floor(i / 8) % 2 ? 1.6 : 0.6) }));
-  assert.match(computeValuation({ name: 'X', history: wild, book: null, fx: 90, cfg, holdDays: 9 }).reason, /волатильность/);
+  // «сейчас» — 23:30 UTC: 8 замеров одного дня истории попадают в одни календарные сутки,
+  // иначе результат проверки волатильности зависел бы от времени запуска теста
+  const now = Math.floor(Date.now() / DAY) * DAY + DAY - 1800_000;
+  const val = (history) => computeValuation({ name: 'X', history, book: null, fx: 90, cfg, holdDays: 9, now });
+  assert.equal(val(history({ perDay: 4, now })).ok, false);
+  assert.match(val(history({ drift: -0.3, now })).reason, /тренд/);
+  const wild = history({ now }).map((h, i) => ({ ...h, price: h.price * (Math.floor(i / 8) % 2 ? 1.6 : 0.6) }));
+  assert.match(val(wild).reason, /волатильность/);
 });
 
 const val = (over = {}) => ({ ok: true, ts: Date.now(), netUsd: 10, dailyVolume: 200, fx: 90, ...over });
