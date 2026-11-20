@@ -1,5 +1,5 @@
-{% extends "base.html" %}{% block title %}Алерты{% endblock %}
-{% block body %}<div class="row" style="justify-content:space-between"><h1>Алерты и уведомления</h1>
+{% extends "base.html" %}{% block title %}Уведомления{% endblock %}
+{% block body %}<div class="row" style="justify-content:space-between"><h1>Уведомления</h1>
 {% if can_op %}<form method="post" action="/alerts/ack"><button>Отметить все прочитанными</button></form>{% endif %}</div>
 <div class="card tw"><table><tr><th>Время</th><th>Уровень</th><th>Код</th><th>Текст</th><th>Заказ</th></tr>
 {% for a in rows %}<tr style="{% if a.acknowledged %}opacity:.6{% endif %}"><td style="white-space:nowrap">{{a.ts|ts}}</td><td class="{{a.level}}">{{a.level}}</td><td>{{a.code}}</td><td><pre>{{a.text}}</pre></td>

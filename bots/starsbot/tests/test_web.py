@@ -157,3 +157,28 @@ def test_setup_settings_messages_flow(tmp_path):
             await client.close()
             M.set_overrides({})
     asyncio.run(go())
+
+
+def test_pages_before_first_wallet_check(tmp_path):
+    """Реальный режим, кошелёк ещё ни разу не проверялся, FunPay недоступен — страницы и кнопки без 500."""
+    sup = Supervisor(tmp_path, demo=False)
+    sup.save({"dashboard": TOKENS}, rebuild=True)
+    assert not sup.db.kv_get("wallet")
+
+    async def go():
+        client = await _client(sup, token=TOKENS["token"])
+        try:
+            for path in ["/", "/money", "/crypto", "/gifts", "/funpay", "/pricing", "/analytics"]:
+                r = await client.get(path)
+                assert r.status == 200, path
+
+            async def boom(*a, **k):
+                raise RuntimeError("funpay недоступен")
+            sup.engine.fp.login = boom
+            sup.engine.lot_manager.create_missing = boom
+            r = await client.post("/funpay", data={"action": "create"}, allow_redirects=False)
+            assert r.status == 302 and "msg=" in r.headers["Location"]
+        finally:
+            await client.close()
+
+    asyncio.run(go())

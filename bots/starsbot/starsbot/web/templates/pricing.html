@@ -1,5 +1,5 @@
-{% extends "base.html" %}{% block title %}Цены / RTBA{% endblock %}
-{% block body %}<h1>Цены и RTBA</h1>
+{% extends "base.html" %}{% block title %}Цены{% endblock %}
+{% block body %}<h1>Цены</h1>
 <div class="card"><h2>Настройки RTBA</h2><div class="row">
 <span class="chip {{ 'c-green' if rtba.enabled else 'c-red' }}">RTBA {{ 'включён' if rtba.enabled else 'выключен' }}</span>
 <span class="chip">стратегия: {{rtba.strategy}}</span><span class="chip">шаг: {{rtba.undercut_abs}} ₽ / {{rtba.undercut_pct}}%</span>

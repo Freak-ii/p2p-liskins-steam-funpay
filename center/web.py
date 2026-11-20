@@ -76,6 +76,10 @@ def make_app(center: Center) -> web.Application:
             msg = await w.stop("панель центра")
         elif action == "restart":
             msg = await w.restart("панель центра")
+        elif action in ("autostart_on", "autostart_off"):
+            on = action == "autostart_on"
+            center.cfg.save({"workers": {w.name: {"autostart": on}}})
+            msg = f"автозапуск с центром {'включён' if on else 'выключен'}"
         elif action == "install" and isinstance(w, LisBotWorker):
             msg = await w.install_deps()
         elif action in w.actions:

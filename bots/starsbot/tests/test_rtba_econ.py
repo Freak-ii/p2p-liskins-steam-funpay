@@ -10,7 +10,7 @@ from starsbot.rates import StaticRate
 
 
 def cfg(**over):
-    return load_config(None, {"rtba": {"enabled": True, "min_margin_pct": 5, "undercut_abs": 0.5, "min_change": 0.3,
+    return load_config(None, {"rtba": {"enabled": True, "min_margin_pct": 5, "buyer_markup_pct": 0, "undercut_abs": 0.5, "min_change": 0.3,
                                        "competitor_min_amount": 2, **over.pop("rtba", {})}, **over})
 
 
@@ -92,3 +92,23 @@ def test_economics_full_cycle():
     db.kv_set("wallet_start_balance", {"ton": 10.1, "ts": time.time() - 60})
     rec = econ.reconcile()                      # 10.1 + 100 TON пополнения, а в сети 10.1 → тревога
     assert rec["expected"] == 110.1 and rec["diff"] == -100 and rec["alarm"]
+
+
+def test_buyer_markup_by_default():
+    """Цены в списке FunPay — с наценкой для покупателя: цена лота ставится так, чтобы с наценкой встать на место."""
+    eng = RTBAEngine(cfg(rtba={"buyer_markup_pct": 14.06, "strategy": "topN", "target_position": 3}).rtba)
+    lots = [lot(1, "a", 75.27, stars=50), lot(2, "b", 76.92, stars=50), lot(3, "c", 77.53, stars=50),
+            lot(4, "d", 77.54, stars=50)]
+    d = eng.decide(lots, offer_id="9", stars=50, own_offer_ids={"9"}, own_username="me", current_lot_price=80,
+                   cost_per_star_rub=1.0)
+    assert abs(d.target_buyer_price - 77.03) < 0.05 and d.target_lot_price < 68
+
+
+def test_cost_rate_override_beats_topups(tmp_path):
+    from tests.test_engine import make
+    sup, e, fp, wallet = make(tmp_path)
+    ec = e.econ
+    sup.db.exec("INSERT INTO cashflow(ts,kind,rub,ton,note) VALUES(?,?,?,?,?)", (__import__("time").time(), "topup", 7000, 77.2, ""))
+    assert round(ec.topup_rate()) == 91
+    e.cfg.economics.cost_rate_rub = 86
+    assert ec.topup_rate() == 86 and ec.effective_rate()[0] == 86

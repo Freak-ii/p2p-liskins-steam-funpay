@@ -133,8 +133,15 @@ class FunPayClient:
         return result
 
     # ------------------------------------------------------------------ chat
+    async def get_bookmarks_page(self) -> list:
+        """Список диалогов со страницы /chat/ — запасной путь, если runner не присылает chat_bookmarks."""
+        _, page = await self._request("GET", "/chat/")
+        return P.parse_chat_bookmarks(page)
+
     async def get_chat_history(self, chat_id: str, last_message: int = 0) -> list[ChatMessage]:
-        _, body = await self._request("GET", f"/chat/history?node={chat_id}&last_message={last_message}",
+        """Последние сообщения чата новее last_message. FunPay /chat/history отдаёт страницу сообщений ДО
+        указанного id (это прокрутка вверх), поэтому всегда просим самую свежую страницу и фильтруем сами."""
+        _, body = await self._request("GET", f"/chat/history?node={chat_id}&last_message=99999999999999999999",
                                       ajax=True)
         data = json.loads(body)
         out: list[ChatMessage] = []
@@ -239,6 +246,65 @@ class FunPayClient:
                                       data={"game_id": game_id, "node_id": node_id, "node_ids[]": node_id})
         data = json.loads(body)
         return (not data.get("error"), str(data.get("msg", "")))
+
+    async def get_lot_form(self, node_id: int, offer_id: int = 0) -> tuple[dict[str, str], dict]:
+        """Поля и выпадающие списки формы лота. offer_id=0 — пустая форма нового лота."""
+        path = f"/lots/offerEdit?node={node_id}" + (f"&offer={offer_id}" if offer_id else "")
+        _, page = await self._request("GET", path)
+        fields = P.parse_offer_edit_form(page)
+        if not fields:
+            raise FunPayError("не удалось открыть форму лота")
+        return fields, P.parse_offer_selects(page)
+
+    async def create_lot(self, fields: dict[str, str], force: bool = False) -> str:
+        """Создаёт лот (offer_id=0). Возвращает id нового лота, если FunPay его сообщил.
+        force=True — создать и в тестовом режиме (LotManager создаёт такой лот выключенным)."""
+        form = dict(fields)
+        form["offer_id"] = "0"
+        if self.dry_run and not force:
+            log.info("[DRY-RUN] новый лот: %s", {k: v for k, v in form.items() if k != "csrf_token"})
+            return ""
+        form["csrf_token"] = self.csrf
+        _, body = await self._request("POST", "/lots/offerSave", ajax=True, data=form)
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as e:
+            raise FunPayError(f"создание лота: не JSON ({body[:120]!r})") from e
+        if data.get("error") or data.get("errors"):
+            raise FunPayError(f"лот не создан: {data.get('msg') or data.get('errors') or data.get('error')}")
+        import re as _re
+        m = _re.search(r"(?:offer=|id=)(\d+)", str(data.get("url") or data.get("redirect") or ""))
+        return m.group(1) if m else str(data.get("offer_id") or data.get("id") or "")
+
+    async def get_own_lots(self, node_id: int) -> list[P.OwnLot]:
+        _, page = await self._request("GET", f"/lots/{node_id}/trade")
+        return P.parse_own_lots(page)
+
+    async def get_balance(self) -> P.BalanceInfo:
+        _, page = await self._request("GET", "/account/balance")
+        return P.parse_balance_page(page)
+
+    async def withdraw(self, info: P.BalanceInfo, method: str, wallet: str, amount: float) -> str:
+        """Заявка на вывод с баланса FunPay по форме со страницы баланса."""
+        if not info.amount_field or not info.wallet_field:
+            raise FunPayError("на странице баланса не найдена форма вывода")
+        form = dict(info.fields)
+        if info.method_field:
+            form[info.method_field] = method
+        form[info.amount_field] = f"{amount:.2f}".rstrip("0").rstrip(".")
+        form[info.wallet_field] = wallet
+        if self.dry_run:
+            log.warning("[DRY-RUN] вывод %.2f ₽ (%s) на %s", amount, method, wallet)
+            return "dry-run"
+        form["csrf_token"] = self.csrf
+        _, body = await self._request("POST", info.form_action, ajax=True, data=form, retries=1)
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return body[:200]
+        if data.get("error") or data.get("errors"):
+            raise FunPayError(f"вывод не принят: {data.get('msg') or data.get('errors') or data.get('error')}")
+        return str(data.get("msg") or "заявка создана")
 
     async def get_public_lots(self, node_id: int, filter_regex: str | None = None) -> list[CompetitorLot]:
         _, page = await self._request("GET", f"/lots/{node_id}/")

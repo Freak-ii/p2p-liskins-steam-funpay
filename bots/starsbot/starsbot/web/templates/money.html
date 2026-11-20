@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block title %}Деньги{% endblock %}
 {% block body %}
-<div class="row" style="justify-content:space-between"><h1>Деньги: полный круг</h1>
+<div class="row" style="justify-content:space-between"><h1>Деньги</h1>
 <div class="row">{% for d in [1,7,30,90] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/money?days={{d}}">{{d}} дн.</a>{% endfor %}
 {% if can_op %}<a class="chip" href="/export/orders.csv?days={{days}}" title="Заказы с разбивкой денег за период">⬇ заказы CSV</a><a class="chip" href="/export/cashflow.csv">⬇ движение CSV</a>{% endif %}</div></div>
 

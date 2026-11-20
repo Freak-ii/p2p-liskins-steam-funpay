@@ -51,7 +51,11 @@ class Economics:
 
     # ------------------------------------------------------------------ курс
     def topup_rate(self, days: float = 60) -> float | None:
-        """Средний курс ваших пополнений (₽ за TON) за последние days дней."""
+        """Средний курс ваших пополнений (₽ за TON) за последние days дней.
+        economics.cost_rate_rub > 0 — курс задан вручную (например, цена следующей закупки), записи не учитываются."""
+        fixed = float(self.e.get("cost_rate_rub") or 0) if hasattr(self.e, "get") else 0.0
+        if fixed > 0:
+            return fixed
         row = self.db.one("SELECT SUM(rub) r, SUM(ton) t FROM cashflow WHERE kind='topup' AND rub>0 AND ton>0 AND ts>=?",
                           (time.time() - days * DAY,))
         if row and row["t"]:
@@ -143,7 +147,7 @@ class Economics:
                                "price_history GROUP BY stars)"):
                 if r["stars"] and r["new_price"]:
                     out[int(r["stars"])] = float(r["new_price"])
-        for r in self.db.q("SELECT stars_per_unit, price, quantity FROM orders WHERE stars_per_unit IS NOT NULL "
+        for r in self.db.q("SELECT stars_per_unit, price, quantity FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND stars_per_unit IS NOT NULL "
                            "AND COALESCE(channel,'funpay')=? ORDER BY created_at DESC LIMIT 200", (channel,)):
             s = int(r["stars_per_unit"])
             if s not in out and r["quantity"]:
@@ -190,9 +194,12 @@ class Economics:
                                       (since,), 0) or 0)
         withdrawn = float(self.db.scalar("SELECT SUM(ton) FROM cashflow WHERE kind='withdraw_ton' AND ts>=?",
                                          (since,), 0) or 0)
-        spent = float(self.db.scalar("SELECT SUM(ton_amount) FROM orders WHERE delivered_at>=? AND ton_amount>0",
-                                     (since,), 0) or 0)
-        gas = float(self.db.scalar("SELECT SUM(tx_fee_ton) FROM orders WHERE delivered_at>=?", (since,), 0) or 0)
+        # реальные списания с кошелька: покупки на Fragment, включая пополнение звёзд аккаунта (у подарков TON
+        # в заказе — только оценка себестоимости, с кошелька они не списываются)
+        spent = float(self.db.scalar("SELECT SUM(ton_amount) FROM orders WHERE COALESCE(delivery,'fragment')='fragment' "
+                                     "AND delivered_at>=? AND ton_amount>0", (since,), 0) or 0)
+        gas = float(self.db.scalar("SELECT SUM(tx_fee_ton) FROM orders WHERE COALESCE(delivery,'fragment')='fragment' "
+                                   "AND delivered_at>=?", (since,), 0) or 0)
         expected = float(start["ton"]) + topped - withdrawn - spent - gas
         actual = w.get("balance")
         diff = round(float(actual) - expected, 4) if actual is not None else None
@@ -203,7 +210,7 @@ class Economics:
     # ------------------------------------------------------------------ период
     def period(self, days: float = 30) -> dict:
         since = time.time() - days * DAY
-        rows = self.db.q("SELECT * FROM orders WHERE created_at>=?", (since,))
+        rows = self.db.q("SELECT * FROM orders WHERE COALESCE(channel,'funpay')<>'internal' AND created_at>=?", (since,))
         delivered = [r for r in rows if r["delivered_at"] and r["status"] != S.REFUNDED.value]
         confirmed = [r for r in delivered if r["status"] == S.COMPLETED.value]
         frozen = [r for r in rows if r["status"] in (S.DELIVERED.value,)]

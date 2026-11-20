@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import math
 import re
 import statistics
 import time
@@ -34,6 +35,7 @@ class PriceDecision:
     floor: float | None = None
     apply: bool = False
     notes: list[str] = field(default_factory=list)
+    fix_position: bool = False              # стоим не на своём месте — поправить даже мелким изменением
 
 
 def lot_stars(lot: CompetitorLot) -> int | None:
@@ -104,10 +106,14 @@ class RTBAEngine:
 
     def decide(self, lots: list[CompetitorLot], *, offer_id: str, stars: int, own_offer_ids: set[str],
                own_username: str, current_lot_price: float | None, cost_per_star_rub: float | None,
-               fee_pct: float = 0.0, now: float | None = None) -> PriceDecision:
-        cfg = self.cfg
+               fee_pct: float = 0.0, now: float | None = None, overrides: dict | None = None) -> PriceDecision:
+        """overrides — настройки конкретного лота: своя позиция (strategy/target_position) и способ (method_filter)."""
+        from starsbot.config import Section
+        cfg = Section({**self.cfg, **overrides}) if overrides else self.cfg
+        self._cur = cfg
         now = now or time.time()
-        markup = self.markup.get(offer_id, 1.0)
+        # наценка FunPay для покупателя: по своему лоту в списке, иначе из настроек (по умолчанию ~14%)
+        markup = self.markup.get(offer_id) or 1 + float(cfg.get("buyer_markup_pct", 14.06) or 0) / 100
         comps = filter_competitors(lots, cfg, stars, own_offer_ids, own_username)
         floor_lot = price_floor(cfg, stars, cost_per_star_rub, fee_pct)
         ceil_lot = float(cfg.ceiling_price_per_star or 0) * stars or None
@@ -130,6 +136,14 @@ class RTBAEngine:
             reason = f"лидер рынка {best:.2f}"
         undercut = max(float(cfg.undercut_abs or 0), anchor * float(cfg.undercut_pct or 0) / 100)
         target_buyer = anchor - undercut
+        if cfg.strategy == "topN" and pos > 1 and len(prices) >= pos:
+            # встаём между (pos-1)-м и pos-м конкурентом: при плотных ценах подрезка не должна
+            # перепрыгивать тех, кто должен остаться выше нас
+            prev = prices[pos - 2]
+            step = 0.02 * markup                      # шаг цены лота 0.01 ₽ в ценах покупателя ≈ 0.0114
+            target_buyer = max(target_buyer, prev + step)
+            if target_buyer >= anchor:
+                target_buyer = anchor - step / 2 if anchor - step / 2 > prev else anchor
         notes = []
         if current_lot_price:
             cur_buyer = current_lot_price * markup
@@ -143,14 +157,22 @@ class RTBAEngine:
         position = 1 + sum(1 for p in prices if p < max(target_buyer, floor_buyer))
         d = PriceDecision(target_buyer, target_buyer / markup, reason, best_competitor=round(best, 2),
                           competitors=len(comps), position=position, floor=floor_lot, notes=notes)
+        if current_lot_price and cfg.strategy == "topN":
+            now_pos = 1 + sum(1 for p in prices if p < current_lot_price * markup)
+            if now_pos != position:
+                d.fix_position = True
+                notes.append(f"сейчас на {now_pos}-м месте вместо {position}-го")
         return self._finish(d, offer_id, markup, current_lot_price, floor_lot, ceil_lot, now)
 
     def _finish(self, d: PriceDecision, offer_id: str, markup: float, current: float | None, floor: float,
                 ceil: float | None, now: float) -> PriceDecision:
-        cfg = self.cfg
+        cfg = getattr(self, "_cur", None) or self.cfg
         t = max(d.target_lot_price or floor, floor)
         if ceil:
             t = min(t, ceil)
+        if cfg.strategy == "topN" and t > floor:
+            # округляем вниз: при округлении вверх цена покупателя выходит выше конкурента и мы съезжаем на место ниже
+            t = max(floor, math.floor(t * 100 + 1e-6) / 100)
         d.target_lot_price = round(t, 2)
         d.target_buyer_price = round(t * markup, 2)
         ups = [u for u in self.updates.get(offer_id, []) if now - u < 3600]
@@ -158,7 +180,8 @@ class RTBAEngine:
         if d.target_lot_price <= 0:
             d.notes.append("нет ориентира цены — не трогаем")
             return d
-        if current is not None and abs(d.target_lot_price - current) < float(cfg.min_change):
+        if current is not None and (round(abs(d.target_lot_price - current), 2) < 0.01 or
+                                    (not d.fix_position and abs(d.target_lot_price - current) < float(cfg.min_change))):
             d.notes.append("изменение меньше min_change — не трогаем")
             return d
         if len(ups) >= int(cfg.max_updates_per_hour):

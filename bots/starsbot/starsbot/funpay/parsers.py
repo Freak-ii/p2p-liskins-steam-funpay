@@ -361,3 +361,97 @@ def parse_offer_edit_form(page: str) -> dict[str, str]:
         opt = sel.select_one("option[selected]") or sel.select_one("option")
         fields[sel["name"]] = opt.get("value", "") if opt else ""
     return fields
+
+
+def parse_offer_selects(page: str) -> dict[str, list[tuple[str, str]]]:
+    """Выпадающие списки формы лота: {name: [(value, текст)]} — чтобы выставить «количество» и «способ» по тексту."""
+    s = soup(page)
+    form = s.select_one("form.form-offer-editor") or s.select_one("form")
+    out: dict[str, list[tuple[str, str]]] = {}
+    if form is None:
+        return out
+    for sel in form.select("select[name]"):
+        out[sel["name"]] = [(o.get("value", ""), text_of(o)) for o in sel.select("option")]
+    return out
+
+
+@dataclass
+class OwnLot:
+    offer_id: str
+    description: str
+    price: float | None = None
+    amount: int | None = None
+    active: bool = True
+
+
+def parse_own_lots(page: str) -> list[OwnLot]:
+    """Свои лоты раздела (funpay.com/lots/<node>/trade): ссылки на offerEdit?offer=ID или offer?id=ID."""
+    s = soup(page)
+    out: list[OwnLot] = []
+    seen: set[str] = set()
+    for row in s.select("a.tc-item, div.tc-item"):
+        href = row.get("href", "") or row.get("data-href", "")
+        m = re.search(r"(?:offer=|[?&]id=)(\d+)", href)
+        if not m:
+            a = row.select_one("a[href*='offer']")
+            m = re.search(r"(?:offer=|[?&]id=)(\d+)", a.get("href", "")) if a is not None else None
+        if not m or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        desc = text_of(row.select_one(".tc-desc-text") or row.select_one(".tc-desc"))
+        price_node = row.select_one(".tc-price")
+        price = parse_number(price_node.get("data-s") or text_of(price_node)) if price_node is not None else None
+        amount_node = row.select_one(".tc-amount")
+        amount = parse_number(amount_node.get("data-s") or text_of(amount_node)) if amount_node is not None else None
+        classes = " ".join(row.get("class") or [])
+        out.append(OwnLot(m.group(1), desc, price, int(amount) if amount is not None else None,
+                          "warning" not in classes and "inactive" not in classes))
+    return out
+
+
+@dataclass
+class BalanceInfo:
+    total_rub: float | None = None
+    available_rub: float | None = None
+    form_action: str = ""
+    fields: dict = field(default_factory=dict)
+    methods: list = field(default_factory=list)        # [(value, текст)] — способы вывода
+    method_field: str = ""
+    amount_field: str = ""
+    wallet_field: str = ""
+
+
+def parse_balance_page(page: str) -> BalanceInfo:
+    """Страница funpay.com/account/balance: баланс и форма вывода (поля ищутся по смыслу имени)."""
+    s = soup(page)
+    info = BalanceInfo()
+    vals = [parse_number(text_of(n)) for n in s.select(".balances-value, .balance-value, .badge-balance")]
+    vals = [v for v in vals if v is not None]
+    if vals:
+        info.total_rub = vals[0]
+        info.available_rub = vals[1] if len(vals) > 1 else vals[0]
+    form = None
+    for f in s.select("form"):
+        names = " ".join(i.get("name", "") for i in f.select("[name]"))
+        if re.search(r"amount|sum", names, re.I) and re.search(r"wallet|account|requisite|ext|currency", names, re.I):
+            form = f
+            break
+    if form is None:
+        return info
+    info.form_action = form.get("action") or "/withdraw/withdraw"
+    for inp in form.select("input[name]"):
+        typ = (inp.get("type") or "text").lower()
+        if typ in ("checkbox", "radio") and not inp.has_attr("checked"):
+            continue
+        info.fields[inp["name"]] = inp.get("value", "")
+        if not info.amount_field and re.search(r"amount|sum", inp["name"], re.I):
+            info.amount_field = inp["name"]
+        if not info.wallet_field and re.search(r"wallet|account|requisite|address", inp["name"], re.I):
+            info.wallet_field = inp["name"]
+    for sel in form.select("select[name]"):
+        opts = [(o.get("value", ""), text_of(o)) for o in sel.select("option") if o.get("value")]
+        if not info.method_field and re.search(r"ext|currency|method|system", sel["name"], re.I):
+            info.method_field, info.methods = sel["name"], opts
+        opt = sel.select_one("option[selected]") or sel.select_one("option")
+        info.fields[sel["name"]] = opt.get("value", "") if opt else ""
+    return info

@@ -206,7 +206,7 @@ def test_db_backup_and_health(tmp_path):
     assert len(list(folder.glob("*.sqlite3"))) == 2
 
     sup, e, fp, wallet = make(tmp_path / "bot")
-    e.last_ok.update(funpay_poll=time.time(), ton_watch=time.time(), wallet=time.time())
+    e.last_ok.update(funpay_poll=time.time(), ton_watch=time.time(), wallet=time.time(), tg_gifts=time.time())
     e._fragment_state(session="ok", kyc="verified")
     assert e.health()["ok"]
     e.last_ok["funpay_poll"] = time.time() - 3600
@@ -252,8 +252,9 @@ def test_faq_after_delivery_and_refund_request(tmp_path):
         return after, [t for _, t in fp.outbox[n:]]
     after, refund = asyncio.run(go())
     assert len(after) == 1 and "Мои звёзды" in after[0] and "@alice_tg" in after[0]
+    assert "уже отправлены" in after[0]                  # после выдачи — ответ с доказательством, а не «проверяю»
     assert "не подтверждайте" in refund[0]
-    assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code IN ('buyer_not_arrived','buyer_refund')") == 2
+    assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code IN ('buyer_claims_not_received','buyer_refund')") == 2
 
 
 def test_review_reply(tmp_path):

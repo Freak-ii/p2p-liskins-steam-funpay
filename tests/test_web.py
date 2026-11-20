@@ -32,3 +32,23 @@ def test_auth_overview_and_secrets(tmp_path):
             assert r.status == 403
         center.events.close()
     asyncio.run(go())
+
+
+def test_autostart_toggle_and_defaults(tmp_path):
+    async def go():
+        center = Center(tmp_path)
+        token = center.cfg.ensure_token()
+        async with TestClient(TestServer(make_app(center))) as c:
+            await c.get(f"/login?token={token}", allow_redirects=False)
+            d = await (await c.get("/api/overview")).json()
+            auto = {b["name"]: b["autostart"] for b in d["bots"]}
+            assert auto == {"starsbot": True, "mannbot": False, "lisbot": False}
+            r = await c.post("/api/workers/mannbot/autostart_on")
+            assert (await r.json())["ok"]
+            r = await c.post("/api/workers/starsbot/autostart_off")
+            d = await (await c.get("/api/overview")).json()
+            auto = {b["name"]: b["autostart"] for b in d["bots"]}
+            assert auto == {"starsbot": False, "mannbot": True, "lisbot": False}
+        assert Center(tmp_path).cfg.worker("mannbot")["autostart"] is True       # сохранено в center.yaml
+        center.events.close()
+    asyncio.run(go())

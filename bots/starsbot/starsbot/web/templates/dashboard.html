@@ -1,6 +1,6 @@
-{% extends "base.html" %}{% block title %}Дашборд{% endblock %}
+{% extends "base.html" %}{% block title %}Главная{% endblock %}
 {% block body %}
-<div class="row" style="justify-content:space-between"><h1>Дашборд</h1>
+<div class="row" style="justify-content:space-between"><h1>Главная</h1>
 <div class="row">{% for d in [1,7,30] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/?days={{d}}">{{d}} дн.</a>{% endfor %}</div></div>
 
 {% if health %}<div class="card" id="c-health" style="padding:8px 12px"><div class="row">

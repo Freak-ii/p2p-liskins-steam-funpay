@@ -14,6 +14,7 @@ import io
 import datetime as dt
 import hmac
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from starsbot.config import DENOMINATIONS
 from starsbot.core import messages as M
 from starsbot.core.models import OrderStatus as S
 from starsbot.web import charts
+
+log = logging.getLogger("starsbot.web")
 
 TPL_DIR = Path(__file__).parent / "templates"
 STATUS_COLORS = {"new": "gray", "awaiting_username": "blue", "pending_approval": "amber", "ready": "blue",
@@ -95,13 +98,39 @@ def make_app(sup, log_handler=None) -> web.Application:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(TPL_DIR), autoescape=True)
     env.filters.update(ts=_ts, dur=fmt_dur, st=lambda s: M.status_text("ru", s),
                        jsonload=lambda s: json.loads(s or "{}"), tojson=lambda o: json.dumps(o, ensure_ascii=False))
-    env.filters["money"] = lambda v: "—" if v is None else f"{float(v):,.2f}".replace(",", " ").replace(".00", "")
-    env.filters["ton"] = lambda v: "—" if v is None else f"{float(v):.4f}".rstrip("0").rstrip(".")
+    def _fnum(v):
+        # None, пустая строка и неопределённое поле (кошелёк ещё ни разу не проверялся) — «нет данных»
+        if v is None or isinstance(v, jinja2.Undefined) or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    env.filters["money"] = lambda v: "—" if _fnum(v) is None else f"{_fnum(v):,.2f}".replace(",", " ").replace(".00", "")
+    env.filters["ton"] = lambda v: "—" if _fnum(v) is None else f"{_fnum(v):.4f}".rstrip("0").rstrip(".")
     env.filters["md"] = lambda d: str(d)[5:]
     env.filters["hm"] = lambda v: dt.datetime.fromtimestamp(float(v)).strftime("%d.%m %H:%M")
     env.globals.update(colors=STATUS_COLORS, statuses=[s.value for s in S], charts=charts, state_text=STATE_TEXT,
                        role_titles=ROLE_TITLES, cashflow_kinds=CASHFLOW_KINDS,
                        segments_of=segments_of)
+
+    def friendly(path: str):
+        # ошибка FunPay/сети/Telegram в кнопке панели — сообщение на странице, а не 500
+        def deco(fn):
+            async def wrapper(request: web.Request):
+                try:
+                    return await fn(request)
+                except web.HTTPException:
+                    raise
+                except Exception as e:                       # noqa: BLE001
+                    log.exception("panel action %s failed", path)
+                    raise web.HTTPFound(URL(path).with_query(msg=f"Ошибка: {e}"[:600]))
+            return wrapper
+        return deco
+
+    def wallet_kv() -> dict:
+        # до первой проверки кошелька в базе ничего нет — шаблоны получают поля со значением None
+        return {"balance": None, "capacity": None, "committed": None, "ts": None, **(sup.db.kv_get("wallet") or {})}
 
     # ------------------------------------------------------------------ доступ
     def tokens() -> dict[str, str]:
@@ -202,7 +231,7 @@ def make_app(sup, log_handler=None) -> web.Application:
                       denoms=a.denominations(days), cap=sup.econ.wallet_capacity(),
                       recs=db.q("SELECT * FROM recommendations WHERE active=1 ORDER BY severity, ts DESC"),
                       active=db.active_orders()[:20], status=sup.engine.status_text(),
-                      fragment=sup.engine.fragment_status, wallet=db.kv_get("wallet") or {},
+                      fragment=sup.engine.fragment_status, wallet=wallet_kv(),
                       rate=sup.econ.effective_rate(), safety=sup.cfg.safety, live_done=sup.engine.live_purchases(),
                       spent24=sup.engine.spent_ton_24h(), cookie_age=sup.engine.fragment_cookie_age_days(),
                       warn_days=float(sup.cfg.fragment.get("session_warn_days") or 0),
@@ -341,7 +370,7 @@ def make_app(sup, log_handler=None) -> web.Application:
                       ozon_calc=ozon_calc, oz=sup.cfg.get("ozon") or {},
                       custom=custom, rate=rate, rate_src=rate_src, market=getattr(sup.engine.rates, "value", None),
                       tps=econ.ton_per_star(), cps=econ.cost_per_star_rub(), cap=econ.wallet_capacity(),
-                      rec=econ.reconcile(), wallet=db.kv_get("wallet") or {}, e=sup.cfg.economics,
+                      rec=econ.reconcile(), wallet=wallet_kv(), e=sup.cfg.economics,
                       balance=sup.analytics.balance_series(300),
                       journal=db.q("SELECT * FROM cashflow ORDER BY id DESC LIMIT 100"))
 
@@ -400,7 +429,7 @@ def make_app(sup, log_handler=None) -> web.Application:
             msg = "Запись удалена"
         elif act == "reset_start":
             need(request, "admin")
-            w = sup.db.kv_get("wallet") or {}
+            w = wallet_kv()
             if w.get("balance") is None:
                 raise back(request, "Баланс кошелька ещё не получен", "/money")
             # сверка считает от точки отсчёта: пополнения до неё уже входят в стартовый баланс
@@ -430,6 +459,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         return render("ozon.html", request, ch=ch, oz=sup.cfg.ozon, s=ch.summary(), codes=codes, attention=attention,
                       calc=sup.econ.calculator(channel="ozon"))
 
+    @friendly("/ozon")
     async def ozon_action(request: web.Request):
         need(request, "admin")
         ch = sup.engine.channels.get("ozon")
@@ -586,9 +616,10 @@ def make_app(sup, log_handler=None) -> web.Application:
         if request.method == "POST":
             f = await request.post()
             lots = []
+            pos = {int(l.get("stars") or 0): int(l.get("position") or 0) for l in (cfg.funpay.lots or [])}
             for d in DENOMINATIONS:
                 oid = str(f.get(f"lot_{d}", "")).strip()
-                lots.append({"stars": d, "offer_id": int(oid) if oid.isdigit() else 0})
+                lots.append({"stars": d, "offer_id": int(oid) if oid.isdigit() else 0, "position": pos.get(d, 0)})
             chat_ids = [int(x) for x in str(f.get("tg_chat_ids", "")).replace(",", " ").split()
                         if x.lstrip("-").isdigit()]
             upd = {
@@ -633,6 +664,305 @@ def make_app(sup, log_handler=None) -> web.Application:
             res = {"ok": False, "text": "?"}
         audit(request, f"test.{what}", "", "ok" if res.get("ok") else "fail")
         return web.json_response(res)
+
+    # ------------------------------------------------------------------ Подарки
+    def _num_in(v, default=0, cast=int):
+        try:
+            return cast(str(v).strip().replace(",", ".")) if str(v).strip() != "" else default
+        except ValueError:
+            return default
+
+    async def gifts_page(request: web.Request):
+        svc = sup.engine.gifts
+        g = sup.cfg.get("gifts") or {}
+        cat = list(svc.tg._catalog[1]) if isinstance(getattr(svc.tg, "_catalog", None), tuple) else \
+            list(getattr(svc.tg, "_catalog", []) or [])
+        plans = []
+        for l in (g.get("lots") or []):
+            try:
+                p = svc.plan_for(int(l["stars"]), cat or None)
+                plans.append({"stars": int(l["stars"]), "offer_id": l.get("offer_id") or "", "position":
+                              int(l.get("position") or 0), "summary": p.summary(), "cost": p.cost, "value": p.value})
+            except Exception as e:  # noqa: BLE001
+                plans.append({"stars": int(l["stars"]), "offer_id": l.get("offer_id") or "", "position":
+                              int(l.get("position") or 0), "summary": str(e), "cost": None, "value": None})
+        sends = sup.db.q("SELECT s.*, o.tg_username FROM gift_sends s LEFT JOIN orders o ON o.order_id=s.order_id "
+                         "ORDER BY s.id DESC LIMIT 50")
+        orders = sup.db.q("SELECT * FROM orders WHERE delivery='gift' ORDER BY created_at DESC LIMIT 30")
+        topups = sup.db.q("SELECT * FROM orders WHERE channel='internal' ORDER BY created_at DESC LIMIT 10")
+        stars = sup.db.kv_get("tg_stars") or {}
+        return render("gifts.html", request, g=g, svc=svc, cat=cat, plans=plans, sends=sends, orders=orders,
+                      topups=topups, stars=stars, account=svc.account, committed=sup.db.gift_stars_committed(),
+                      has_session=bool(getattr(svc.tg, "has_session", False)), login=request.query.get("login", ""),
+                      secret=lambda s_, k: sup.secret_is_set(s_, k))
+
+    @friendly("/gifts")
+    async def gifts_action(request: web.Request):
+        need(request, "admin")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        svc = sup.engine.gifts
+        g = sup.cfg.get("gifts") or {}
+        login_step = ""
+        if act == "save":
+            lots = []
+            for l in (g.get("lots") or []):
+                d = int(l["stars"])
+                oid = str(f.get(f"lot_{d}", "")).strip()
+                lots.append({"stars": d, "offer_id": int(oid) if oid.isdigit() else 0,
+                             "position": _num_in(f.get(f"pos_{d}"), 0)})
+            extra = str(f.get("extra_stars", "")).strip()
+            if extra.isdigit() and int(extra) > 0 and int(extra) not in {l["stars"] for l in lots}:
+                lots.append({"stars": int(extra), "offer_id": 0, "position": 0})
+            upd = {"gifts": {
+                "enabled": f.get("enabled") == "on", "api_id": _num_in(f.get("api_id"), 0),
+                "api_hash": str(f.get("api_hash", "")).strip(), "phone": str(f.get("phone", "")).strip(),
+                "mode": "price" if f.get("mode") == "price" else "convert",
+                "per_gift_penalty": _num_in(f.get("per_gift_penalty"), 3, float),
+                "gift_message": str(f.get("gift_message", ""))[:120], "hide_sender_name": f.get("hide") == "on",
+                "pilot_orders": _num_in(f.get("pilot_orders"), 1), "max_order_stars": _num_in(f.get("max_order_stars"), 0),
+                "low_stars_alert": _num_in(f.get("low_stars_alert"), 500), "lots": lots,
+                "topup": {"enabled": f.get("topup_enabled") == "on", "min_stars": _num_in(f.get("topup_min"), 1000),
+                          "amount": max(50, _num_in(f.get("topup_amount"), 2500)),
+                          "username": str(f.get("topup_username", "")).strip().lstrip("@")},
+            }}
+            if M.contains_forbidden_link(upd["gifts"]["gift_message"]):
+                raise web.HTTPFound(URL("/gifts").with_query(msg="В подписи к подарку нельзя ссылки (правила FunPay)"))
+            sup.save(upd)
+            msg = "Сохранено" + (". Перезапустите бота, чтобы применить" if sup.restart_required else "")
+        elif act == "send_code":
+            phone = str(f.get("phone", "")).strip() or str(g.get("phone") or "")
+            if phone and phone != g.get("phone"):
+                sup.save({"gifts": {"phone": phone}}, rebuild=False)
+            try:
+                msg = await sup.engine.gifts.tg.send_code(phone)
+                login_step = "code"
+            except Exception as e:  # noqa: BLE001
+                msg = f"Telegram: {e}"
+        elif act == "sign_in":
+            phone = str(g.get("phone") or f.get("phone") or "")
+            try:
+                me = await svc.tg.sign_in(phone, str(f.get("code", "")), str(f.get("password", "")))
+                svc.account = {"user_id": me.user_id, "username": me.username, "name": me.name, "ts": time.time()}
+                sup.db.kv_set("tg_account", svc.account)
+                msg = f"Вход выполнен: {me.name} @{me.username or '—'}"
+            except Exception as e:  # noqa: BLE001
+                msg = f"Вход не выполнен: {e}"
+                login_step = "password" if getattr(e, "code", "") == "password_needed" else "code"
+        elif act == "logout":
+            await svc.tg.logout_local()
+            sup.db.kv_set("tg_account", {})
+            svc.account = {}
+            msg = "Сессия Telegram удалена с этого компьютера (в Telegram → Устройства можно завершить её и там)"
+        elif act == "refresh":
+            try:
+                me = await svc.tg.whoami()
+                svc.account = {"user_id": me.user_id, "username": me.username, "name": me.name, "ts": time.time()}
+                sup.db.kv_set("tg_account", svc.account)
+                bal = await svc.refresh_balance(max_age=0)
+                cat = await svc.catalog()
+                msg = f"Аккаунт @{me.username or me.name}: {bal if bal is not None else '?'} ⭐, подарков в каталоге: " \
+                      f"{len([c for c in cat if c.usable])}"
+            except Exception as e:  # noqa: BLE001
+                msg = f"Telegram: {e}"
+        elif act == "topup":
+            amount = max(50, _num_in(f.get("amount"), 1000))
+            uname = str((g.get("topup") or {}).get("username") or svc.account.get("username") or "")
+            if not uname:
+                msg = "Нет @username аккаунта — укажите его в настройках пополнения"
+            elif sup.state != "running":
+                msg = "Запустите бота: пополнение идёт через Fragment и кошелёк TON"
+            else:
+                msg = await svc.create_topup(amount, uname)
+        else:
+            msg = "?"
+        audit(request, f"gifts.{act}", "", msg)
+        q = {"msg": msg}
+        if login_step:
+            q["login"] = login_step
+        raise web.HTTPFound(URL("/gifts").with_query(**q))
+
+    # ------------------------------------------------------------------ Лоты
+    async def funpay_page(request: web.Request):
+        lm = sup.engine.lot_manager
+        ap = sup.engine.autopilot
+        unconfirmed = ap.unconfirmed(0, include_done=True)
+        from starsbot.funpay.lots import custom_texts, lot_texts
+        texts = {}
+        for kind, dkey in (("username", "lot_description"), ("gift", "gift_lot_description")):
+            texts[kind] = lot_texts("{stars}", kind, str(sup.cfg.funpay.get(dkey) or ""), custom_texts(sup.cfg, kind))
+            texts[kind]["custom"] = bool(custom_texts(sup.cfg, kind))
+        return render("funpay.html", request, rows=lm.rows(), texts=texts,
+                      manage_texts=sup.cfg.funpay.get("manage_lot_texts") is not False, fr=sup.engine.fragment_status,
+                      fr_age=sup.engine.fragment_cookie_age_days(), files=ap.support_files(), unconfirmed=unconfirmed,
+                      ap=ap.status(), fp=sup.cfg.funpay, rtba=sup.cfg.rtba, gifts_on=bool((sup.cfg.get("gifts") or {})
+                                                                                           .get("enabled")))
+
+    @friendly("/funpay")
+    async def funpay_action(request: web.Request):
+        need(request, "admin")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        lm = sup.engine.lot_manager
+        ap = sup.engine.autopilot
+        if act == "positions":
+            for kind, section in (("username", "funpay"), ("gift", "gifts")):
+                lots = [dict(l) for l in ((sup.cfg.get(section) or {}).get("lots") or [])]
+                for l in lots:
+                    key = f"pos_{kind}_{int(l['stars'])}"
+                    if key in f:
+                        l["position"] = max(0, _num_in(f.get(key), 0))
+                    okey = f"offer_{kind}_{int(l['stars'])}"
+                    if okey in f:
+                        v = str(f.get(okey, "")).strip()
+                        l["offer_id"] = int(v) if v.isdigit() else 0
+                sup.save({section: {"lots": lots}}, rebuild=False)
+                lm._apply_live({kind: lots})
+            sup.save({"funpay": {"auto_create_lots": f.get("auto_create") == "on",
+                                 "lot_price_per_star": _num_in(f.get("start_price"), 1.6, float)}}, rebuild=False)
+            msg = "Лоты и позиции сохранены. Позиция применяется при следующей проверке рынка (раз в " \
+                  f"{int(sup.cfg.rtba.interval_seconds) // 60 or 1} мин)"
+        elif act == "create":
+            if sup.state != "running":
+                await sup.engine.fp.login()
+            msg = "; ".join(await lm.create_missing(template_offer=_num_in(f.get("template"), 0)))
+        elif act == "close_all":
+            msg = await lm.close_all(reason="кнопка в панели")
+        elif act in ("texts_save", "texts_reset"):
+            kind = "gift" if f.get("kind") == "gift" else "username"
+            key = "gift_lot_texts" if kind == "gift" else "lot_texts"
+            if act == "texts_reset":
+                vals: dict = {}
+            else:
+                from starsbot.funpay.lots import lot_texts
+                dflt = lot_texts("{stars}", kind)
+                vals = {}
+                for k in ("summary_ru", "desc_ru", "summary_en", "desc_en"):
+                    v = str(f.get(k, "")).replace("\r\n", "\n").strip()
+                    if v and v != dflt[k]:
+                        vals[k] = v[:1500] if k.startswith("desc") else v[:120]
+                bad = [k for k in ("summary_en", "desc_en") if vals.get(k) and not vals[k].isascii()]
+                if bad:
+                    raise back(request, "Английские поля FunPay принимает только латиницей — уберите русские буквы и "
+                               "эмодзи из английского текста", "/funpay")
+            manage = f.get("manage") == "on"
+            sup.raw.setdefault("funpay", {})[key] = {}          # словарь заменяется целиком, а не сливается
+            sup.save({"funpay": {key: vals, "manage_lot_texts": manage}}, rebuild=False)
+            sup.engine.cfg.funpay[key] = vals                   # работающий бот видит тексты сразу
+            sup.engine.cfg.funpay["manage_lot_texts"] = manage
+            if sup.state == "running":
+                res = await lm.refresh_texts(force=True)
+            else:
+                res = "применится при запуске бота"
+            msg = ("Стандартный текст карточки возвращён" if act == "texts_reset" else "Карточка сохранена") + \
+                f" — {res}"
+        elif act == "open_all":
+            e = sup.engine
+            for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:")):
+                for l in ((sup.cfg.get(section) or {}).get("lots") or []):
+                    if l.get("offer_id"):
+                        sup.db.kv_set(prefix + str(l["offer_id"]), None)
+            if sup.state == "running":
+                e.wallet_info["ts"] = 0
+                await e.wallet_watch()
+                if e.gifts is not None and e.gifts.enabled:
+                    await e.gifts.watch()
+                msg = "Лоты включены — наличие выставлено по балансу кошелька"
+            else:
+                msg = "Лоты включатся сами при запуске бота"
+        elif act == "toggle":
+            msg = await lm.set_active(_num_in(f.get("offer_id"), 0), f.get("active") == "1")
+        elif act == "support":
+            ids = [x for x in f.getall("oid", [])]
+            rows = [sup.db.get_order(x) for x in ids] if ids else ap.unconfirmed(
+                float((sup.cfg.get("autopilot") or {}).get("support_after_hours") or 72), include_done=True)
+            rows = [r for r in rows if r is not None]
+            msg = ("Файл готов: " + Path(ap.make_support_file(rows)).name) if rows else \
+                "Нет выданных и неподтверждённых заказов старше порога"
+        elif act == "remind":
+            n = await ap.confirm_reminders()
+            msg = f"Напоминаний отправлено: {n}"
+        else:
+            msg = "?"
+        audit(request, f"funpay.{act}", "", msg)
+        raise web.HTTPFound(URL("/funpay").with_query(msg=msg[:1500]))
+
+    async def support_download(request: web.Request):
+        need(request, "admin")
+        p = sup.engine.autopilot.support_path(request.match_info["name"])
+        if p is None:
+            raise web.HTTPNotFound(text="файл не найден")
+        return web.Response(body=p.read_bytes(), content_type="text/plain", charset="utf-8",
+                            headers={"Content-Disposition": f'attachment; filename="{p.name}"'})
+
+    # ------------------------------------------------------------------ Кошелёк и автопилот
+    async def crypto_page(request: web.Request):
+        e = sup.engine
+        ap = e.autopilot
+        w = e.wallet
+        wd = sup.db.q("SELECT * FROM withdrawals ORDER BY id DESC LIMIT 30")
+        return render("crypto.html", request, w=w, winfo=wallet_kv(), ton=sup.cfg.ton,
+                      ap=ap.status(), acfg=sup.cfg.get("autopilot") or {}, withdrawals=wd,
+                      key_kind=getattr(w, "key_kind", ""), mnemonic_set=sup.secret_is_set("ton", "mnemonic"),
+                      rec=sup.econ.reconcile(), rate=sup.econ.effective_rate()[0])
+
+    @friendly("/crypto")
+    async def crypto_action(request: web.Request):
+        need(request, "admin")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        ap = sup.engine.autopilot
+        if act == "save":
+            words = " ".join(str(f.get("mnemonic", "")).split())
+            upd = {"autopilot": {
+                "enabled": f.get("enabled") == "on",
+                "confirm_reminder_hours": _num_in(f.get("confirm_reminder_hours"), 24, float),
+                "support_after_hours": _num_in(f.get("support_after_hours"), 72, float),
+                "withdraw": {"enabled": f.get("w_enabled") == "on",
+                             "min_wallet_ton": _num_in(f.get("min_wallet_ton"), 5, float),
+                             "min_funpay_rub": _num_in(f.get("min_funpay_rub"), 1000, float),
+                             "keep_rub": _num_in(f.get("keep_rub"), 0, float),
+                             "max_per_day_rub": _num_in(f.get("max_per_day_rub"), 20000, float),
+                             "method": str(f.get("method", "")).strip(), "wallet": str(f.get("wallet", "")).strip(),
+                             "require_approval": f.get("require_approval") == "on"}},
+                "ton": {"mnemonic": words, "address": str(f.get("address", "")).strip(),
+                        "version": f.get("version") if f.get("version") in ("v5r1", "v4r2") else "v5r1",
+                        "mnemonic_type": f.get("mnemonic_type") if f.get("mnemonic_type") in ("auto", "bip39", "ton")
+                        else "auto",
+                        "low_balance_ton": _num_in(f.get("low_balance_ton"), 3, float)}}
+            sup.save(upd)
+            msg = "Сохранено" + (". Перезапустите бота, чтобы применить" if sup.restart_required else "")
+        elif act == "balance":
+            try:
+                if sup.state != "running":
+                    await sup.engine.fp.login()
+                info = await sup.engine.fp.get_balance()
+                ap._save_state(funpay_balance=info.available_rub, funpay_balance_at=time.time(),
+                               withdraw_methods=info.methods[:30])
+                msg = f"Баланс FunPay: {info.available_rub if info.available_rub is not None else '?'} ₽; способов " \
+                      f"вывода найдено: {len(info.methods)}"
+            except Exception as e:  # noqa: BLE001
+                msg = f"FunPay: {e}"
+        elif act == "withdraw_now":
+            msg = await ap.maybe_withdraw(force=True)
+        elif act == "approve":
+            msg = await ap.execute_withdraw(_num_in(f.get("wid"), 0))
+        elif act == "cancel":
+            msg = ap.cancel_withdraw(_num_in(f.get("wid"), 0))
+        else:
+            msg = "?"
+        audit(request, f"crypto.{act}", "", msg)
+        raise web.HTTPFound(URL("/crypto").with_query(msg=msg[:600]))
+
+    async def api_wallet_addresses(request: web.Request):
+        need(request, "admin")
+        data = await request.json() if request.can_read_body else {}
+        from starsbot.ton.mnemonic import MnemonicError, all_addresses
+        try:
+            items = all_addresses(str(data.get("mnemonic") or ""), str(data.get("kind") or "auto"))
+        except MnemonicError as e:
+            return web.json_response({"ok": False, "text": str(e)})
+        return web.json_response({"ok": True, "items": items})
 
     # ------------------------------------------------------------------ настройки
     async def settings(request: web.Request):
@@ -716,6 +1046,11 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/messages", messages_page), web.post("/messages", messages_page),
         web.post("/api/preview", preview_message), web.get("/logs", logs), web.get("/api/logs", api_logs),
         web.get("/ozon", ozon_page), web.post("/ozon", ozon_action),
+        web.get("/gifts", gifts_page), web.post("/gifts", gifts_action),
+        web.get("/funpay", funpay_page), web.post("/funpay", funpay_action),
+        web.get("/support/{name}", support_download),
+        web.get("/crypto", crypto_page), web.post("/crypto", crypto_action),
+        web.post("/api/wallet/addresses", api_wallet_addresses),
     ])
     return app
 
