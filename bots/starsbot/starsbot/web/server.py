@@ -822,6 +822,20 @@ def make_app(sup, log_handler=None) -> web.Application:
             msg = "; ".join(await lm.create_missing(template_offer=_num_in(f.get("template"), 0)))
         elif act == "close_all":
             msg = await lm.close_all(reason="кнопка в панели")
+        elif act == "open_all":
+            e = sup.engine
+            for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:")):
+                for l in ((sup.cfg.get(section) or {}).get("lots") or []):
+                    if l.get("offer_id"):
+                        sup.db.kv_set(prefix + str(l["offer_id"]), None)
+            if sup.state == "running":
+                e.wallet_info["ts"] = 0
+                await e.wallet_watch()
+                if e.gifts is not None and e.gifts.enabled:
+                    await e.gifts.watch()
+                msg = "Лоты включены — наличие выставлено по балансу кошелька"
+            else:
+                msg = "Лоты включатся сами при запуске бота"
         elif act == "toggle":
             msg = await lm.set_active(_num_in(f.get("offer_id"), 0), f.get("active") == "1")
         elif act == "support":

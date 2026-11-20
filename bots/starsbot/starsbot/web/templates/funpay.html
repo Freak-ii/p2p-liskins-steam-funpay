@@ -14,6 +14,7 @@
   <div class="row" style="justify-content:space-between"><h2>Лоты бота и позиция на странице</h2>
   {% if is_admin %}<div class="row">
     <button name="action" value="create" onclick="return confirm('Выставить на FunPay лоты для номиналов без ID?')">➕ Выставить недостающие</button>
+    <button name="action" value="open_all" onclick="return confirm('Включить все лоты бота (наличие — по балансу)?')">✅ Включить все лоты</button>
     <button name="action" value="close_all" class="danger" onclick="return confirm('Выключить все лоты бота?')">⛔ Закрыть все лоты</button>
   </div>{% endif %}</div>
   <div class="help">Позиция — какое место занимать в списке раздела «Звёзды» (1 — первым, 3 — третьим). Бот ставит цену чуть ниже конкурента на этой позиции, но не ниже себестоимости + маржи. 0 — по общим настройкам RTBA. Позиции работают, даже если общая автоцена выключена. Наличие лотов бот ведёт сам: лот выключается, когда не хватает TON/звёзд, и включается снова, когда они появились.</div>
