@@ -61,6 +61,7 @@ async def run(home, host: str, port: int, *, demo: bool, open_browser: bool, on_
         log.exception("восстановление резервной копии")
         restore_error = str(e)
     center = Center(home, demo=demo)
+    center.listen = (host, port)               # боты обращаются к центру по этому адресу (реестр обменов Steam)
     if restored:
         center.monitor.unclean = None      # копия снята с работающего центра: «аварийное выключение» в ней не настоящее
     token = center.cfg.ensure_token()
@@ -130,7 +131,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.demo:
         home = home / "demo"
     home.mkdir(parents=True, exist_ok=True)
-    cfg = CenterConfig(home)
+    cfg = CenterConfig(home, demo=args.demo)
     host = args.host or cfg["center"]["host"]
     port = args.port or int(cfg["center"]["port"])
     if args.restore:

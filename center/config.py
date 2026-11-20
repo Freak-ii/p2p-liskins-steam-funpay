@@ -178,14 +178,27 @@ def default_home() -> Path:
     return ROOT / "center-data"
 
 
+# Демо живёт рядом с боевым центром на том же компьютере: свои порты (боевые 8800–8803 могут быть заняты
+# работающими ботами) и автозапуск всех ботов — демо нужно, чтобы посмотреть всё сразу.
+DEMO_DEFAULTS: dict = {
+    "center": {"port": 18800, "update_check": False},
+    "workers": {
+        "mannbot": {"autostart": True, "port": 18801},
+        "lisbot": {"autostart": True, "port": 18802},
+        "starsbot": {"autostart": True, "port": 18803},
+    },
+}
+
+
 class CenterConfig:
-    def __init__(self, home: Path):
+    def __init__(self, home: Path, *, demo: bool = False):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.path = self.home / "center.yaml"
         self.problems: list[tuple[str, str]] = []   # (уровень, текст) — центр запишет их в журнал при запуске
+        self.defaults = _merge(DEFAULTS, DEMO_DEFAULTS) if demo else DEFAULTS
         self.user: dict = self._load()
-        self.data: dict = _merge(DEFAULTS, self.user)
+        self.data: dict = _merge(self.defaults, self.user)
         self.problems += [("warn", p) for p in check_config(self.user)]
 
     def _load(self) -> dict:
@@ -229,7 +242,7 @@ class CenterConfig:
 
     def save(self, updates: dict) -> None:
         self.user = _merge(self.user, updates)
-        self.data = _merge(DEFAULTS, self.user)
+        self.data = _merge(self.defaults, self.user)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(yaml.safe_dump(self.user, allow_unicode=True, sort_keys=False), encoding="utf-8")
         os.replace(tmp, self.path)

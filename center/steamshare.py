@@ -108,10 +108,12 @@ class SteamShare:
 
     def bot_env(self) -> dict[str, str]:
         c = self.center.cfg["center"]
-        host = c.get("host") or "127.0.0.1"
+        # адрес, на котором панель центра реально слушает (--host/--port важнее center.yaml)
+        host, port = getattr(self.center, "listen", None) or (c.get("host"), c.get("port"))
+        host = host or "127.0.0.1"
         if host in ("0.0.0.0", "::", ""):
             host = "127.0.0.1"
-        return {"CENTER_STEAM_URL": f"http://{host}:{int(c.get('port') or 8800)}/api/steam-share",
+        return {"CENTER_STEAM_URL": f"http://{host}:{int(port or 8800)}/api/steam-share",
                 "CENTER_STEAM_TOKEN": self.token(), "CENTER_STEAM_SHARED": "1" if self.shared else "0"}
 
     # ------------------------------------------------------------------ реестр

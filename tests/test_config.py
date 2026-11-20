@@ -51,3 +51,14 @@ def test_broken_yaml_without_backup_uses_defaults_and_logs(tmp_path):
     ev = [e for e in c.events.recent(20) if e["kind"] == "center.config"]
     assert ev and ev[0]["level"] == "critical"
     c.events.close()
+
+
+def test_demo_defaults_do_not_clash_with_live_ports(tmp_path):
+    """Демо запускается рядом с боевым центром: свои порты и автозапуск всех ботов."""
+    live, demo = CenterConfig(tmp_path / "live"), CenterConfig(tmp_path / "demo", demo=True)
+    assert live["center"]["port"] == 8800 and not live.worker("mannbot")["autostart"]
+    ports = {demo["center"]["port"]} | {demo.worker(n)["port"] for n in ("mannbot", "lisbot", "starsbot")}
+    assert ports == {18800, 18801, 18802, 18803}
+    assert all(demo.worker(n)["autostart"] for n in ("mannbot", "lisbot", "starsbot"))
+    demo.save({"workers": {"lisbot": {"autostart": False}}})
+    assert not demo.worker("lisbot")["autostart"] and demo.worker("mannbot")["port"] == 18801

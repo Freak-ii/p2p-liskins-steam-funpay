@@ -32,9 +32,10 @@ log = logging.getLogger("center")
 class Center:
     def __init__(self, home: Path, *, demo: bool = False):
         self.home = Path(home)
-        self.cfg = CenterConfig(self.home)
+        self.cfg = CenterConfig(self.home, demo=demo)
         self.events = EventStore(self.home / "center.sqlite3")
         self.demo = demo
+        self.listen: tuple[str, int] | None = None  # (host, port) панели центра; задаёт center.__main__
         self.vault = SecretStore(self.home)       # зашифрованные ключи ботов и центра (DPAPI / Fernet)
         self.steamshare = SteamShare(self)        # один аккаунт Steam на оба бота: реестр исходящих обменов
         restart = self.cfg["restart"]

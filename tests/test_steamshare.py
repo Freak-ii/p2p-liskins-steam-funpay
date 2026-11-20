@@ -87,3 +87,12 @@ def test_two_accounts_mode(tmp_path):
     assert c.workers["mannbot"].extra_env()["CENTER_STEAM_SHARED"] == "0"
     assert not c.cfg.problems
     c.events.close()
+
+
+def test_bot_env_points_to_the_real_listen_port(tmp_path):
+    """Центр запущен с --port: боты должны писать обмены туда, а не на порт из center.yaml."""
+    c = Center(tmp_path)
+    assert c.steamshare.bot_env()["CENTER_STEAM_URL"] == "http://127.0.0.1:8800/api/steam-share"
+    c.listen = ("0.0.0.0", 18800)
+    assert c.steamshare.bot_env()["CENTER_STEAM_URL"] == "http://127.0.0.1:18800/api/steam-share"
+    c.events.close()
