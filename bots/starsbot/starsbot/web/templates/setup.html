@@ -11,7 +11,7 @@
   <div class="help">funpay.com (вы залогинены) → F12 → Application → Cookies → https://funpay.com → <b>golden_key</b> → Value. Если на этом же аккаунте работает MannBot — это нормально: боты делят чаты и запросы через общий координатор.</div>
   <button type="button" onclick="testFunpay()" style="margin-top:8px">Проверить вход</button><div id="r_fp" class="result"></div>
   <label class="f">Лоты звёзд по номиналам</label>
-  <div class="help">ID лота — число из ссылки funpay.com/lots/offer?id=<b>12345</b>. Раздел Telegram → Звёзды, способ «По username». Пустое поле — номинал не продаётся.</div>
+  <div class="help">ID лота — число из ссылки funpay.com/lots/offer?id=<b>12345</b>. Раздел Telegram → Звёзды, способ «По username». Можно оставить все поля пустыми: при запуске бот сам выставит лоты и впишет их ID (в тестовом режиме — выключенными).</div>
   <div class="grid" style="margin-top:6px">{% for d in denoms %}<div><label class="f">{{d}}⭐</label><input type="number" name="lot_{{d}}" value="{{ lots.get(d) or '' }}" placeholder="ID лота"></div>{% endfor %}</div>
 </div>
 

@@ -236,8 +236,7 @@ def validate_config(cfg: Section) -> list[str]:
         return problems
     if not cfg.funpay.golden_key:
         problems.append("funpay.golden_key не задан")
-    if not any(l.get("offer_id") for l in (cfg.funpay.lots or [])):
-        problems.append("funpay.lots: укажите offer_id хотя бы одного лота со звёздами")
+    # лоты без offer_id — не ошибка: бот выставит их сам при запуске или по кнопке «Лоты → Выставить недостающие»
     for lot in cfg.funpay.lots or []:
         if lot.get("offer_id") and int(lot.get("stars") or 0) < 50:
             problems.append(f"лот {lot.get('offer_id')}: Fragment продаёт от 50 звёзд")

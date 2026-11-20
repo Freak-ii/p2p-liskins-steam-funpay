@@ -1441,7 +1441,8 @@ class Engine:
                     if l.get("offer_id"):
                         self.db.kv_set(prefix + str(l["offer_id"]), None)
         lm = getattr(self, "lot_manager", None)
-        if lm is not None and self.cfg.funpay.get("auto_create_lots"):
+        no_lots = not any(l.get("offer_id") for l in (self.cfg.funpay.lots or []))
+        if lm is not None and (self.cfg.funpay.get("auto_create_lots") or no_lots):
             try:
                 report = await lm.create_missing()
                 if any("выставлен" in r for r in report):
