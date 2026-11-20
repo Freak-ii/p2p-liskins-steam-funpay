@@ -556,3 +556,21 @@ def test_rtba_rounds_down_to_stay_below_competitor():
     d = eng.decide(lots, offer_id="500", stars=75, own_offer_ids={"500"}, own_username="me", current_lot_price=101.99,
                    cost_per_star_rub=1.0, overrides={"strategy": "topN", "target_position": 3})
     assert d.target_buyer_price < 116.32 and d.apply, d                  # 101.99 → 116.33: были 4-ми
+
+
+def test_price_guard_accepts_rtba_floor(tmp_path):
+    """Пол RTBA и защита цены считают одинаково: лот на полу RTBA защита не поднимает."""
+    from starsbot.core.rtba import price_floor
+    sup, e, fp, wallet = make(tmp_path)
+
+    async def go():
+        await boot(e)
+        e.db.kv_set("last_quote", {"stars": 50, "ton": 0.74})
+        lot = e.lots[0]
+        stars = int(lot["stars"])
+        gas = e.ton_to_rub(float(e.cfg.economics.gas_per_purchase_ton or 0)) or 0.0
+        fl = price_floor(e.cfg.rtba, stars, e.cost_per_star_rub() + gas / stars, e.econ.fees_pct())
+        await fp.update_lot(int(lot["offer_id"]), 0, price=fl)
+        await e.price_guard()
+        assert abs(float(fp.lots[str(lot["offer_id"])]["price"]) - fl) < 0.011
+    asyncio.run(go())

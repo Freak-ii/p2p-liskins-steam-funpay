@@ -848,11 +848,12 @@ class Engine:
             fl = self.econ.flow(stars, 100.0)
             if fl.breakeven_price is None:
                 continue
-            floor = float(math.ceil(fl.breakeven_price * (1 + margin / 100)))
+            # до копеек, как пол RTBA: округление до рубля поднимало цену выше пола RTBA, и они перетягивали её
+            floor = math.ceil(round(fl.breakeven_price * (1 + margin / 100), 6) * 100) / 100
             try:
                 fields = await self.fp.get_lot_fields(int(lot["offer_id"]), node)
                 price = float(str(fields.get("price") or 0).replace(",", "."))
-                if price and price < floor:
+                if price and price < floor - 0.005:
                     await self.fp.update_lot(int(lot["offer_id"]), node, price=floor)
                     self.db.add_event("-", "price_guard", offer_id=lot["offer_id"], stars=stars, old=price, new=floor)
                     await self.notifier.notify("WARNING", "price_guard_raise",
