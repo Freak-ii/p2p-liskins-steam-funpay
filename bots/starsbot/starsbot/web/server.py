@@ -837,7 +837,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         else:
             msg = "?"
         audit(request, f"funpay.{act}", "", msg)
-        raise web.HTTPFound(URL("/funpay").with_query(msg=msg[:600]))
+        raise web.HTTPFound(URL("/funpay").with_query(msg=msg[:1500]))
 
     async def support_download(request: web.Request):
         need(request, "admin")

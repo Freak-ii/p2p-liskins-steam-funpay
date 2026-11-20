@@ -52,13 +52,23 @@ def build_lot_fields(base: dict[str, str], selects: dict[str, list[tuple[str, st
         f.pop("active", None)                 # чекбокс не отправлен = лот выключен
     f.pop("deleted", None)
     how = "по username" if kind == "username" else "подарком"
+    # FunPay проверяет английские поля отдельно: русский текст в [en] — «некорректное английское описание»
+    en_how = "by username" if kind == "username" else "as Telegram gifts"
+    en_desc = ("Automatic delivery in 1-5 minutes. Send your Telegram @username after payment and the Stars "
+               "will arrive on your account." if kind == "username" else
+               "Automatic delivery as Telegram gifts in 1-5 minutes. Send your Telegram @username after payment "
+               "and the gifts will arrive on your account.")
     for key in list(f):
-        if description and key.startswith("fields[desc]"):
-            f[key] = description
+        if key.startswith("fields[desc]"):
+            if key.endswith("[ru]"):
+                if description:
+                    f[key] = description
+            else:
+                f[key] = en_desc
         # «Краткое описание» обязательно, а у лота-образца в нём другой номинал — всегда пишем своё
         if key.startswith("fields[summary]"):
             f[key] = (f"{stars} звёзд Telegram {how}, автовыдача" if key.endswith("[ru]")
-                      else f"{stars} Telegram Stars, instant delivery")
+                      else f"{stars} Telegram Stars {en_how}, instant delivery")
     if "fields[summary][ru]" not in f:
         f["fields[summary][ru]"] = f"{stars} звёзд Telegram {how}, автовыдача"
     return f

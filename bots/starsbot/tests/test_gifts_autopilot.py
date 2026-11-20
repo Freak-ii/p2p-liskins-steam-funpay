@@ -300,3 +300,12 @@ def test_build_lot_fields_rewrites_template_summary_and_inactive():
                "fields[method]": [("1", "По username"), ("2", "Подарком")]}
     f = build_lot_fields(base, selects, stars=250, kind="username", price=500, amount=1, active=False)
     assert f["fields[summary][ru]"].startswith("250 звёзд") and "active" not in f and "deleted" not in f
+
+
+def test_build_lot_fields_english_fields_get_english_text():
+    base = {"fields[quantity]": "1", "fields[method]": "1", "fields[desc][ru]": "", "fields[desc][en]": "",
+            "fields[summary][en]": ""}
+    selects = {"fields[quantity]": [("1", "50 звёзд")], "fields[method]": [("1", "По username")]}
+    f = build_lot_fields(base, selects, stars=50, kind="username", price=80, amount=1, description="Автовыдача")
+    assert f["fields[desc][ru]"] == "Автовыдача"
+    assert f["fields[desc][en]"].isascii() and f["fields[summary][en]"].isascii()
