@@ -14,6 +14,7 @@ import io
 import datetime as dt
 import hmac
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from starsbot.config import DENOMINATIONS
 from starsbot.core import messages as M
 from starsbot.core.models import OrderStatus as S
 from starsbot.web import charts
+
+log = logging.getLogger("starsbot.web")
 
 TPL_DIR = Path(__file__).parent / "templates"
 STATUS_COLORS = {"new": "gray", "awaiting_username": "blue", "pending_approval": "amber", "ready": "blue",
@@ -95,13 +98,39 @@ def make_app(sup, log_handler=None) -> web.Application:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(TPL_DIR), autoescape=True)
     env.filters.update(ts=_ts, dur=fmt_dur, st=lambda s: M.status_text("ru", s),
                        jsonload=lambda s: json.loads(s or "{}"), tojson=lambda o: json.dumps(o, ensure_ascii=False))
-    env.filters["money"] = lambda v: "—" if v is None else f"{float(v):,.2f}".replace(",", " ").replace(".00", "")
-    env.filters["ton"] = lambda v: "—" if v is None else f"{float(v):.4f}".rstrip("0").rstrip(".")
+    def _fnum(v):
+        # None, пустая строка и неопределённое поле (кошелёк ещё ни разу не проверялся) — «нет данных»
+        if v is None or isinstance(v, jinja2.Undefined) or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    env.filters["money"] = lambda v: "—" if _fnum(v) is None else f"{_fnum(v):,.2f}".replace(",", " ").replace(".00", "")
+    env.filters["ton"] = lambda v: "—" if _fnum(v) is None else f"{_fnum(v):.4f}".rstrip("0").rstrip(".")
     env.filters["md"] = lambda d: str(d)[5:]
     env.filters["hm"] = lambda v: dt.datetime.fromtimestamp(float(v)).strftime("%d.%m %H:%M")
     env.globals.update(colors=STATUS_COLORS, statuses=[s.value for s in S], charts=charts, state_text=STATE_TEXT,
                        role_titles=ROLE_TITLES, cashflow_kinds=CASHFLOW_KINDS,
                        segments_of=segments_of)
+
+    def friendly(path: str):
+        # ошибка FunPay/сети/Telegram в кнопке панели — сообщение на странице, а не 500
+        def deco(fn):
+            async def wrapper(request: web.Request):
+                try:
+                    return await fn(request)
+                except web.HTTPException:
+                    raise
+                except Exception as e:                       # noqa: BLE001
+                    log.exception("panel action %s failed", path)
+                    raise web.HTTPFound(URL(path).with_query(msg=f"Ошибка: {e}"[:600]))
+            return wrapper
+        return deco
+
+    def wallet_kv() -> dict:
+        # до первой проверки кошелька в базе ничего нет — шаблоны получают поля со значением None
+        return {"balance": None, "capacity": None, "committed": None, "ts": None, **(sup.db.kv_get("wallet") or {})}
 
     # ------------------------------------------------------------------ доступ
     def tokens() -> dict[str, str]:
@@ -202,7 +231,7 @@ def make_app(sup, log_handler=None) -> web.Application:
                       denoms=a.denominations(days), cap=sup.econ.wallet_capacity(),
                       recs=db.q("SELECT * FROM recommendations WHERE active=1 ORDER BY severity, ts DESC"),
                       active=db.active_orders()[:20], status=sup.engine.status_text(),
-                      fragment=sup.engine.fragment_status, wallet=db.kv_get("wallet") or {},
+                      fragment=sup.engine.fragment_status, wallet=wallet_kv(),
                       rate=sup.econ.effective_rate(), safety=sup.cfg.safety, live_done=sup.engine.live_purchases(),
                       spent24=sup.engine.spent_ton_24h(), cookie_age=sup.engine.fragment_cookie_age_days(),
                       warn_days=float(sup.cfg.fragment.get("session_warn_days") or 0),
@@ -341,7 +370,7 @@ def make_app(sup, log_handler=None) -> web.Application:
                       ozon_calc=ozon_calc, oz=sup.cfg.get("ozon") or {},
                       custom=custom, rate=rate, rate_src=rate_src, market=getattr(sup.engine.rates, "value", None),
                       tps=econ.ton_per_star(), cps=econ.cost_per_star_rub(), cap=econ.wallet_capacity(),
-                      rec=econ.reconcile(), wallet=db.kv_get("wallet") or {}, e=sup.cfg.economics,
+                      rec=econ.reconcile(), wallet=wallet_kv(), e=sup.cfg.economics,
                       balance=sup.analytics.balance_series(300),
                       journal=db.q("SELECT * FROM cashflow ORDER BY id DESC LIMIT 100"))
 
@@ -400,7 +429,7 @@ def make_app(sup, log_handler=None) -> web.Application:
             msg = "Запись удалена"
         elif act == "reset_start":
             need(request, "admin")
-            w = sup.db.kv_get("wallet") or {}
+            w = wallet_kv()
             if w.get("balance") is None:
                 raise back(request, "Баланс кошелька ещё не получен", "/money")
             # сверка считает от точки отсчёта: пополнения до неё уже входят в стартовый баланс
@@ -430,6 +459,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         return render("ozon.html", request, ch=ch, oz=sup.cfg.ozon, s=ch.summary(), codes=codes, attention=attention,
                       calc=sup.econ.calculator(channel="ozon"))
 
+    @friendly("/ozon")
     async def ozon_action(request: web.Request):
         need(request, "admin")
         ch = sup.engine.channels.get("ozon")
@@ -666,6 +696,7 @@ def make_app(sup, log_handler=None) -> web.Application:
                       has_session=bool(getattr(svc.tg, "has_session", False)), login=request.query.get("login", ""),
                       secret=lambda s_, k: sup.secret_is_set(s_, k))
 
+    @friendly("/gifts")
     async def gifts_action(request: web.Request):
         need(request, "admin")
         f = await request.post()
@@ -761,6 +792,7 @@ def make_app(sup, log_handler=None) -> web.Application:
                       ap=ap.status(), fp=sup.cfg.funpay, rtba=sup.cfg.rtba, gifts_on=bool((sup.cfg.get("gifts") or {})
                                                                                            .get("enabled")))
 
+    @friendly("/funpay")
     async def funpay_action(request: web.Request):
         need(request, "admin")
         f = await request.post()
@@ -821,11 +853,12 @@ def make_app(sup, log_handler=None) -> web.Application:
         ap = e.autopilot
         w = e.wallet
         wd = sup.db.q("SELECT * FROM withdrawals ORDER BY id DESC LIMIT 30")
-        return render("crypto.html", request, w=w, winfo=sup.db.kv_get("wallet") or {}, ton=sup.cfg.ton,
+        return render("crypto.html", request, w=w, winfo=wallet_kv(), ton=sup.cfg.ton,
                       ap=ap.status(), acfg=sup.cfg.get("autopilot") or {}, withdrawals=wd,
                       key_kind=getattr(w, "key_kind", ""), mnemonic_set=sup.secret_is_set("ton", "mnemonic"),
                       rec=sup.econ.reconcile(), rate=sup.econ.effective_rate()[0])
 
+    @friendly("/crypto")
     async def crypto_action(request: web.Request):
         need(request, "admin")
         f = await request.post()
