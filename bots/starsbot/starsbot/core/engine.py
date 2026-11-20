@@ -1570,6 +1570,11 @@ class Engine:
 
     async def start(self) -> None:
         other = self.take_lease()
+        for _ in range(int(self.LEASE_TTL // 5) + 2):    # перезапуск: прежний процесс ещё закрывается
+            if not other:
+                break
+            await asyncio.sleep(5)
+            other = self.take_lease()
         if other:
             raise RuntimeError(f"уже работает другой экземпляр StarsBot на этой базе (pid {other.get('pid')}). "
                                "Закройте его (диспетчер задач → python.exe) и запустите бота снова.")
