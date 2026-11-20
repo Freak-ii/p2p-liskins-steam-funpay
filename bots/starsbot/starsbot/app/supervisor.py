@@ -222,7 +222,11 @@ class Supervisor:
             self.engine = GiftShopEngine(cfg, self.db, fp, fragment, wallet, self.notifier, rates, coord)
         else:
             self.engine = Engine(cfg, self.db, fp, fragment, wallet, self.notifier, rates, coord)
-        self.econ = Economics(cfg, self.db, rates, self.engine)
+        if shop:
+            from starsbot.giftshop.engine import shop_economics
+            self.econ = shop_economics(cfg, self.db, rates, self.engine)
+        else:
+            self.econ = Economics(cfg, self.db, rates, self.engine)
         self.engine.econ = self.econ
         self.analytics = Analytics(cfg, self.db, self.notifier, self.engine)
         self.engine.analytics = self.analytics

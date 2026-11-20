@@ -9,7 +9,7 @@ import logging
 import time
 from pathlib import Path
 
-from center.bots import BotWorker, LisBotWorker, MannBotWorker, StarsBotWorker
+from center.bots import BotWorker, LisBotWorker, MannBotWorker, StarsBotWorker, TgGiftWorker
 from center.config import CenterConfig
 from center.events import EventStore
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
@@ -33,6 +33,9 @@ class Center:
             "starsbot": StarsBotWorker(self.home / "starsbot", self.events, port=ws.get("port", 8803),
                                        restart=restart, executable=ws.get("python") or "", demo=demo),
         }
+        wg = self.cfg.worker("tggift")
+        self.workers["tggift"] = TgGiftWorker(self.home / "tggift", self.events, port=wg.get("port", 8805),
+                                              restart=restart, executable=wg.get("python") or "", demo=demo)
         self.summaries: dict[str, dict | None] = {n: None for n in self.workers}
         self.summary_at: dict[str, float] = {}
         self.quit_event = asyncio.Event()

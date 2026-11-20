@@ -253,3 +253,30 @@ class GiftShopEngine(Engine):
                                                throttle_key=f"pg:{lot['offer_id']}")
             except (FunPayError, ValueError) as e:
                 log.warning("защита цены, лот %s: %s", lot.get("offer_id"), e)
+
+
+def shop_economics(cfg, db, rates, engine):
+    """Экономика TG Gift: себестоимость заказа — звёзды подарков × ₽ за звезду (cost_rub заказа), без TON."""
+    from starsbot.economics import Economics, Flow
+
+    class ShopEconomics(Economics):
+        def order_flow(self, o) -> Flow:
+            price = float(o["price"] or 0)
+            fee_pct, wd_pct = self.fee_pcts("funpay")
+            fp_fee = price * fee_pct / 100
+            wd_fee = (price - fp_fee) * wd_pct / 100
+            net = price - fp_fee - wd_fee
+            cost = float(o["cost_rub"]) if o["cost_rub"] is not None else None
+            if cost is None and o["gift_cost"] and engine.cost_per_star_rub():
+                cost = int(o["gift_cost"]) * float(engine.cost_per_star_rub())
+            profit = net - cost if cost is not None else None
+            keep = (1 - fee_pct / 100) * (1 - wd_pct / 100)
+            return Flow(stars=int(o["stars"] or 0), price=round(price, 2), funpay_fee=round(fp_fee, 2),
+                        withdraw_fee=round(wd_fee, 2), net_rub=round(net, 2), ton_stars=0.0, ton_gas=0.0,
+                        ton_total=0.0, ton_rate=None, cost_rub=round(cost, 2) if cost is not None else None,
+                        profit=round(profit, 2) if profit is not None else None,
+                        margin_pct=round(profit / price * 100, 1) if profit is not None and price else None,
+                        breakeven_price=round(cost / keep, 2) if cost is not None and keep > 0 else None,
+                        ton_per_star=None)
+
+    return ShopEconomics(cfg, db, rates, engine)
