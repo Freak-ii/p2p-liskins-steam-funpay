@@ -114,6 +114,43 @@ DEFAULTS: dict[str, Any] = {
             "require_approval": True,    # каждый вывод — после кнопки в Telegram/панели
         },
     },
+    # Казначейство: все балансы в одном месте, автопополнение кошелька бота с Bybit/хаба, советы по выводу
+    "treasury": {
+        "enabled": False,
+        "auto": True,                    # двигать деньги самому в пределах лимитов; False — каждый шаг по кнопке
+        "interval_seconds": 120,
+        "burn_days": 7,                  # за сколько дней считать расход TON
+        "fallback_burn_rub_day": 60000,  # расход, пока статистики мало (звёзды ~30к + подарки ~30к ₽/сутки)
+        "usdt_rub": 86.8,                # цена USDT на P2P с переводом (если не записаны свои покупки)
+        "daily_report_hour": 10,
+        "working": {"refill_below_hours": 8, "refill_to_hours": 24},   # кошелёк бота: запас в часах расхода
+        "hub": {
+            "enabled": False,            # отдельный кошелёк с основным запасом TON (вторая сид-фраза)
+            "mnemonic": "", "address": "", "version": "v5r1", "mnemonic_type": "auto",
+            "refill_below_hours": 12, "keep_hours": 48,
+        },
+        "bybit": {
+            "enabled": False,
+            "api_key": "", "api_secret": "",
+            "base_url": "https://api.bybit.com",   # для других регионов: api.bybit.kz, api.bybit.eu, api.bytick.com
+            "symbol": "TONUSDT", "withdraw_chain": "TON",
+            "max_slippage_pct": 0.5,     # покупать не дороже ask + 0.5%
+            "min_withdraw_ton": 20,      # выводить партиями не меньше (комиссия вывода фиксированная)
+            "max_withdraw_ton_day": 3000,
+            "max_buy_usdt_day": 5000,
+            "keep_usdt": 0,
+        },
+        "p2p": {"trigger_days": 1.5, "target_days": 3, "min_buy_rub": 25000, "cooldown_hours": 20},
+        "router": {
+            "enabled": True,
+            "min_batch_rub": 20000,      # выводить только крупными суммами
+            "max_batch_rub": 150000,     # не больше за один вывод на карту
+            "cooldown_hours": 24,        # не чаще одного вывода на карту за столько часов
+            "max_per_day": 1,
+            "keep_rub": 0,
+            "sources": [],               # переопределения: [{key: funpay, fee_pct: 6, margin_pct: 1, ...}]
+        },
+    },
     "fragment": {
         "cookies": "",                   # stel_ssid=…; stel_dt=…; stel_token=…; stel_ton_token=…
         "user_agent": "",                # User-Agent браузера, из которого взяты cookie (пусто — как у FunPay)

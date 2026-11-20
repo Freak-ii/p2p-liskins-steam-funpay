@@ -1048,6 +1048,92 @@ def make_app(sup, log_handler=None) -> web.Application:
         return web.Response(body=p.read_bytes(), content_type="text/plain", charset="utf-8",
                             headers={"Content-Disposition": f'attachment; filename="{p.name}"'})
 
+    # ------------------------------------------------------------------ Казначейство
+    async def treasury_page(request: web.Request):
+        tr = sup.engine.treasury
+        if tr is None:
+            raise web.HTTPFound("/")
+        if request.query.get("refresh") and tr.enabled:
+            try:
+                await tr.refresh()
+            except Exception as e:  # noqa: BLE001
+                log.warning("treasury refresh: %s", e)
+        return render("treasury.html", request, tr=tr.status(), t=sup.cfg.get("treasury") or {},
+                      moves=tr.moves(), advices=tr.advices(), wplan=tr.withdraw_plan() if tr.snap else [],
+                      sources=tr.sources(include_off=True), summary=tr.summary_text() if tr.snap else "",
+                      bybit_key_set=sup.secret_is_set("treasury.bybit", "api_key"),
+                      hub_set=sup.secret_is_set("treasury.hub", "mnemonic"),
+                      wallet_addr=getattr(sup.engine.wallet, "friendly_address", ""),
+                      hub_addr=getattr(tr.hub, "friendly_address", "") if tr.hub is not None else "")
+
+    @friendly("/treasury")
+    async def treasury_action(request: web.Request):
+        need(request, "admin")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        tr = sup.engine.treasury
+        if act == "save":
+            srcs = []
+            for src in tr.sources(include_off=True):
+                k = src["key"]
+                srcs.append({"key": k, "fee_pct": _num_in(f.get(f"fee_{k}"), src.get("fee_pct") or 0, float),
+                             "margin_pct": _num_in(f.get(f"margin_{k}"), src.get("margin_pct") or 3, float),
+                             "method": str(f.get(f"method_{k}", src.get("method") or "")).strip()[:80],
+                             "enabled": f.get(f"on_{k}") == "on"})
+            upd = {"treasury": {
+                "enabled": f.get("enabled") == "on", "auto": f.get("auto") == "on",
+                "usdt_rub": _num_in(f.get("usdt_rub"), 86.8, float),
+                "fallback_burn_rub_day": _num_in(f.get("fallback_burn_rub_day"), 60000, float),
+                "working": {"refill_below_hours": _num_in(f.get("refill_below_hours"), 8, float),
+                            "refill_to_hours": _num_in(f.get("refill_to_hours"), 24, float)},
+                "hub": {"enabled": f.get("hub_enabled") == "on",
+                        "mnemonic": " ".join(str(f.get("hub_mnemonic", "")).split()),
+                        "address": str(f.get("hub_address", "")).strip(),
+                        "refill_below_hours": _num_in(f.get("hub_refill_below_hours"), 12, float),
+                        "keep_hours": _num_in(f.get("hub_keep_hours"), 48, float)},
+                "bybit": {"enabled": f.get("bybit_enabled") == "on",
+                          "api_key": str(f.get("bybit_key", "")).strip(),
+                          "api_secret": str(f.get("bybit_secret", "")).strip(),
+                          "base_url": str(f.get("bybit_base", "") or "https://api.bybit.com").strip(),
+                          "max_slippage_pct": _num_in(f.get("max_slippage_pct"), 0.5, float),
+                          "min_withdraw_ton": _num_in(f.get("min_withdraw_ton"), 20, float),
+                          "max_withdraw_ton_day": _num_in(f.get("max_withdraw_ton_day"), 3000, float),
+                          "max_buy_usdt_day": _num_in(f.get("max_buy_usdt_day"), 5000, float)},
+                "p2p": {"trigger_days": _num_in(f.get("trigger_days"), 1.5, float),
+                        "target_days": _num_in(f.get("target_days"), 3, float),
+                        "min_buy_rub": _num_in(f.get("min_buy_rub"), 25000, float)},
+                "router": {"min_batch_rub": _num_in(f.get("min_batch_rub"), 20000, float),
+                           "max_batch_rub": _num_in(f.get("max_batch_rub"), 150000, float),
+                           "cooldown_hours": _num_in(f.get("cooldown_hours"), 24, float),
+                           "max_per_day": _num_in(f.get("max_per_day"), 1),
+                           "sources": srcs}}}
+            sup.save(upd)
+            msg = "Сохранено" + (". Перезапустите бота, чтобы применить" if sup.restart_required else "")
+        elif act == "balance":
+            msg = tr.set_source_balance(str(f.get("key", "")), _num_in(f.get("rub"), 0, float))
+        elif act == "p2p":
+            msg = tr.record_p2p(_num_in(f.get("rub"), 0, float), _num_in(f.get("usdt"), 0, float))
+        elif act == "approve":
+            msg = await tr.approve(_num_in(f.get("id"), 0))
+        elif act == "reject":
+            msg = tr.reject(_num_in(f.get("id"), 0))
+        elif act in ("resolve_ok", "resolve_fail"):
+            msg = tr.resolve(_num_in(f.get("id"), 0), act == "resolve_ok")
+        elif act == "advice_done":
+            msg = tr.advice_done(_num_in(f.get("id"), 0))
+        elif act == "advice_skip":
+            msg = tr.advice_skip(_num_in(f.get("id"), 0))
+        elif act == "run":
+            if not tr.enabled:
+                msg = "Включите казначейство в настройках ниже"
+            else:
+                await tr.tick()
+                msg = "Проверено: " + (tr.snap.get("plan") or "действий не нужно")
+        else:
+            msg = "?"
+        audit(request, f"treasury.{act}", "", msg)
+        raise web.HTTPFound(URL("/treasury").with_query(msg=msg[:800]))
+
     # ------------------------------------------------------------------ Кошелёк и автопилот
     async def crypto_page(request: web.Request):
         e = sup.engine
@@ -1191,6 +1277,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.get("/customers/{cid:\\d+}", customer),
         web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing),
+        web.get("/treasury", treasury_page), web.post("/treasury", treasury_action),
         web.get("/money", money), web.post("/money", money_action), web.post("/api/calc", api_calc),
         web.get("/analytics", analytics_page), web.get("/alerts", alerts),
         web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),

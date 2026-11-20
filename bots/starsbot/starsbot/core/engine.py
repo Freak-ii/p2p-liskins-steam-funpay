@@ -62,6 +62,7 @@ class Engine:
         self.channels: dict[str, Any] = {}     # другие площадки продаж, например «ozon» (starsbot.ozon.channel)
         self.gifts = None                      # starsbot.gifts.service.GiftService — выдача подарками Telegram
         self.premium = None                    # starsbot.premium.service.PremiumService — продажа Telegram Premium
+        self.treasury = None                   # starsbot.treasury.service.Treasury — балансы и пополнение кошелька
         self.risk = RiskEngine(cfg.risk, db)
         self.rtba = RTBAEngine(cfg.rtba)
         self.queue: asyncio.Queue[str] = asyncio.Queue()
@@ -1445,6 +1446,20 @@ class Engine:
             return await ap.execute_withdraw(int(args[0]))
         if cmd == "withdraw_no" and ap is not None and args:
             return ap.cancel_withdraw(int(args[0]))
+        tr = getattr(self, "treasury", None)
+        if tr is not None and cmd.startswith("treasury"):
+            n = int(args[0]) if args and args[0].isdigit() else 0
+            if cmd == "treasury_ok":
+                return await tr.approve(n)
+            if cmd == "treasury_no":
+                return tr.reject(n)
+            if cmd == "treasury_done":
+                return tr.advice_done(n)
+            if cmd == "treasury_skip":
+                return tr.advice_skip(n)
+            if cmd == "treasury":
+                await tr.refresh()
+                return tr.summary_text()
         if cmd == "support" and ap is not None:
             due = ap.unconfirmed(float(ap.acfg.get("support_after_hours") or 72))
             return ap.make_support_file(due) if due else "неподтверждённых заказов старше порога нет"
@@ -1803,6 +1818,9 @@ class Engine:
             loops.append(self._loop("autopilot", 300, self.autopilot.tick))
         if self.premium is not None:
             loops += self.premium.loops(self._loop)
+        tr = getattr(self, "treasury", None)
+        if tr is not None and tr.enabled:
+            loops.append(self._loop("treasury", float(tr.t.get("interval_seconds") or 120), tr.tick))
         for ch in self.channels.values():
             loops += ch.loops(self._loop)
         self._tasks = [asyncio.create_task(c) for c in loops]
