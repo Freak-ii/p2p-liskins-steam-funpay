@@ -1,6 +1,8 @@
 import asyncio
 import sys
 
+import pytest
+
 from center.events import EventStore
 from center.workers import CRASHED, NOT_CONFIGURED, RUNNING, STOPPED, Worker
 
@@ -79,4 +81,67 @@ def test_missing_executable_reported(tmp_path):
         await w.start()
         assert await wait_for(lambda: w.state == "missing_deps")
         assert "не удалось запустить" in w.detail
+    asyncio.run(go())
+
+
+class AdoptingWorker(FakeWorker):
+    """Бот «остался жить» после падения центра: find_running сообщает его pid."""
+
+    adopt_poll_seconds = 0.05
+    adopt_max_misses = 2
+
+    def __init__(self, *a, orphan=None, **kw):
+        super().__init__(*a, **kw)
+        self.orphan = orphan
+
+    async def find_running(self):
+        if self.orphan is not None and self.orphan.poll() is None:
+            return self.orphan.pid
+        return None
+
+    async def health(self):
+        if self.adopted:
+            return self.orphan.poll() is None
+        return await super().health()
+
+
+def _orphan():
+    import subprocess
+    import threading
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    threading.Thread(target=p.wait, daemon=True).start()     # как init у настоящего осиротевшего процесса
+    return p
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="на Windows бот завершается вместе с центром (Job Object)")
+def test_adopts_running_bot_instead_of_second_copy(tmp_path):
+    async def go():
+        orphan = _orphan()
+        w, ev = make(tmp_path, "import time\ntime.sleep(30)")
+        w.__class__ = AdoptingWorker
+        w.orphan = orphan
+        await w.start("автозапуск центра")
+        assert await wait_for(lambda: w.state == RUNNING)
+        assert w.adopted and w.proc is None and w.pid == orphan.pid and w.alive
+        assert w.info()["pid"] == orphan.pid
+        assert "worker.adopted" in [e["kind"] for e in ev.recent()]
+        await w.stop()
+        assert await wait_for(lambda: orphan.poll() is not None)  # остановка из центра доходит и до подхваченного
+        assert w.state == STOPPED and not w.alive
+    asyncio.run(go())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="на Windows бот завершается вместе с центром (Job Object)")
+def test_adopted_bot_dies_center_starts_own(tmp_path):
+    async def go():
+        orphan = _orphan()
+        w, ev = make(tmp_path, "import time\nprint('own', flush=True)\ntime.sleep(30)")
+        w.__class__ = AdoptingWorker
+        w.orphan = orphan
+        await w.start()
+        assert await wait_for(lambda: w.adopted)
+        orphan.kill()
+        assert await wait_for(lambda: w.proc is not None and any(ln["text"] == "own" for ln in w.logs()))
+        assert not w.adopted and w.restarts == 1
+        await w.stop()
     asyncio.run(go())

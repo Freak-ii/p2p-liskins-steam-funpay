@@ -26,6 +26,8 @@ def test_auth_overview_and_secrets(tmp_path):
             assert s["LIS_API_KEY"] == "abc" and s["STEAM_PASSWORD"] == "" and s["STEAM_PASSWORD_SET"]
             r = await c.post("/api/workers/lisbot/pause")
             assert r.status == 409                                # бот не запущен — команда не уходит
+            r = await c.get("/api/mannbot/settings")
+            assert r.status == 409                                # настройки MannBot идут через запущенный процесс
             r = await c.post("/api/workers/nope/start")
             assert r.status == 404
             r = await c.post("/api/workers/lisbot/start", headers={"Origin": "http://evil.example"})

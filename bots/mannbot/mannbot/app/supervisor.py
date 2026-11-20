@@ -26,7 +26,8 @@ log = logging.getLogger("app")
 
 SECRET_FIELDS = {("funpay", "golden_key"), ("steam", "password"), ("steam", "shared_secret"),
                  ("steam", "identity_secret"), ("steam", "login_secure_cookie"), ("steam", "api_key"),
-                 ("notifications.telegram", "bot_token"), ("dashboard", "token")}
+                 ("notifications.telegram", "bot_token"), ("dashboard", "token"),
+                 ("ai", "api_key")}
 
 
 class MemoryLogHandler(logging.Handler):
@@ -55,6 +56,7 @@ class Supervisor:
         self.overrides = overrides or {}
         self.raw: dict = self._read_raw()
         self.cfg: Section = self._load()
+        self._apply_patch_file()
         db_path = self.cfg.general.database
         if db_path != ":memory:" and not Path(db_path).is_absolute():
             db_path = str(self.home / db_path)
@@ -66,6 +68,7 @@ class Supervisor:
         self.task: asyncio.Task | None = None
         self._started_once = False
         self.quit_event: asyncio.Event | None = None     # выставляется кнопкой «Выход» в интерфейсе
+        self.tg_task: asyncio.Task | None = None
         self.engine: Engine
         self.analytics: Analytics
         self.notifier: Notifier
@@ -83,6 +86,80 @@ class Supervisor:
             cfg.general.log_file = str(self.home / cfg.general.log_file)
         M.set_overrides(cfg.get("messages"))
         return cfg
+
+    def _apply_patch_file(self) -> None:
+        """config.patch.yaml рядом с config.yaml — разовая правка настроек без секретов (как у StarsBot):
+        сливается в config.yaml при запуске и переименовывается в config.patch.applied.yaml.
+        Так настройки можно поправить удалённо, не открывая файл с ключами."""
+        patch = self.home / "config.patch.yaml"
+        if not patch.exists():
+            return
+        try:
+            upd = yaml.safe_load(patch.read_text(encoding="utf-8-sig")) or {}
+            if not isinstance(upd, dict):
+                raise ValueError("ожидается словарь секций")
+            for section, key in SECRET_FIELDS:              # секреты через патч не меняются
+                node = upd
+                for part in section.split("."):
+                    node = node.get(part) if isinstance(node, dict) else None
+                if isinstance(node, dict):
+                    node.pop(key, None)
+            self.save(upd, rebuild=False)
+            patch.replace(self.home / "config.patch.applied.yaml")
+            log.warning("применены настройки из config.patch.yaml: %s", ", ".join(upd))
+        except Exception as e:  # noqa: BLE001
+            log.error("config.patch.yaml не применён: %s", e)
+
+    # ------------------------------------------------------------------ удалённые команды файлом
+    @property
+    def remote_dir(self) -> Path | None:
+        return None if self.db.path == ":memory:" else Path(self.db.path).parent
+
+    async def remote_inbox_once(self) -> int:
+        """Команды из файла data/remote_cmd.txt, по одной в строке, как в Telegram: «run», «stop», «pause»,
+        «approve ABC»… Файл забирается и удаляется, ответы дописываются в data/remote_cmd.out.txt.
+        Работает и когда торговля остановлена (тогда «run» запускает бота)."""
+        folder = self.remote_dir
+        if folder is None:
+            return 0
+        inbox, out = folder / "remote_cmd.txt", folder / "remote_cmd.out.txt"
+        if not inbox.exists():
+            return 0
+        work = folder / "remote_cmd.work.txt"
+        inbox.replace(work)
+        lines = [ln.strip().lstrip("/") for ln in work.read_text(encoding="utf-8-sig").splitlines()]
+        work.unlink()
+        done = 0
+        for line in lines:
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            cmd = parts[0].lower()
+            try:
+                if cmd == "stop":
+                    res = await self.stop()
+                else:
+                    res = await self.handle_command(cmd, parts[1:])
+            except Exception as e:  # noqa: BLE001
+                res = f"ошибка: {e!r}"
+            done += 1
+            log.warning("удалённая команда «%s»: %s", line, str(res)[:300])
+            with out.open("a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} > {line}\n{res}\n\n")
+        return done
+
+    def start_remote_inbox(self, interval: float = 5) -> None:
+        if getattr(self, "remote_task", None):
+            return
+
+        async def loop() -> None:
+            while True:
+                try:
+                    await self.remote_inbox_once()
+                except Exception:  # noqa: BLE001
+                    log.exception("remote_cmd.txt")
+                await asyncio.sleep(interval)
+        self.remote_task = asyncio.create_task(loop())
 
     def ensure_token(self) -> str:
         token = str(self.cfg.dashboard.token or "")
@@ -152,6 +229,7 @@ class Supervisor:
                               coordinator=coord)
             steam = SteamClient(cfg.steam, dry_run=cfg.general.dry_run)
         self.engine = Engine(cfg, self.db, fp, steam, self.notifier, coord=coord)
+        self.engine.external_commands = True
         self.analytics = Analytics(cfg, self.db, self.notifier, self.engine)
         self.engine.analytics = self.analytics
 
@@ -215,6 +293,31 @@ class Supervisor:
 
     async def shutdown(self) -> None:
         await self.stop()
+        if self.tg_task:
+            self.tg_task.cancel()
+            await asyncio.gather(self.tg_task, return_exceptions=True)
+            await self._tg.close()
+
+    # ------------------------------------------------------------------ команды Telegram
+    def start_telegram(self) -> None:
+        """Команды Telegram слушаются всё время работы приложения, а не только пока бот вошёл в FunPay и Steam:
+        иначе при любой ошибке входа бот молчал бы, и узнать, что случилось, или запустить его было бы нельзя."""
+        if self.tg_task or self.demo or self.cfg.general.demo:
+            return
+        self._tg = Notifier(self.cfg.notifications, self.db)
+        self._tg.command_handler = self.handle_command
+        self.tg_task = asyncio.create_task(self._tg.poll_commands(lambda: self.cfg.notifications.telegram))
+
+    async def handle_command(self, cmd: str, args: list[str]) -> str:
+        if self.state == "running":
+            if cmd == "run":
+                return "Бот уже запущен"
+            return await self.engine.handle_command(cmd, args)
+        if cmd == "run":
+            return await self.start()
+        state = {"stopped": "остановлен", "starting": "запускается", "error": "остановился с ошибкой"}.get(self.state, self.state)
+        return (f"⏹ Бот {state}" + (f": {self.last_error}" if self.last_error else "") +
+                ("" if self.state == "starting" else "\n/run — запустить бота"))
 
     def status(self) -> dict:
         return {"state": self.state, "error": self.last_error, "configured": self.configured,
@@ -281,7 +384,13 @@ class Supervisor:
                         data = await r.json()
                         if not data.get("ok"):
                             return {"ok": False, "text": f"Telegram: {data.get('description')}"}
-            return {"ok": True, "text": "Тестовое сообщение отправлено в Telegram"}
+            saved = self.cfg.notifications.telegram
+            off = [n for ok, n in ((saved.enabled, "«Уведомления в Telegram»"),
+                                   (saved.commands, "«Управление командами из Telegram»")) if not ok]
+            if not saved.bot_token or not saved.admin_chat_ids:
+                off.insert(0, "сохранить токен и chat_id")
+            hint = f" Но уведомления и команды не заработают, пока не включено: {', '.join(off)}." if off else ""
+            return {"ok": True, "text": "Тестовое сообщение отправлено в Telegram." + hint}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "text": f"Telegram недоступен: {e}"}
         finally:

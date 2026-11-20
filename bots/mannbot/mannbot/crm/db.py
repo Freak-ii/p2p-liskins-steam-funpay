@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS recommendations (
 CREATE TABLE IF NOT EXISTS metrics (ts REAL, name TEXT, value REAL);
 CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(name, ts);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS ai_replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, chat_id TEXT, order_id TEXT, buyer TEXT, buyer_text TEXT,
+    draft TEXT, final_text TEXT, topic TEXT, confidence REAL, needs_seller INTEGER, reason TEXT,
+    status TEXT, issues TEXT DEFAULT '[]', model TEXT, latency_ms INTEGER, tokens_in INTEGER, tokens_out INTEGER,
+    rating INTEGER, decided_at REAL, decided_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_status ON ai_replies(status);
+CREATE INDEX IF NOT EXISTS idx_ai_chat ON ai_replies(chat_id, ts);
 """
 
 ORDER_COLUMNS = {
@@ -77,6 +85,7 @@ ORDER_COLUMNS = {
 
 class Database:
     def __init__(self, path: str | Path = ":memory:"):
+        self.path = str(path)
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
@@ -187,6 +196,16 @@ class Database:
     def set_blacklist(self, funpay_id: int, value: bool, note: str = "") -> None:
         self.exec("UPDATE customers SET blacklisted=?, notes=CASE WHEN ?<>'' THEN ? ELSE notes END "
                   "WHERE funpay_id=?", (int(value), note, note, funpay_id))
+
+    def update_customer(self, funpay_id: int, *, notes: str | None = None, tags: str | None = None) -> bool:
+        """Заметки и теги покупателя (правятся из панели MannBot и из CRM центра). False — нет такого покупателя."""
+        fields = {k: v for k, v in (("notes", notes), ("tags", tags)) if v is not None}
+        if not self.customer(funpay_id):
+            return False
+        if fields:
+            self.exec(f"UPDATE customers SET {','.join(f'{k}=?' for k in fields)} WHERE funpay_id=?",
+                      [*fields.values(), funpay_id])
+        return True
 
     def customers_with_steam_id(self, steam_id: str) -> list[sqlite3.Row]:
         return self.q("SELECT * FROM customers WHERE steam_ids LIKE ?", (f'%"{steam_id}"%',))

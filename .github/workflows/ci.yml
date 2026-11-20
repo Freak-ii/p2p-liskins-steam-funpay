@@ -1,7 +1,13 @@
 name: Tests
+# PR проверяется один раз (событие pull_request), а не дважды — ещё и пушем в ветку.
 on:
+  workflow_dispatch:
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   python:
     runs-on: ubuntu-latest
@@ -9,9 +15,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
       - run: pip install -r requirements.txt
+      - name: Зависимости LisBot (демо центра запускает настоящий LisBot на эмуляторе)
+        working-directory: bots/lisbot
+        run: npm ci --omit=dev
       - name: Центр
-        run: python -m pytest -q
+        run: python -m pytest -q -rs
       - name: MannBot
         working-directory: bots/mannbot
         run: python -m pytest -q
@@ -29,3 +40,16 @@ jobs:
         with: { node-version: "22" }
       - run: npm ci --omit=dev
       - run: npm test
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t resale-center .
+      - name: Центр стартует в контейнере и останавливается мягко
+        run: |
+          docker run -d --name rc -p 127.0.0.1:8800:8800 -e CENTER_SECRET_KEY=ci resale-center python -m center --no-browser --host 0.0.0.0 --demo --port 8800
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8800/api/ping && break; sleep 2; done
+          sleep 10
+          docker stop rc
+          docker logs rc 2>&1 | tail -20
+          docker logs rc 2>&1 | grep -q "Завершение работы центра"

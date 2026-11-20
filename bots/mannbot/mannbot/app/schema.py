@@ -77,6 +77,8 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("cancel_foreign_offers", "Отменять трейды, созданные не ботом", "bool", "Выключите, если сами торгуете с аккаунта"),
         ("decline_incoming_requests", "Отклонять входящие трейды, просящие ваши предметы", "bool", ""),
         ("inventory_drop_alert", "Тревога при пропаже ключей", "bool", ""),
+        ("accept_gifts_from", "Мост ключей: принимать ключи от SteamID64", "list",
+         "SteamID64 аккаунта LisBot, по одному в строке. Его обмены, где от вас ничего не просят и внутри только ключи, принимаются сами"),
     ]),
     ("notifications.telegram", [
         ("enabled", "Уведомления в Telegram", "bool", ""),
@@ -89,6 +91,22 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("throttle_seconds", "Повторять одинаковый алерт не чаще, сек", "int", ""),
         ("daily_report_hour", "Час ежедневного отчёта", "int", ""),
     ]),
+    ("ai", [
+        ("enabled", "ИИ-агент для покупателей включён", "bool", "Отвечает на сообщения, которые бот не понял. Без API-ключа не работает"),
+        ("api_key", "API-ключ Claude", "secret", "console.anthropic.com → API Keys"),
+        ("mode", "Режим", "choice:suggest|auto_safe",
+         "suggest — черновик на одобрение вам; auto_safe — безопасные темы отвечает сам, остальное на одобрение"),
+        ("auto_topics", "Темы для автоответа", "list",
+         "order_status, trade_link_help, delivery_help, stock_question, smalltalk, off_platform — по одной в строке"),
+        ("min_confidence", "Минимальная уверенность для автоответа (0–1)", "float", ""),
+        ("seller_tone", "Тон продавца", "str", "Как писать покупателям"),
+        ("model", "Модель Claude", "str", "По умолчанию claude-opus-5-5"),
+        ("effort", "Глубина размышления", "choice:low|medium|high", "low — быстрее и дешевле"),
+        ("max_calls_per_chat_hour", "Запросов к ИИ на чат в час, максимум", "int", "Защита от спама и расходов"),
+        ("draft_ttl_minutes", "Черновик устаревает через, мин", "int", "Устаревший нельзя одобрить в один клик"),
+        ("max_reply_chars", "Максимальная длина ответа", "int", ""),
+        ("backend", "Источник ответов", "choice:claude|stub", "stub — заглушка без сети для проверки"),
+    ]),
     ("sla", [
         ("link_wait_minutes", "Ожидание ссылки, мин", "int", ""),
         ("offer_accept_hours", "Ожидание принятия трейда, ч", "int", ""),
@@ -100,6 +118,7 @@ SECTION_TITLES = {
     "general": "Основное", "funpay": "FunPay", "steam": "Steam", "deal": "Сделка", "risk": "Риск-система",
     "rtba": "RTBA — автоцена", "security": "Безопасность аккаунта", "notifications.telegram": "Telegram",
     "notifications": "Уведомления", "sla": "Сроки (SLA)",
+    "ai": "ИИ-агент для покупателей",
 }
 
 MESSAGE_TITLES = {
