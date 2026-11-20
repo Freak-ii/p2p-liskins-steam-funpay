@@ -91,3 +91,19 @@ def test_run_command_starts_bot(tmp_path):
     sup.start = fake_start
     assert asyncio.run(sup.handle_command("run", [])) == "Бот запускается…" and started
     assert sup.engine.external_commands                    # движок сам Telegram не опрашивает
+
+
+def test_remote_cmd_file_and_config_patch(tmp_path):
+    """Удалённое управление как у StarsBot: config.patch.yaml при запуске и команды файлом data/remote_cmd.txt."""
+    (tmp_path / "config.patch.yaml").write_text("deal:\n  message_rate_limit_seconds: 7\nfunpay:\n  golden_key: evil\n",
+                                                encoding="utf-8")
+    sup = Supervisor(tmp_path)
+    assert sup.cfg.deal.message_rate_limit_seconds == 7
+    assert not sup.cfg.funpay.golden_key                        # секреты патчем не меняются
+    assert (tmp_path / "config.patch.applied.yaml").exists() and not (tmp_path / "config.patch.yaml").exists()
+    folder = sup.remote_dir
+    (folder / "remote_cmd.txt").write_text("# комментарий\nstatus\n", encoding="utf-8")
+    assert asyncio.run(sup.remote_inbox_once()) == 1
+    out = (folder / "remote_cmd.out.txt").read_text(encoding="utf-8")
+    assert "> status" in out and "Бот остановлен" in out
+    assert not (folder / "remote_cmd.txt").exists()

@@ -93,12 +93,13 @@ class Desktop:
         self.base_dir = app_dir.parent
         self.console = console
 
+        os.environ["CENTER_DESKTOP_UPDATES"] = "1"           # центр не показывает свою полоску обновлений: их ставит оболочка
         from center.config import CenterConfig
         root_home = Path(self.args.home).expanduser().resolve() if self.args.home else Path(os.environ["CENTER_HOME"])
         self.root_home = root_home
         self.home = root_home / "demo" if self.args.demo else root_home
         self.home.mkdir(parents=True, exist_ok=True)
-        cfg = CenterConfig(self.home)
+        cfg = CenterConfig(self.home, demo=bool(self.args.demo))
         if not (app_dir / "bots" / "lisbot").is_dir() and "lisbot" not in (cfg.user.get("workers") or {}):
             cfg.save({"workers": {"lisbot": {"enabled": False}}})   # сборка без LisBot
         self.port = int(self.args.port or cfg["center"]["port"])

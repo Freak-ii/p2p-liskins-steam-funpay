@@ -85,3 +85,17 @@ def test_starsbot_command_and_shared_coordination(tmp_path):
     s = stars._summary({"state": "running", "summary": {"orders": 3, "stars_sold": 300},
                         "wallet": {"balance": 12.34567, "capacity": 1000}, "fragment": {"session": "ok"}})
     assert s["kpi"]["Звёзд выдано"] == 300 and s["kpi"]["TON на кошельке"] == 12.346 and s["kpi"]["Fragment"] == "активна"
+
+
+def test_center_remote_cmd_file(tmp_path):
+    """Центром можно управлять файлом remote_cmd.txt в папке данных: статус и автозапуск без панели."""
+    import asyncio
+    from center.app import Center
+    c = Center(tmp_path)
+    (tmp_path / "remote_cmd.txt").write_text("status\nlisbot autostart_on\nnobot start\nmannbot pause\n", encoding="utf-8")
+    assert asyncio.run(c.remote_inbox_once()) == 4
+    out = (tmp_path / "remote_cmd.out.txt").read_text(encoding="utf-8")
+    assert "starsbot:" in out and "автозапуск с центром включён" in out
+    assert "неизвестный бот nobot" in out and "не запущен" in out
+    assert c.cfg.worker("lisbot")["autostart"] is True and not (tmp_path / "remote_cmd.txt").exists()
+    c.events.close()

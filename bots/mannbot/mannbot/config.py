@@ -36,6 +36,9 @@ DEFAULTS: dict[str, Any] = {
         "max_link_attempts": 3, "reminder_after_minutes": 15, "admin_alert_after_minutes": 120,
         "max_resends": 2, "trade_hold_policy": "require_fix", "cancel_offer_on_refund": True,
         "auto_refund_out_of_stock": False, "message_rate_limit_seconds": 2,
+        # проблема с выдачей (Steam не входит, трейд не создаётся/не подтверждается, сбой выдачи) → лоты скрываются,
+        # пока проблема не решится (Steam сам вернулся) или продавец не скажет /lots_on
+        "hold_lots_on_problems": True,
     },
     "risk": {
         "enabled": True, "manual_review_score": 60, "block_score": 90, "large_order_keys": 20,

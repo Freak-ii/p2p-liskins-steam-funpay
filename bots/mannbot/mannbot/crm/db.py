@@ -85,6 +85,7 @@ ORDER_COLUMNS = {
 
 class Database:
     def __init__(self, path: str | Path = ":memory:"):
+        self.path = str(path)
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)

@@ -122,8 +122,73 @@ class Center:
 
     async def _poll_loop(self) -> None:
         while True:
+            try:
+                await self.remote_inbox_once()
+            except Exception:  # noqa: BLE001
+                log.exception("remote_cmd.txt")
             await asyncio.gather(*(self.refresh(n) for n in self.workers), return_exceptions=True)
             await asyncio.sleep(float(self.cfg["center"].get("poll_seconds", 10)))
+
+    # ------------------------------------------------------------------ удалённые команды файлом
+    REMOTE_HELP = ("команды: status | <бот> start|stop|restart|autostart_on|autostart_off | "
+                   "<бот> bot_start|bot_stop|pause|resume (действия панели бота); боты: lisbot, mannbot, starsbot")
+
+    async def remote_command(self, line: str) -> str:
+        parts = line.split()
+        if not parts or parts[0].lower() in ("help", "помощь"):
+            return self.REMOTE_HELP
+        if parts[0].lower() == "status":
+            rows = []
+            for name, w in self.workers.items():
+                sm = self.summaries.get(name) or {}
+                rows.append(f"{name}: {w.state}{' · ' + w.detail if w.detail else ''}"
+                            f"{' · торговля ' + str(sm.get('bot_state')) if sm.get('bot_state') else ''}"
+                            f" · автозапуск {'вкл' if self.cfg.worker(name).get('autostart', True) else 'выкл'}")
+            return "\n".join(rows)
+        name, action = parts[0].lower(), (parts[1].lower() if len(parts) > 1 else "")
+        w = self.workers.get(name)
+        if w is None:
+            return f"неизвестный бот {name}; " + self.REMOTE_HELP
+        if action == "start":
+            return await w.start("файл remote_cmd.txt")
+        if action == "stop":
+            return await w.stop("файл remote_cmd.txt")
+        if action == "restart":
+            return await w.restart("файл remote_cmd.txt")
+        if action in ("autostart_on", "autostart_off"):
+            on = action == "autostart_on"
+            self.cfg.save({"workers": {name: {"autostart": on}}})
+            return f"{name}: автозапуск с центром {'включён' if on else 'выключен'}"
+        if action in w.actions:
+            if w.state != "running":
+                return f"{w.title} не запущен"
+            return await w.control(action)
+        return f"неизвестное действие {action!r}; " + self.REMOTE_HELP
+
+    async def remote_inbox_once(self) -> int:
+        """Команды центру файлом <папка данных>/remote_cmd.txt (по строке, например «mannbot start»,
+        «lisbot autostart_on», «status»). Файл забирается и удаляется, ответы дописываются в remote_cmd.out.txt.
+        Так центром можно управлять через доступ к папке, без входа в панель (как data/remote_cmd.txt у StarsBot)."""
+        inbox, out = self.home / "remote_cmd.txt", self.home / "remote_cmd.out.txt"
+        if not inbox.exists():
+            return 0
+        work = self.home / "remote_cmd.work.txt"
+        inbox.replace(work)
+        lines = [ln.strip() for ln in work.read_text(encoding="utf-8-sig").splitlines()]
+        work.unlink()
+        done = 0
+        for line in lines:
+            if not line or line.startswith("#"):
+                continue
+            try:
+                res = await self.remote_command(line)
+            except Exception as e:  # noqa: BLE001
+                res = f"ошибка: {e!r}"
+            done += 1
+            self.events.add("center", "info", "remote_cmd", f"remote_cmd.txt: {line} — {str(res)[:200]}")
+            with out.open("a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} > {line}\n{res}\n\n")
+        return done
 
     def overview(self) -> dict:
         bots = []

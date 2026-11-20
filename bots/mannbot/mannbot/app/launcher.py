@@ -101,6 +101,7 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
     if open_browser:
         webbrowser.open(url)
     sup.start_telegram()
+    sup.start_remote_inbox()
     want_autostart = sup.cfg.general.autostart if autostart is None else autostart
     if want_autostart and not demo:
         if sup.configured:

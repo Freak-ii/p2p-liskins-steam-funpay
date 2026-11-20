@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 import re
 import time
@@ -32,6 +33,8 @@ class Updates:
 
     @property
     def enabled(self) -> bool:
+        if os.environ.get("CENTER_DESKTOP_UPDATES") == "1":    # обновлениями занимается оболочка Windows (packaging/windows/desktop)
+            return False
         return bool(self.center.cfg["center"].get("update_check", True)) and not self.center.demo
 
     async def _fetch(self) -> list[dict]:

@@ -242,3 +242,31 @@ def test_center_share_raises_only_on_shared_account():
     except ShareUnavailable:
         pass
     assert asyncio.run(CenterShare().intent("1", "76561197960266728", 440, ["1"])) is None
+
+
+def test_lots_hidden_while_steam_is_down_and_back_after():
+    """Правило продавца: при проблеме с выдачей лоты закрываются; Steam вернулся — лоты возвращаются сами."""
+    db, notifier, fp, steam, engine, analytics = make()
+
+    async def go():
+        await engine.stock_sync()
+        assert fp.lot["active"] == "on" and int(fp.lot["amount"]) > 0
+        orig = steam.ensure_session
+
+        async def broken():
+            raise RuntimeError("steam down")
+        steam.ensure_session = broken
+        await engine.steam_auth_problem(RuntimeError("401"))
+        assert fp.lot["active"] == "" and db.kv_get("lots_hold")["auto"] == "steam"
+        await engine.stock_sync()                                   # сверка склада не возвращает лот, пока проблема
+        assert fp.lot["active"] == ""
+        assert "лоты скрыты" in engine.status_text()
+        steam.ensure_session = orig
+        await engine.steam_auth_problem(RuntimeError("401"))
+        assert fp.lot["active"] == "on" and not db.kv_get("lots_hold")
+        assert await engine.handle_command("lots_off", []) and fp.lot["active"] == ""
+        await engine.steam_auth_problem(RuntimeError("401"))       # ручное удержание Steam не снимает
+        assert fp.lot["active"] == ""
+        assert "выставлены" in await engine.handle_command("lots_on", []) and fp.lot["active"] == "on"
+    asyncio.run(go())
+    assert any("Лоты скрыты" in t for _, t in notifier.sent)
