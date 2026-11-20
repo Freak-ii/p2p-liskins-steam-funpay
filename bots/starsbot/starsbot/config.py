@@ -128,6 +128,9 @@ DEFAULTS: dict[str, Any] = {
         "pilot_orders": 3,              # первые N боевых покупок — только после /approve продавца
         "daily_ton_limit": 0.0,         # не тратить больше N TON за сутки без одобрения (0 — без лимита)
         "max_order_ton": 0.0,           # заказ дороже N TON — только после одобрения (0 — без лимита)
+        "min_profit_pct": 3.0,          # не покупать без одобрения, если чистая прибыль заказа меньше N% (0 — выкл)
+        "price_guard": True,            # поднимать цену лота, если она ниже безубытка + min_margin_pct из RTBA
+        "price_guard_minutes": 10,      # как часто проверять цены своих лотов
     },
     "rtba": {
         "enabled": False, "interval_seconds": 300, "strategy": "top1", "target_position": 1,

@@ -57,6 +57,7 @@ class Supervisor:
         self.overrides = overrides or {}
         self.raw: dict = self._read_raw()
         self.cfg: Section = self._load()
+        self._apply_patch_file()
         db_path = self.cfg.general.database
         if db_path != ":memory:" and not Path(db_path).is_absolute():
             db_path = str(self.home / db_path)
@@ -75,6 +76,29 @@ class Supervisor:
         self._build()
 
     # ------------------------------------------------------------------ config
+    def _apply_patch_file(self) -> None:
+        """config.patch.yaml рядом с config.yaml — разовая правка настроек (без секретов): сливается в config.yaml
+        при запуске и переименовывается в config.patch.applied.yaml. Так поддержка может поправить настройки,
+        не трогая файл с ключами."""
+        patch = self.home / "config.patch.yaml"
+        if not patch.exists():
+            return
+        try:
+            upd = yaml.safe_load(patch.read_text(encoding="utf-8")) or {}
+            if not isinstance(upd, dict):
+                raise ValueError("ожидается словарь секций")
+            for section, key in SECRET_FIELDS:              # секреты через патч не меняются
+                node = upd
+                for part in section.split("."):
+                    node = node.get(part) if isinstance(node, dict) else None
+                if isinstance(node, dict):
+                    node.pop(key, None)
+            self.save(upd, rebuild=False)
+            patch.replace(self.home / "config.patch.applied.yaml")
+            log.warning("применены настройки из config.patch.yaml: %s", ", ".join(upd))
+        except Exception as e:  # noqa: BLE001
+            log.error("config.patch.yaml не применён: %s", e)
+
     def _read_raw(self) -> dict:
         if self.config_path.exists():
             return yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}

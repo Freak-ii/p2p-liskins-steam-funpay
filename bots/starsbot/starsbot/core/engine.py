@@ -547,6 +547,26 @@ class Engine:
     async def answer_faq(self, o, text: str) -> None:
         key = M.detect_faq(text)
         hint = ""
+        if key in ("faq_not_arrived", "faq_refund") and o["delivered_at"] and \
+                S(o["status"]) in (S.DELIVERED, S.COMPLETED):
+            # «не пришло» после выдачи — частый развод: отвечаем доказательством и готовим файл для поддержки
+            ref = o["fragment_ref"] if "fragment_ref" in o.keys() else ""
+            when = time.strftime("%d.%m %H:%M", time.localtime(float(o["delivered_at"])))
+            await self.say(o, "faq_not_arrived_done", delivered_at=when,
+                           ref_part=f" (платёж Fragment {ref})" if ref else "")
+            support = ""
+            ap = getattr(self, "autopilot", None)
+            if ap is not None:
+                try:
+                    support = " Файл для поддержки: " + Path(ap.make_support_file([o])).name
+                except Exception as e:  # noqa: BLE001
+                    log.warning("файл для поддержки #%s: %s", o["order_id"], e)
+            await self.notifier.notify("WARNING", "buyer_claims_not_received",
+                                       f"#{o['order_id']}: покупатель {o['buyer_username']} пишет, что не получил / "
+                                       f"просит возврат, хотя звёзды отправлены {when} на @{o['tg_username']}"
+                                       f"{' ' + ref if ref else ''}. Возможен развод — возврат не делайте без "
+                                       f"проверки.{support}\n«{text[:200]}»", order_id=o["order_id"])
+            return
         if key in ("faq_time", "faq_not_arrived"):
             hint = M.render(o["lang"], "status", **self._order_vars(o),
                             status_text=M.status_text(o["lang"], o["status"]))
@@ -709,6 +729,8 @@ class Engine:
             problem = (f"себестоимость {cost_rub:.2f} ₽ больше {share:g}% суммы заказа {o['price']:g} ₽ "
                        "(вырос курс TON или цена на Fragment?)")
         if not problem:
+            problem = self._loss_problem(o, stars, amount)
+        if not problem:
             problem = self._safety_problem(amount)
         if problem and not o["approved"]:
             self._set(oid, S.PENDING_APPROVAL, "price_guard", fail_reason="price_guard", ton_amount=amount,
@@ -778,6 +800,53 @@ class Engine:
     def spent_ton_24h(self) -> float:
         return float(self.db.scalar("SELECT SUM(amount_nano) FROM purchases WHERE state IN ('sent','confirmed',"
                                     "'signed','unknown') AND created_at>=?", (time.time() - 86400,), 0) or 0) / 1e9
+
+    def _loss_problem(self, o, stars: int, amount: float) -> str:
+        """Не покупать в минус: прибыль после комиссий FunPay/вывода и по реальному курсу TON."""
+        minp = float((self.cfg.get("safety") or {}).get("min_profit_pct") or 0)
+        if not minp or self.econ is None or self.cfg.general.demo or not o["price"]:
+            return ""
+        price = float(o["price"])
+        fl = self.econ.flow(stars, price, ton_stars=amount, channel=self.channel_name(o))
+        if fl.profit is None:
+            return "нет курса TON — не могу проверить, что заказ не в минус"
+        if fl.profit < price * minp / 100:
+            return (f"заказ без прибыли: выручка после комиссий {fl.net_rub:.2f} ₽, себестоимость {fl.cost_rub:.2f} ₽ "
+                    f"(прибыль {fl.profit:+.2f} ₽, нужно от {minp:g}%). Поднимите цену лота")
+        return ""
+
+    def channel_name(self, o) -> str:
+        return (o["channel"] if "channel" in o.keys() else None) or "funpay"
+
+    async def price_guard(self) -> None:
+        """Цена лота не ниже безубытка + минимальная маржа (растёт TON или Fragment — растёт и цена)."""
+        s = self.cfg.get("safety") or {}
+        if not s.get("price_guard", True) or self.econ is None or self.paused:
+            return
+        if not self.cost_per_star_ton() or not self.econ.effective_rate()[0]:
+            return
+        margin = float(self.cfg.rtba.min_margin_pct or 0)
+        node = int(self.cfg.funpay.node_id)
+        for lot in self.lots:
+            if not lot.get("offer_id"):
+                continue
+            stars = int(lot["stars"])
+            fl = self.econ.flow(stars, 100.0)
+            if fl.breakeven_price is None:
+                continue
+            floor = float(math.ceil(fl.breakeven_price * (1 + margin / 100)))
+            try:
+                fields = await self.fp.get_lot_fields(int(lot["offer_id"]), node)
+                price = float(str(fields.get("price") or 0).replace(",", "."))
+                if price and price < floor:
+                    await self.fp.update_lot(int(lot["offer_id"]), node, price=floor)
+                    self.db.add_event("-", "price_guard", offer_id=lot["offer_id"], stars=stars, old=price, new=floor)
+                    await self.notifier.notify("WARNING", "price_guard_raise",
+                                               f"Лот {stars} ⭐: цена {price:g} ₽ была ниже безубытка с маржой "
+                                               f"{margin:g}% — поднял до {floor:g} ₽ (себестоимость "
+                                               f"{fl.cost_rub:.2f} ₽)", throttle_key=f"pg:{lot['offer_id']}")
+            except (FunPayError, ValueError) as e:
+                log.warning("защита цены, лот %s: %s", lot.get("offer_id"), e)
 
     def _safety_problem(self, amount: float) -> str:
         """Предохранители боевого режима: пилотные покупки, лимит на заказ и на сутки."""
@@ -1445,6 +1514,13 @@ class Engine:
                     if l.get("offer_id"):
                         self.db.kv_set(prefix + str(l["offer_id"]), None)
         lm = getattr(self, "lot_manager", None)
+        if lm is not None:
+            try:
+                msg = await lm.refresh_texts()
+                if "обновлены" in msg:
+                    log.info("лоты: %s", msg)
+            except Exception as e:  # noqa: BLE001
+                log.warning("обновление описаний лотов: %s", e)
         no_lots = not any(l.get("offer_id") for l in (self.cfg.funpay.lots or []))
         if lm is not None and (self.cfg.funpay.get("auto_create_lots") or no_lots):
             try:
@@ -1467,6 +1543,8 @@ class Engine:
             self._loop("backup", 3600, self.backup_db),
             self._loop("raise", 300, self.raise_lots),
             self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),
+            self._loop("price_guard", 60 * float((self.cfg.get("safety") or {}).get("price_guard_minutes") or 10),
+                       self.price_guard),
             self.deliver_worker(),
             self.notifier.poll_commands(),
         ]

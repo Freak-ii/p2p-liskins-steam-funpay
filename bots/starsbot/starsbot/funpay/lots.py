@@ -23,6 +23,85 @@ def _pick(options: list[tuple[str, str]], test) -> str | None:
     return None
 
 
+DESC_RU_USERNAME = (
+    "⭐ {stars} звёзд Telegram — официально через Fragment, по username\n"
+    "⚡ Автовыдача 24/7: обычно 1–5 минут после оплаты\n\n"
+    "Как получить:\n"
+    "1. Оплатите лот\n"
+    "2. Пришлите в чат @username получателя (можно свой или друга)\n"
+    "3. Бот проверит аккаунт, покажет имя и сразу отправит звёзды\n\n"
+    "✅ Без входа в аккаунт — не нужны пароли, коды и почта\n"
+    "✅ Звёзды видны в Telegram → Настройки → «Мои звёзды»\n"
+    "✅ Можно купить несколько лотов — пришлём сумму на один аккаунт\n"
+    "❗ Проверьте username: звёзды на чужой аккаунт вернуть невозможно\n"
+    "❗ Подтвердите заказ, когда звёзды придут\n"
+    "💬 Вопросы — в чат, бот отвечает сразу"
+)
+DESC_RU_GIFT = (
+    "🎁 Telegram Stars подарками (≈{stars} ⭐) — по username\n"
+    "⚡ Автовыдача 24/7: обычно 1–5 минут после оплаты\n\n"
+    "Как получить:\n"
+    "1. Оплатите лот\n"
+    "2. Пришлите в чат @username получателя\n"
+    "3. Бот отправит подарки — их можно оставить в профиле или конвертировать в звёзды\n\n"
+    "✅ Без входа в аккаунт\n"
+    "❗ Проверьте username: подарки на чужой аккаунт вернуть невозможно\n"
+    "💬 Вопросы — в чат, бот отвечает сразу"
+)
+DESC_EN_USERNAME = (
+    "{stars} Telegram Stars - official purchase via Fragment, delivered by username.\n"
+    "Automatic delivery 24/7, usually 1-5 minutes after payment.\n\n"
+    "How to get them:\n"
+    "1. Pay for the offer.\n"
+    "2. Send the recipient's @username in the chat (yours or a friend's).\n"
+    "3. The bot checks the account, shows the name and sends the stars right away.\n\n"
+    "No account login needed: no passwords or codes.\n"
+    "Stars appear in Telegram - Settings - My Stars.\n"
+    "Please double-check the username: stars sent to a wrong account cannot be returned.\n"
+    "Confirm the order once the stars arrive. Questions - in the chat."
+)
+DESC_EN_GIFT = (
+    "Telegram Stars as gifts (about {stars} stars), delivered by username.\n"
+    "Automatic delivery 24/7, usually 1-5 minutes after payment.\n"
+    "Pay, send the recipient's @username in the chat, and the bot sends the gifts. Gifts can be kept or converted "
+    "to stars. Please double-check the username. Questions - in the chat."
+)
+# старые короткие тексты из прежних версий — заменяются новыми автоматически
+OLD_DESCRIPTIONS = {"⚡ Автовыдача 1–5 минут. Укажите @username — звёзды придут на аккаунт.",
+                    "🎁 Автовыдача подарками 1–5 минут. Укажите @username — подарки придут на аккаунт, "
+                    "их можно конвертировать в звёзды."}
+
+
+def lot_texts(stars: int, kind: str, description: str = "") -> dict[str, str]:
+    """Краткое и полное описание лота на русском и английском (FunPay проверяет английские поля отдельно)."""
+    gift = kind != "username"
+    desc = description if description and description not in OLD_DESCRIPTIONS else \
+        (DESC_RU_GIFT if gift else DESC_RU_USERNAME)
+    try:
+        desc = desc.format(stars=stars)
+    except (KeyError, IndexError, ValueError):
+        pass
+    return {
+        "summary_ru": (f"🎁 {stars} ⭐ Telegram подарками | Автовыдача 1–5 мин | По username" if gift else
+                       f"⭐ {stars} звёзд Telegram | Автовыдача 1–5 мин | По username | Fragment"),
+        "summary_en": (f"{stars} Telegram Stars as gifts | Instant delivery | By username" if gift else
+                       f"{stars} Telegram Stars | Instant delivery 1-5 min | By username | Fragment"),
+        "desc_ru": desc,
+        "desc_en": (DESC_EN_GIFT if gift else DESC_EN_USERNAME).format(stars=stars),
+    }
+
+
+def apply_lot_texts(f: dict[str, str], *, stars: int, kind: str, description: str = "") -> dict[str, str]:
+    t = lot_texts(stars, kind, description)
+    for key in list(f):
+        if key.startswith("fields[desc]"):
+            f[key] = t["desc_ru"] if key.endswith("[ru]") else t["desc_en"]
+        elif key.startswith("fields[summary]"):
+            f[key] = t["summary_ru"] if key.endswith("[ru]") else t["summary_en"]
+    f.setdefault("fields[summary][ru]", t["summary_ru"])
+    return f
+
+
 def build_lot_fields(base: dict[str, str], selects: dict[str, list[tuple[str, str]]], *, stars: int, kind: str,
                      price: float, amount: int, description: str = "", active: bool = True) -> dict[str, str]:
     """Поля формы нового лота из образца: количество, способ, цена, наличие, описание."""
@@ -51,26 +130,7 @@ def build_lot_fields(base: dict[str, str], selects: dict[str, list[tuple[str, st
     else:
         f.pop("active", None)                 # чекбокс не отправлен = лот выключен
     f.pop("deleted", None)
-    how = "по username" if kind == "username" else "подарком"
-    # FunPay проверяет английские поля отдельно: русский текст в [en] — «некорректное английское описание»
-    en_how = "by username" if kind == "username" else "as Telegram gifts"
-    en_desc = ("Automatic delivery in 1-5 minutes. Send your Telegram @username after payment and the Stars "
-               "will arrive on your account." if kind == "username" else
-               "Automatic delivery as Telegram gifts in 1-5 minutes. Send your Telegram @username after payment "
-               "and the gifts will arrive on your account.")
-    for key in list(f):
-        if key.startswith("fields[desc]"):
-            if key.endswith("[ru]"):
-                if description:
-                    f[key] = description
-            else:
-                f[key] = en_desc
-        # «Краткое описание» обязательно, а у лота-образца в нём другой номинал — всегда пишем своё
-        if key.startswith("fields[summary]"):
-            f[key] = (f"{stars} звёзд Telegram {how}, автовыдача" if key.endswith("[ru]")
-                      else f"{stars} Telegram Stars {en_how}, instant delivery")
-    if "fields[summary][ru]" not in f:
-        f["fields[summary][ru]"] = f"{stars} звёзд Telegram {how}, автовыдача"
+    apply_lot_texts(f, stars=stars, kind=kind, description=description)
     return f
 
 
@@ -176,6 +236,32 @@ class LotManager:
             if stars_from_text(own.description) == stars and METHOD_RX[kind].search(own.description):
                 return own.offer_id
         return ""
+
+    async def refresh_texts(self, force: bool = False) -> str:
+        """Обновить краткое и полное описание у уже выставленных лотов, когда тексты поменялись."""
+        import hashlib
+        e = self.engine
+        node = int(self.cfg.funpay.node_id)
+        sig_src = repr((lot_texts(50, "username", str(self.cfg.funpay.get("lot_description") or "")),
+                        lot_texts(50, "gift", str(self.cfg.funpay.get("gift_lot_description") or ""))))
+        sig = hashlib.sha1(sig_src.encode()).hexdigest()[:12]
+        if not force and e.db.kv_get("lot_texts_sig") == sig:
+            return "описания лотов актуальны"
+        done, errors = 0, []
+        for r in self.rows():
+            if not r["offer_id"]:
+                continue
+            desc = str(self.cfg.funpay.get("gift_lot_description" if r["kind"] == "gift" else "lot_description") or "")
+            try:
+                fields = await e.fp.get_lot_fields(int(r["offer_id"]), node)
+                apply_lot_texts(fields, stars=r["stars"], kind=r["kind"], description=desc)
+                await e.fp.save_lot(fields)
+                done += 1
+            except FunPayError as err:
+                errors.append(f"{r['offer_id']}: {err}")
+        if not errors and not e.fp.dry_run:
+            e.db.kv_set("lot_texts_sig", sig)
+        return f"описания обновлены у {done} лотов" + (f"; ошибки: {'; '.join(errors)}" if errors else "")
 
     async def set_active(self, offer_id: int, active: bool) -> str:
         try:

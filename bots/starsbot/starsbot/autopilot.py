@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,9 @@ log = logging.getLogger("autopilot")
 
 def _dt(ts) -> str:
     return datetime.fromtimestamp(float(ts)).strftime("%d.%m.%Y %H:%M") if ts else "—"
+
+
+TRON_ADDRESS = re.compile(r"T[1-9A-HJ-NP-Za-km-z]{33}")
 
 
 class Autopilot:
@@ -196,11 +200,21 @@ class Autopilot:
             return "дневной лимит вывода исчерпан"
         method = str(w.get("method") or "")
         if not method and info.methods:
-            ton = [v for v, t in info.methods if "ton" in t.lower() or "gram" in t.lower()]
-            method = ton[0] if ton else ""
+            ton = [v for v, t in info.methods if re.search(r"\bton\b|toncoin|gram", t, re.I)]
+            usdt = [v for v, t in info.methods if re.search(r"usdt", t, re.I) and re.search(r"trc|tron", t, re.I)]
+            method = (ton or usdt or [""])[0]
         if not method:
             return "не выбран способ вывода (в списке FunPay нет TON — выберите способ в панели → Кошелёк и автопилот)"
-        wallet = str(w.get("wallet") or getattr(self.engine.wallet, "friendly_address", "") or "")
+        title = next((t for v, t in info.methods if v == method), method)
+        is_tron = bool(re.search(r"trc|tron|usdt", f"{method} {title}", re.I))
+        wallet = str(w.get("wallet") or "")
+        if is_tron:
+            # USDT TRC20 нельзя отправить на TON-кошелёк бота: нужен адрес TRON (депозит биржи / обменника)
+            if not TRON_ADDRESS.fullmatch(wallet):
+                return ("вывод в USDT TRC20: укажите адрес TRON (начинается с T, 34 символа) — депозитный адрес "
+                        "биржи, где USDT обменяете на TON и отправите на кошелёк бота")
+        elif not wallet:
+            wallet = str(getattr(self.engine.wallet, "friendly_address", "") or "")
         if not wallet or wallet == "—":
             return "не задан кошелёк для вывода"
         now = time.time()

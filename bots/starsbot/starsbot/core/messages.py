@@ -112,6 +112,12 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "Передал продавцу вашу просьбу по заказу #{order_id}, он ответит в этом чате. Если звёзды ещё не "
             "отправлены, возврат оформляется через FunPay. Пожалуйста, не подтверждайте заказ, пока вопрос не решён."
         ),
+        "faq_not_arrived_done": (
+            "Звёзды по заказу #{order_id} уже отправлены ✅ {delivered_at} — {stars} ⭐ на @{username}{ref_part}.\n"
+            "Проверьте: Telegram → Настройки → «Мои звёзды» → история на аккаунте @{username} (не на другом "
+            "аккаунте!). Баланс иногда обновляется до 10 минут. Если звёзд всё равно нет — напишите здесь, "
+            "продавец уже видит ваше сообщение и проверит платёж."
+        ),
         "faq_premium": "В этом лоте продаются только Telegram Stars (звёзды). Telegram Premium здесь не продаётся.",
         "faq_where": "Звёзды видны в Telegram → Настройки → «Мои звёзды» (Telegram Stars) на аккаунте получателя.",
         "greeting_need_username_gift": (
@@ -207,6 +213,12 @@ TEMPLATES: dict[str, dict[str, str]] = {
                             "seller — if the stars don't show up, they will sort it out in this chat."),
         "faq_refund": ("I've passed your request for #{order_id} to the seller, they'll reply in this chat. Please "
                        "don't confirm the order until it's resolved."),
+        "faq_not_arrived_done": (
+            "The stars for order #{order_id} have already been sent ✅ {delivered_at} — {stars} ⭐ to "
+            "@{username}{ref_part}.\nCheck Telegram → Settings → My Stars → history on @{username} (not another "
+            "account!). The balance can take up to 10 minutes to update. If they're still missing, write here — the "
+            "seller already sees your message and will check the payment."
+        ),
         "faq_premium": "This listing sells Telegram Stars only, not Telegram Premium.",
         "faq_where": "Stars are shown in Telegram → Settings → My Stars on the recipient account.",
         "greeting_need_username_gift": ("Hi {buyer}! {returning}Thanks for paying for order #{order_id} 🎉\n"
@@ -272,7 +284,7 @@ TEMPLATE_VARS = {
     "reason": "аккаунт не найден", "attempt": 1, "max_attempts": 3, "status_text": "ждём username",
     "denominations": "50, 75, 100", "status_hint": "", "returning": "Рады видеть вас снова 🙌 ",
     "last_hint": "Прошлый заказ вы получали на @durov — если аккаунт тот же, просто пришлите его ещё раз.\n",
-    "gifts": "2×🏆100⭐", "value": 170,
+    "gifts": "2×🏆100⭐", "value": 170, "delivered_at": "20.11 05:20", "ref_part": " (платёж Fragment Ref#AbC123)",
 }
 
 

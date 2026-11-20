@@ -290,7 +290,7 @@ def test_create_lot_in_test_mode_is_real_but_inactive(tmp_path):
     new = next(l for l in e.cfg.funpay.lots if int(l["stars"]) == 75)["offer_id"]
     assert new and "выключен" in rep[0]
     lot = fp.lots[str(new)]
-    assert not lot.get("active") and lot["fields[summary][ru]"].startswith("75 звёзд")
+    assert not lot.get("active") and "75 звёзд" in lot["fields[summary][ru]"]
 
 
 def test_build_lot_fields_rewrites_template_summary_and_inactive():
@@ -299,7 +299,7 @@ def test_build_lot_fields_rewrites_template_summary_and_inactive():
     selects = {"fields[quantity]": [("1", "100 звёзд"), ("2", "250 звёзд")],
                "fields[method]": [("1", "По username"), ("2", "Подарком")]}
     f = build_lot_fields(base, selects, stars=250, kind="username", price=500, amount=1, active=False)
-    assert f["fields[summary][ru]"].startswith("250 звёзд") and "active" not in f and "deleted" not in f
+    assert "250 звёзд" in f["fields[summary][ru]"] and "active" not in f and "deleted" not in f
 
 
 def test_build_lot_fields_english_fields_get_english_text():
@@ -309,3 +309,22 @@ def test_build_lot_fields_english_fields_get_english_text():
     f = build_lot_fields(base, selects, stars=50, kind="username", price=80, amount=1, description="Автовыдача")
     assert f["fields[desc][ru]"] == "Автовыдача"
     assert f["fields[desc][en]"].isascii() and f["fields[summary][en]"].isascii()
+
+
+def test_config_patch_file_applied_without_secrets(tmp_path):
+    from starsbot.app.supervisor import Supervisor
+    (tmp_path / "config.patch.yaml").write_text(
+        "economics:\n  withdraw_fee_pct: 6\nfunpay:\n  golden_key: hacked\n", encoding="utf-8")
+    sup = Supervisor(tmp_path, demo=False)
+    assert float(sup.cfg.economics.withdraw_fee_pct) == 6
+    assert sup.cfg.funpay.golden_key != "hacked"
+    assert not (tmp_path / "config.patch.yaml").exists() and (tmp_path / "config.patch.applied.yaml").exists()
+
+
+def test_loss_guard_blocks_unprofitable_purchase(tmp_path):
+    sup, e, fp, wallet = make(tmp_path)
+    e.cfg.general["demo"] = False
+    e.cfg.safety["min_profit_pct"] = 3
+    o = {"price": 60.0, "channel": "funpay"}
+    assert "без прибыли" in e._loss_problem(o, 50, 0.9) or "нет курса" in e._loss_problem(o, 50, 0.9)
+    assert e._loss_problem({"price": 500.0, "channel": "funpay"}, 50, 0.1) == ""
