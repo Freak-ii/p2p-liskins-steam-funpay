@@ -7,7 +7,29 @@ import time
 import aiohttp
 
 log = logging.getLogger("rates")
-COINGECKO = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=rub"
+COINGECKO = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network,toncoin,gram&vs_currencies=rub"
+TONAPI = "https://tonapi.io/v2/rates?tokens=ton&currencies=rub"
+
+
+def _from_coingecko(data) -> float:
+    # после переименования Toncoin → Gram id монеты может отличаться; CoinGecko при лимите отдаёт {"status": …}
+    for key in ("the-open-network", "toncoin", "gram"):
+        v = (data.get(key) or {}).get("rub") if isinstance(data, dict) else None
+        if v:
+            return float(v)
+    raise ValueError(f"CoinGecko: нет курса ({str(data)[:120]})")
+
+
+def _from_tonapi(data) -> float:
+    rates = (data or {}).get("rates") or {}
+    for key in ("TON", "ton"):
+        v = ((rates.get(key) or {}).get("prices") or {}).get("RUB")
+        if v:
+            return float(v)
+    raise ValueError(f"tonapi: нет курса ({str(data)[:120]})")
+
+
+SOURCES = (("coingecko", COINGECKO, _from_coingecko), ("tonapi", TONAPI, _from_tonapi))
 
 
 class RateProvider:
@@ -28,19 +50,23 @@ class RateProvider:
             return self.value
         if not force and time.time() - self.updated_at < float(self.cfg.refresh_minutes) * 60:
             return self.value
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
-                async with s.get(COINGECKO) as r:
-                    data = await r.json(content_type=None)
-            v = float(data["the-open-network"]["rub"])
-            if v > 0:
-                self.value, self.updated_at, self.source = v, time.time(), "coingecko"
-                if self.db is not None:
-                    self.db.kv_set("ton_rub", {"v": v, "ts": self.updated_at})
-        except Exception as e:  # noqa: BLE001
-            log.warning("курс TON/RUB не обновлён: %s", e)
-            if not self.value and float(self.cfg.ton_rub or 0) > 0:
-                self.value, self.source = float(self.cfg.ton_rub), "manual"
+        errors = []
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            for name, url, parse in SOURCES:
+                try:
+                    async with session.get(url, headers={"Accept": "application/json"}) as r:
+                        v = parse(await r.json(content_type=None))
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{name}: {e}")
+                    continue
+                if v > 0:
+                    self.value, self.updated_at, self.source = v, time.time(), name
+                    if self.db is not None:
+                        self.db.kv_set("ton_rub", {"v": v, "ts": self.updated_at})
+                    return self.value
+        log.warning("курс TON/RUB не обновлён: %s", "; ".join(errors))
+        if not self.value and float(self.cfg.ton_rub or 0) > 0:
+            self.value, self.source = float(self.cfg.ton_rub), "manual"
         return self.value
 
     def rub(self, ton: float | None) -> float | None:
