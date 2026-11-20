@@ -1356,6 +1356,13 @@ class Engine:
             due = ap.unconfirmed(float(ap.acfg.get("support_after_hours") or 72))
             return ap.make_support_file(due) if due else "неподтверждённых заказов старше порога нет"
         lm = getattr(self, "lot_manager", None)
+        if cmd == "lots_on":
+            for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:")):
+                for l in ((self.cfg.get(section) or {}).get("lots") or []):
+                    if l.get("offer_id"):
+                        self.db.kv_set(prefix + str(l["offer_id"]), None)
+            await self.wallet_watch()
+            return "лоты включены по балансу кошелька"
         if cmd == "lots_off" and lm is not None:
             return await lm.close_all(reason="команда")
         if cmd == "lots_create" and lm is not None:
@@ -1519,6 +1526,31 @@ class Engine:
         self.db.kv_set("engine_lease", {"id": self.lease_id, "pid": os.getpid(), "ts": time.time()})
         return None
 
+    async def remote_inbox(self) -> None:
+        """Команды из файла data/remote_cmd.txt (по строке, как в Telegram: «approve ABC», «lots_off»).
+        Файл забирается и удаляется, ответы дописываются в data/remote_cmd.out.txt."""
+        if self.db.path == ":memory:":
+            return
+        folder = Path(self.db.path).parent
+        inbox, out = folder / "remote_cmd.txt", folder / "remote_cmd.out.txt"
+        if not inbox.exists():
+            return
+        work = folder / "remote_cmd.work.txt"
+        inbox.replace(work)
+        lines = [l.strip().lstrip("/") for l in work.read_text(encoding="utf-8-sig").splitlines()]
+        work.unlink()
+        for line in lines:
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            try:
+                res = await self.handle_command(parts[0].lower(), parts[1:])
+            except Exception as e:  # noqa: BLE001
+                res = f"ошибка: {e!r}"
+            log.warning("удалённая команда «%s»: %s", line, str(res)[:300])
+            with out.open("a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} > {line}\n{res}\n\n")
+
     async def lease_keeper(self) -> None:
         while True:
             await asyncio.sleep(20)
@@ -1586,6 +1618,7 @@ class Engine:
             self.deliver_worker(),
             self.notifier.poll_commands(),
             self.lease_keeper(),
+            self._loop("remote_inbox", 15, self.remote_inbox),
         ]
         if self.analytics:
             loops.append(self._loop("analytics", 600, self.analytics.tick))

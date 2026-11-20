@@ -345,3 +345,22 @@ def test_second_instance_on_same_db_refuses_to_start(tmp_path):
     assert b.take_lease() is None                  # после выхода первого — можно
     db.kv_set("engine_lease", {"id": "pc:2:b", "pid": 2, "ts": time.time() - 999})
     assert a.take_lease() is None and db.kv_get("engine_lease")["id"] == "pc:1:a"   # зависшая аренда истекает
+
+
+def test_remote_inbox_runs_commands(tmp_path):
+    from starsbot.core.engine import Engine
+    from starsbot.crm.db import Database
+    (tmp_path / "data").mkdir()
+    e = Engine.__new__(Engine)
+    e.db = Database(tmp_path / "data" / "s.sqlite3")
+    seen = []
+
+    async def handle(cmd, args):
+        seen.append((cmd, args))
+        return "ok"
+    e.handle_command = handle
+    (tmp_path / "data" / "remote_cmd.txt").write_text("# test\n/approve AB12\nlots_off\n", encoding="utf-8")
+    asyncio.run(e.remote_inbox())
+    assert seen == [("approve", ["AB12"]), ("lots_off", [])]
+    assert not (tmp_path / "data" / "remote_cmd.txt").exists()
+    assert "approve AB12" in (tmp_path / "data" / "remote_cmd.out.txt").read_text(encoding="utf-8")
