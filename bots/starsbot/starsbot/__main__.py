@@ -15,6 +15,13 @@ async def run_console_demo() -> None:
     with tempfile.TemporaryDirectory() as home:
         sup = Supervisor(Path(home), demo=True, overrides=DEMO_OVERRIDES)
         await run_scenario(sup.engine, sup.engine.fp, sup.engine.wallet)
+        from starsbot.treasury.fake import run_treasury_demo
+        steps = await run_treasury_demo(sup)
+        if steps:
+            print("\nКазначейство (демо):")
+            for line in steps:
+                print("  • " + line)
+            print("  " + sup.engine.treasury.summary_text().replace("\n", "\n  "))
         print("\n" + "═" * 60 + "\n" + sup.analytics.text_report())
         print("\nКалькулятор (цена → чистыми → себестоимость → прибыль):")
         for f in sup.econ.calculator():

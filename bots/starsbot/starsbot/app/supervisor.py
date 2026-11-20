@@ -28,7 +28,8 @@ log = logging.getLogger("app")
 
 SECRET_FIELDS = {("gifts", "api_hash"), ("funpay", "golden_key"), ("fragment", "cookies"), ("ton", "mnemonic"), ("ton", "toncenter_api_key"),
                  ("notifications.telegram", "bot_token"), ("dashboard", "token"), ("dashboard", "operator_token"),
-                 ("dashboard", "viewer_token"), ("ozon", "api_key"), ("ozon.activation_bot", "bot_token")}
+                 ("dashboard", "viewer_token"), ("ozon", "api_key"), ("ozon.activation_bot", "bot_token"),
+                 ("treasury.bybit", "api_key"), ("treasury.bybit", "api_secret"), ("treasury.hub", "mnemonic")}
 
 
 class MemoryLogHandler(logging.Handler):
@@ -215,10 +216,41 @@ class Supervisor:
         self.engine.lot_manager = LotManager(self.engine, save_config=self.save)
         from starsbot.autopilot import Autopilot
         self.engine.autopilot = Autopilot(cfg, self.engine, self.home)
+        self.engine.treasury = self._treasury(cfg)
         from starsbot.ozon.channel import build_channel
         ozon = build_channel(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
         if ozon is not None:
             self.engine.channels["ozon"] = ozon
+
+    def _treasury(self, cfg):
+        from starsbot.treasury.service import Treasury
+        t = cfg.get("treasury") or {}
+        if cfg.general.demo or self.demo:
+            from starsbot.treasury.fake import FakeBybit, FakeHub
+            w = self.engine.wallet
+            wallets = {w.friendly_address: w}
+            hub = FakeHub(balance=0.0, wallets=wallets)
+            wallets[hub.friendly_address] = hub
+            bybit = FakeBybit(usdt_fund=300.0, usdt_unified=500.0, price=round(105.0 / 86.8, 4), wallets=wallets)
+            self.demo_treasury = (bybit, hub)
+            return Treasury(cfg, self.engine, bybit=bybit, hub=hub)
+        bybit = hub = None
+        b, h = t.get("bybit") or {}, t.get("hub") or {}
+        if h.get("mnemonic"):
+            from starsbot.ton.wallet import Toncenter, TonWallet
+            try:
+                hub = TonWallet(h["mnemonic"], h.get("address") or "", version=h.get("version") or "v5r1",
+                                api=Toncenter(cfg.ton.toncenter_endpoint, cfg.ton.toncenter_api_key),
+                                dry_run=cfg.general.dry_run, mnemonic_type=h.get("mnemonic_type") or "auto")
+            except Exception as e:  # noqa: BLE001
+                log.warning("хаб TON не настроен: %s", e)
+        if b.get("api_key") and b.get("api_secret"):
+            from starsbot.treasury.bybit import BybitClient
+            # вывод разрешён только на свои кошельки: рабочий кошелёк бота и хаб
+            allowed = [getattr(self.engine.wallet, "friendly_address", ""), getattr(hub, "friendly_address", "")]
+            bybit = BybitClient(b["api_key"], b["api_secret"], base_url=b.get("base_url") or "https://api.bybit.com",
+                                allowed_addresses=[a for a in allowed if a and a != "—"])
+        return Treasury(cfg, self.engine, bybit=bybit, hub=hub)
 
     async def start(self) -> str:
         if self.state in ("running", "starting"):
@@ -273,7 +305,11 @@ class Supervisor:
 
     async def _close_clients(self) -> None:
         for c in (self.engine.fp, self.engine.fragment, self.engine.wallet, self.notifier,
-                  *self.engine.channels.values(), self.engine.gifts):
+                  *self.engine.channels.values(), self.engine.gifts,
+                  getattr(getattr(self.engine, "treasury", None), "bybit", None),
+                  getattr(getattr(self.engine, "treasury", None), "hub", None)):
+            if c is None:
+                continue
             try:
                 await c.close()
             except Exception:  # noqa: BLE001

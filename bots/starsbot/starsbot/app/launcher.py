@@ -27,6 +27,7 @@ DEMO_OVERRIDES = {
     "gifts": {"enabled": True, "pilot_orders": 0, "pause_between_gifts": 0,
               "lots": [{"stars": n, "offer_id": 100 + i, "position": 3 if n == 13 else 0}
                        for i, n in enumerate((13, 21, 43, 85, 50, 100, 150, 250, 350, 500))]},
+    "treasury": {"enabled": True, "hub": {"enabled": True}, "bybit": {"enabled": True}, "daily_report_hour": 25},
 }
 
 
@@ -95,6 +96,8 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         from starsbot.demo import run_gift_demo
         sup.engine.cfg.gifts.pause_between_gifts = 0
         await run_gift_demo(sup.engine, sup.engine.fp, sup.engine.wallet)
+        from starsbot.treasury.fake import run_treasury_demo
+        await run_treasury_demo(sup)
         log.info("Демо-сценарий выполнен: 6 заказов FunPay и 3 заказа Ozon в CRM")
     runner = await start_web(sup, host, port, mem)
     shown_host = "127.0.0.1" if host in ("0.0.0.0", "") else host

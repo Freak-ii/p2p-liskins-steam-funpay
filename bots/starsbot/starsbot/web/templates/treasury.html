@@ -1,0 +1,144 @@
+{% extends "base.html" %}{% block title %}Казначейство{% endblock %}
+{% block body %}
+{% set s = tr.snap or {} %}{% set rh = s.runway_h or {} %}{% set b = s.burn or {} %}
+<h1>Казначейство</h1>
+{% if not tr.enabled %}<div class="card"><b>Казначейство выключено.</b> Включите его ниже: бот начнёт считать запас денег во всех кошельках и на площадках, сам пополнять кошелёк бота с Bybit (или хаба) и подсказывать, когда и откуда выводить деньги.</div>{% endif %}
+{% if tr.dry %}<div class="card c-amber">Тестовый режим (dry-run): казначейство показывает, что сделало бы, но деньги не двигает.</div>{% endif %}
+
+<div class="grid">
+  <div class="card kpi"><div class="v {{ 'c-red' if (rh.total or 0) < 24 else ('c-amber' if (rh.total or 0) < 72 else 'c-green') }}">{{ '%.1f'|format((rh.total or 0) / 24) }} дн.</div><div class="l">хватит всех денег при текущем расходе</div></div>
+  <div class="card kpi"><div class="v">{{ s.reserve_rub|money if s.reserve_rub is not none else '—' }} ₽</div><div class="l">запас: кошелёк бота + хаб + Bybit</div></div>
+  <div class="card kpi"><div class="v">{{ b.rub_day|money if b.rub_day else '—' }} ₽</div><div class="l">расход в сутки · {{ b.source or 'нет данных' }}</div></div>
+  <div class="card kpi"><div class="v">{{ '%.2f'|format(tr.usdt_rub) }} ₽</div><div class="l">курс USDT (ваши P2P-покупки)</div></div>
+</div>
+
+<div class="card">
+  <h2>Где деньги</h2>
+  <div class="tw"><table>
+    <tr><th>Место</th><th>Остаток</th><th>Хватит</th><th>Роль</th></tr>
+    <tr><td>Кошелёк бота (Fragment)</td><td>{{ (s.working or {}).ton|ton }} TON</td><td>{{ '%.0f'|format(rh.working or 0) }} ч</td><td class="muted">рабочий запас, пополняется до {{ t.working.refill_to_hours if t.working else 24 }} ч, когда меньше {{ t.working.refill_below_hours if t.working else 8 }} ч</td></tr>
+    <tr><td>Хаб TON</td><td>{{ (s.hub or {}).ton|ton if tr.hub else '—' }}{% if tr.hub %} TON{% endif %}</td><td>{{ '%.0f'|format(rh.hub or 0) if tr.hub else '—' }}{% if tr.hub %} ч{% endif %}</td><td class="muted">{{ 'основной запас TON' if tr.hub else 'не подключён — Bybit выводит прямо на кошелёк бота' }}</td></tr>
+    <tr><td>Bybit</td><td>{% if (s.bybit or {}).usdt is defined %}{{ '%.2f'|format(s.bybit.usdt) }} USDT + {{ s.bybit.ton|ton }} TON{% else %}—{% endif %}</td><td>{{ '%.0f'|format(rh.bybit or 0) if tr.bybit else '—' }}{% if tr.bybit %} ч{% endif %}</td><td class="muted">{% if tr.bybit %}TON по {{ s.bybit.last }} USDT · финансирование {{ '%.2f'|format(s.bybit.usdt_fund or 0) }} USDT, торговый {{ '%.2f'|format(s.bybit.usdt_unified or 0) }} USDT{% else %}не подключён{% endif %}</td></tr>
+    {% if s.gift_stars is not none %}<tr><td>Аккаунт подарков</td><td>{{ s.gift_stars }} ⭐</td><td>—</td><td class="muted">пополняет StarsBot через Fragment (внутренние заказы)</td></tr>{% endif %}
+    {% for src in s.sources or [] %}<tr><td>{{ src.name }}</td><td>{{ src.balance|money if src.balance is not none else '—' }} ₽</td><td>—</td><td class="muted">вывод: {{ src.method }} · {{ src.fee_pct }}%{% if src.at %} · обновлено {{ src.at|hm }}{% endif %}</td></tr>{% endfor %}
+  </table></div>
+  {% if s.errors %}<div class="help c-red">{{ s.errors|join('; ') }}</div>{% endif %}
+  <div class="row" style="margin-top:8px">
+    <a class="btn" href="/treasury?refresh=1">Обновить балансы</a>
+    {% if is_admin %}<form method="post"><button name="action" value="run">Проверить и выполнить следующий шаг</button></form>{% endif %}
+    {% if s.plan %}<span class="muted">Последнее решение: {{ s.plan }}</span>{% endif %}
+  </div>
+</div>
+
+<div class="cols">
+<div class="card">
+  <h2>Советы: когда и откуда выводить</h2>
+  <div class="help">Вывод на карту — только крупными суммами (от {{ t.router.min_batch_rub|money if t.router else '20 000' }} ₽), не чаще одного раза за {{ t.router.cooldown_hours if t.router else 24 }} ч, начиная с самого дешёвого источника. {% if not tr.card[0] %}<b>{{ tr.card[1] }}.</b>{% endif %}</div>
+  {% if wplan %}<div style="margin-top:6px">Сейчас можно вывести:{% for p in wplan %}<div>• {{ p.name }}: {{ p.amount|money }} ₽, комиссия {{ p.fee_pct }}% ≈ {{ p.cost|money }} ₽{% if not p.cheap %} <span class="c-amber">(дороже маржи — только прибыль)</span>{% endif %}</div>{% endfor %}</div>{% endif %}
+  <div class="tw" style="margin-top:8px"><table>
+    <tr><th>Когда</th><th>Совет</th><th>Статус</th><th></th></tr>
+    {% for a in advices %}<tr><td>{{ a.ts|hm }}</td><td><pre>{{ a.text }}</pre></td><td>{{ {'new':'новый','done':'сделано','skipped':'пропущен','expired':'устарел'}.get(a.state, a.state) }}</td>
+      <td>{% if a.state == 'new' and is_admin %}<form method="post" class="row"><input type="hidden" name="id" value="{{a.id}}"><button name="action" value="advice_done">Сделал</button><button name="action" value="advice_skip">Пропустить</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">Советов пока нет</td></tr>{% endfor %}
+  </table></div>
+</div>
+<div class="card">
+  <h2>Записать покупку USDT на P2P</h2>
+  <div class="help">По этим записям считается настоящий курс USDT, а значит и себестоимость TON для цен на лоты.</div>
+  {% if is_admin %}<form method="post" class="row" style="margin-top:6px"><input type="number" step="1" name="rub" placeholder="₽, всего с комиссией" style="max-width:170px"><input type="number" step="0.01" name="usdt" placeholder="получено USDT" style="max-width:150px"><button name="action" value="p2p">Записать</button></form>{% endif %}
+  {% if tr.p2p %}<table style="margin-top:6px"><tr><th>Когда</th><th>₽</th><th>USDT</th><th>Курс</th></tr>{% for p in tr.p2p %}<tr><td>{{ p.ts|hm }}</td><td>{{ p.rub|money }}</td><td>{{ p.usdt }}</td><td>{{ '%.2f'|format(p.rub / p.usdt) }}</td></tr>{% endfor %}</table>{% endif %}
+  <h2 style="margin-top:14px">Баланс площадки вручную</h2>
+  <div class="help">FunPay бот читает сам. Для площадок без доступа к балансу введите остаток — советник учтёт его.</div>
+  {% if is_admin %}<form method="post" class="row" style="margin-top:6px"><select name="key" style="max-width:160px">{% for src in sources if src.key != 'funpay' %}<option value="{{src.key}}">{{src.name}}</option>{% endfor %}</select><input type="number" name="rub" placeholder="₽" style="max-width:140px"><button name="action" value="balance">Сохранить</button></form>{% endif %}
+</div>
+</div>
+
+<div class="card">
+  <h2>Шаги пополнения</h2>
+  <div class="tw"><table>
+    <tr><th>#</th><th>Когда</th><th>Что</th><th>Сколько</th><th>Статус</th><th>Детали</th><th></th></tr>
+    {% for m in moves %}<tr><td>{{ m.id }}</td><td>{{ m.ts|hm }}</td>
+      <td>{{ {'buy':'Покупка TON на Bybit','xfer':'Перевод внутри Bybit','withdraw':'Вывод TON с Bybit','hub':'Хаб → кошелёк бота'}.get(m.kind, m.kind) }}{% if m.kind in ('xfer','withdraw') %} <span class="muted">{{ m.src }} → {{ m.dst }}</span>{% endif %}</td>
+      <td>{{ '%g'|format(m.amount) }} {{ m.unit }}{% if m.price %} <span class="muted">по {{ m.price }}</span>{% endif %}</td>
+      <td class="{{ {'done':'c-green','failed':'c-red','unknown':'c-red','sent':'c-blue','proposed':'c-amber'}.get(m.state, 'c-gray') }}">{{ {'done':'готово','failed':'ошибка','unknown':'исход неизвестен','sent':'в пути','proposed':'ждёт подтверждения','cancelled':'отменён'}.get(m.state, m.state) }}</td>
+      <td class="muted">{{ m.detail }}</td>
+      <td>{% if is_admin %}{% if m.state == 'proposed' %}<form method="post" class="row"><input type="hidden" name="id" value="{{m.id}}"><button name="action" value="approve" class="primary">Выполнить</button><button name="action" value="reject">Отмена</button></form>
+        {% elif m.state in ('unknown',) %}<form method="post" class="row"><input type="hidden" name="id" value="{{m.id}}"><button name="action" value="resolve_ok">Прошло</button><button name="action" value="resolve_fail">Не прошло</button></form>{% endif %}{% endif %}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">Шагов пока не было</td></tr>{% endfor %}
+  </table></div>
+  <div class="help">Шаг с неизвестным исходом (связь оборвалась после отправки) бот не повторяет: проверьте историю на Bybit или в Tonkeeper и отметьте результат. До отметки автоматика стоит.</div>
+</div>
+
+{% if is_admin %}
+<form method="post" autocomplete="off">
+<div class="cols">
+<div class="card">
+  <h2>Основное</h2>
+  <label><input type="checkbox" name="enabled" {{ 'checked' if t.enabled }}> Включить казначейство</label><br>
+  <label><input type="checkbox" name="auto" {{ 'checked' if t.auto is not defined or t.auto }}> Двигать деньги самому в пределах лимитов (иначе каждый шаг — по кнопке в Telegram)</label>
+  <div class="cols">
+    <div><label class="f">Пополнять кошелёк бота, когда меньше, ч</label><input type="number" step="1" name="refill_below_hours" value="{{ t.working.refill_below_hours }}"></div>
+    <div><label class="f">…до запаса, ч</label><input type="number" step="1" name="refill_to_hours" value="{{ t.working.refill_to_hours }}"></div>
+  </div>
+  <div class="cols">
+    <div><label class="f">Курс USDT на P2P, ₽</label><input type="number" step="0.01" name="usdt_rub" value="{{ t.usdt_rub }}"><div class="help">Пока не записаны свои покупки.</div></div>
+    <div><label class="f">Расход, пока мало статистики, ₽/сутки</label><input type="number" name="fallback_burn_rub_day" value="{{ t.fallback_burn_rub_day }}"></div>
+  </div>
+  <h2 style="margin-top:12px">Покупка USDT на P2P</h2>
+  <div class="cols">
+    <div><label class="f">Напомнить, когда запаса меньше, дн.</label><input type="number" step="0.1" name="trigger_days" value="{{ t.p2p.trigger_days }}"></div>
+    <div><label class="f">Докупать до запаса, дн.</label><input type="number" step="0.5" name="target_days" value="{{ t.p2p.target_days }}"></div>
+  </div>
+  <label class="f">Минимальная покупка, ₽</label><input type="number" name="min_buy_rub" value="{{ t.p2p.min_buy_rub }}" style="max-width:160px"><div class="help">Крупный чек растворяет фиксированную комиссию перевода (50 ₽ на 25 000 ₽ — 0,2%).</div>
+</div>
+<div class="card">
+  <h2>Bybit</h2>
+  <label><input type="checkbox" name="bybit_enabled" {{ 'checked' if t.bybit.enabled }}> Покупать TON на Bybit и выводить на свои кошельки</label>
+  <div class="help">Ключ: {{ 'задан' if bybit_key_set else 'не задан' }}. Создайте ключ API с правами «Спот: торговля» и «Активы: перевод и вывод», привяжите к IP компьютера и добавьте в адресную книгу Bybit (белый список) адрес кошелька бота{% if hub_addr %} и хаба{% endif %}: <code>{{ wallet_addr }}</code>{% if hub_addr %}, <code>{{ hub_addr }}</code>{% endif %}. На другие адреса бот выводить не будет.</div>
+  <div class="cols">
+    <div><label class="f">API key</label><input type="password" name="bybit_key" placeholder="оставьте пустым, чтобы не менять"></div>
+    <div><label class="f">API secret</label><input type="password" name="bybit_secret" placeholder="оставьте пустым, чтобы не менять"></div>
+  </div>
+  <label class="f">Адрес API</label><select name="bybit_base">{% for u in ['https://api.bybit.com','https://api.bytick.com','https://api.bybit.kz','https://api.bybit.eu'] %}<option {{ 'selected' if t.bybit.base_url == u }}>{{u}}</option>{% endfor %}</select>
+  <div class="cols">
+    <div><label class="f">Покупать не дороже ask +, %</label><input type="number" step="0.1" name="max_slippage_pct" value="{{ t.bybit.max_slippage_pct }}"></div>
+    <div><label class="f">Выводить партиями от, TON</label><input type="number" step="1" name="min_withdraw_ton" value="{{ t.bybit.min_withdraw_ton }}"></div>
+  </div>
+  <div class="cols">
+    <div><label class="f">Лимит покупки в сутки, USDT</label><input type="number" name="max_buy_usdt_day" value="{{ t.bybit.max_buy_usdt_day }}"></div>
+    <div><label class="f">Лимит вывода в сутки, TON</label><input type="number" name="max_withdraw_ton_day" value="{{ t.bybit.max_withdraw_ton_day }}"></div>
+  </div>
+  <h2 style="margin-top:12px">Хаб TON (необязательно)</h2>
+  <label><input type="checkbox" name="hub_enabled" {{ 'checked' if t.hub.enabled }}> Держать основной запас на отдельном кошельке</label>
+  <div class="help">Сид-фраза хаба: {{ 'задана' if hub_set else 'не задана' }}{% if hub_addr %} · <code>{{ hub_addr }}</code>{% endif %}. Кошелёк бота тогда хранит только запас на сутки — если с ним что-то случится, рискуете малой суммой.</div>
+  <textarea name="hub_mnemonic" rows="2" placeholder="новая сид-фраза хаба (12 или 24 слова); пусто — не менять" style="min-height:48px"></textarea>
+  <input type="text" name="hub_address" value="{{ t.hub.address }}" placeholder="адрес хаба (пусто — вычислить)">
+  <div class="cols">
+    <div><label class="f">Пополнять хаб, когда меньше, ч</label><input type="number" name="hub_refill_below_hours" value="{{ t.hub.refill_below_hours }}"></div>
+    <div><label class="f">…до запаса, ч</label><input type="number" name="hub_keep_hours" value="{{ t.hub.keep_hours }}"></div>
+  </div>
+</div>
+</div>
+<div class="card">
+  <h2>Маршрутизатор вывода</h2>
+  <div class="cols">
+    <div><label class="f">Выводить не меньше, ₽</label><input type="number" name="min_batch_rub" value="{{ t.router.min_batch_rub }}"></div>
+    <div><label class="f">Не больше за раз, ₽</label><input type="number" name="max_batch_rub" value="{{ t.router.max_batch_rub }}"></div>
+  </div>
+  <div class="cols">
+    <div><label class="f">Не чаще одного вывода за, ч</label><input type="number" name="cooldown_hours" value="{{ t.router.cooldown_hours }}"></div>
+    <div><label class="f">Выводов в сутки, не больше</label><input type="number" name="max_per_day" value="{{ t.router.max_per_day }}"></div>
+  </div>
+  <div class="tw" style="margin-top:8px"><table>
+    <tr><th>Площадка</th><th>Вкл.</th><th>Комиссия вывода, %</th><th>Маржа бота, %</th><th>Способ</th></tr>
+    {% for src in sources %}<tr><td>{{ src.name }}</td><td><input type="checkbox" name="on_{{src.key}}" {{ 'checked' if src.enabled is not defined or src.enabled }}></td>
+      <td><input type="number" step="0.1" name="fee_{{src.key}}" value="{{ src.fee_pct }}" style="max-width:90px"></td>
+      <td><input type="number" step="0.1" name="margin_{{src.key}}" value="{{ src.margin_pct }}" style="max-width:90px"></td>
+      <td><input type="text" name="method_{{src.key}}" value="{{ src.method }}"></td></tr>{% endfor %}
+  </table></div>
+  <div class="help">Если комиссия вывода больше маржи бота, советник не берёт эти деньги на пополнение — только на вывод прибыли.</div>
+  <button class="primary" name="action" value="save" style="margin-top:10px">Сохранить</button>
+</div>
+</form>
+{% endif %}
+{% endblock %}

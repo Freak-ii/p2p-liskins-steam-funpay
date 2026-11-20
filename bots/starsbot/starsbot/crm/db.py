@@ -81,6 +81,14 @@ CREATE TABLE IF NOT EXISTS gift_sends (
 );
 CREATE INDEX IF NOT EXISTS idx_gift_sends_order ON gift_sends(order_id);
 CREATE TABLE IF NOT EXISTS stars_history (ts REAL, stars INTEGER);
+CREATE TABLE IF NOT EXISTS treasury_moves (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, amount REAL, unit TEXT, src TEXT, dst TEXT, state TEXT,
+    ext_id TEXT DEFAULT '', price REAL DEFAULT 0, rub REAL DEFAULT 0, detail TEXT DEFAULT '', updated_at REAL
+);
+CREATE TABLE IF NOT EXISTS treasury_advice (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, source TEXT, amount_rub REAL, text TEXT, state TEXT,
+    updated_at REAL
+);
 CREATE TABLE IF NOT EXISTS withdrawals (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, amount_rub REAL, method TEXT, wallet TEXT, state TEXT,
     detail TEXT, updated_at REAL
