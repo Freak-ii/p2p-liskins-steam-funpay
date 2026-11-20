@@ -17,6 +17,7 @@ from starsbot.ton.wallet import TonError, from_nano, to_nano
 _ids = itertools.count(1000)
 FRAGMENT_ADDR = "EQBAjaOyi2wGWlk-EDkSabqqnF-MrrwMadnwqrurKpkla9nE"
 DEMO_TON_PER_STAR = 0.0115
+DEMO_PREMIUM_TON = {3: 3.85, 6: 5.15, 12: 9.35}      # подарок Premium на Fragment (≈ $11.99 / $15.99 / $28.99)
 
 
 class FakeFunPay:
@@ -42,6 +43,10 @@ class FakeFunPay:
 
     def _lot(self, offer_id) -> dict:
         oid = str(offer_id)
+        if oid in ("301", "302", "303"):          # лоты Telegram Premium (раздел 1391)
+            months = {"301": 3, "302": 6, "303": 12}[oid]
+            return self.lots.setdefault(oid, {"offer_id": oid, "node_id": "1391",
+                                              "price": f"{months * 140 + 300:.2f}", "amount": "5", "active": "on"})
         stars = {str(i + 1): s for i, s in enumerate((50, 75, 100, 150, 250, 350, 500))}.get(oid, 50)
         return self.lots.setdefault(oid, {"offer_id": oid, "node_id": "2418", "price": f"{stars * 1.45:.2f}",
                                           "amount": "10", "active": "on"})
@@ -59,6 +64,22 @@ class FakeFunPay:
         self.params[oid] = {"Краткое описание": desc, "Количество": f"{qty} шт."}
         if username:
             self.params[oid]["Username в Telegram"] = username
+        self._sys(chat, f"Покупатель {buyer} оплатил заказ #{oid}. {desc}, {qty} шт.")
+        self._orders_tag += 1
+        return oid
+
+    def buyer_pays_premium(self, buyer: str, buyer_id: int, months: int, price: float, username: str | None = None,
+                           qty: int = 1, method: str = "Подарком по username") -> str:
+        oid = "".join(random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
+        chat = str(500 + buyer_id)
+        self.chat_users[chat] = buyer
+        word = {3: "3 месяца", 6: "6 месяцев", 12: "12 месяцев"}.get(months, f"{months} мес.")
+        desc = f"Telegram Premium, {word}, {method}"
+        self.sales[oid] = FunPayOrder(order_id=oid, buyer_username=buyer, buyer_id=buyer_id, description=desc,
+                                      price=round(price * qty, 2), quantity=qty, status="paid", chat_id=chat)
+        self.params[oid] = {"Краткое описание": desc, "Количество": f"{qty} шт."}
+        if username:
+            self.params[oid]["Username получателя"] = username
         self._sys(chat, f"Покупатель {buyer} оплатил заказ #{oid}. {desc}, {qty} шт.")
         self._orders_tag += 1
         return oid
@@ -164,6 +185,8 @@ class FakeFunPay:
         return "Заявка на вывод создана"
 
     async def get_public_lots(self, node_id, filter_regex=None):
+        if int(node_id) == 1391:
+            return self._premium_lots()
         out = []
         sellers = [("StarShop", 1.40, 40), ("FastStars", 1.43, 15), ("Dumper", 1.05, 1), ("TgMarket", 1.48, 200),
                    ("ProStars", 1.52, 30)]
@@ -181,6 +204,25 @@ class FakeFunPay:
             out.append(CompetitorLot(offer_id=str(900 + i), seller="GiftGuy", price=round(stars * 1.2, 2), amount=5,
                                      description=f"{stars} звёзд, Подарком",
                                      fields={"quantity": f"{stars} звёзд", "method": "подарком"}))
+        return out
+
+    def _premium_lots(self) -> list:
+        out, n = [], 3000
+        sellers = [("PremShop", 1.00, "Подарком по username"), ("TgPlus", 1.04, "Подарком, без входа"),
+                   ("CheapLogin", 0.70, "С заходом на аккаунт"), ("FragStore", 1.09, "По username через Fragment"),
+                   ("Premka", 1.15, "Подарком")]
+        base = {3: 620.0, 6: 830.0, 12: 1480.0}
+        for months, word in ((3, "3 месяца"), (6, "6 месяцев"), (12, "12 месяцев")):
+            for name, k, method in sellers:
+                n += 1
+                out.append(CompetitorLot(offer_id=str(n), seller=name, price=round(base[months] * k, 2), amount=10,
+                                         description=f"Telegram Premium {word}, {method}",
+                                         fields={"period": word.lower(), "method": method.lower()}))
+            oid = {3: "301", 6: "302", 12: "303"}[months]
+            lot = self._lot(oid)
+            out.append(CompetitorLot(offer_id=oid, seller=self.username, price=round(float(lot["price"]) * 1.14, 2),
+                                     amount=int(lot["amount"] or 0), description=f"Telegram Premium {word}, Подарком",
+                                     fields={"period": word.lower(), "method": "подарком"}))
         return out
 
     async def close(self):
@@ -283,6 +325,26 @@ class FakeFragment:
     async def get_buy_link(self, req_id: str, amount_ton: float = 0.0):
         r = self.requests[req_id]
         comment = f"{r['quantity']} Telegram Stars\n\nRef#{req_id[-6:]}"
+        return FragmentTx(req_id=req_id, valid_until=int(time.time()) + 600,
+                          messages=[TonMessage(FRAGMENT_ADDR, to_nano(r["amount"]), "")], amount_ton=r["amount"],
+                          comment=comment)
+
+    # --- Telegram Premium
+    async def search_premium_recipient(self, username: str, months: int):
+        rec = await self.search_recipient(username)
+        if int(months) not in DEMO_PREMIUM_TON:
+            raise FragmentError("Invalid period", "bad_quantity")
+        return Recipient(username=rec.username, recipient=f"prm_{rec.username.lower()}", name=rec.name)
+
+    async def init_premium(self, recipient: str, months: int):
+        rid = f"prq{next(_ids)}"
+        amount = DEMO_PREMIUM_TON[int(months)]
+        self.requests[rid] = {"recipient": recipient, "months": int(months), "amount": amount}
+        return rid, amount
+
+    async def get_premium_link(self, req_id: str, amount_ton: float = 0.0):
+        r = self.requests[req_id]
+        comment = f"Telegram Premium for {r['months']} months\n\nRef#{req_id[-6:]}"
         return FragmentTx(req_id=req_id, valid_until=int(time.time()) + 600,
                           messages=[TonMessage(FRAGMENT_ADDR, to_nano(r["amount"]), "")], amount_ton=r["amount"],
                           comment=comment)
@@ -411,3 +473,41 @@ async def run_gift_demo(engine, fp: FakeFunPay, wallet: FakeWallet) -> list[str]
     await drain()
     await engine.gifts.watch()
     return [a, b]
+
+
+async def run_premium_demo(engine, fp: FakeFunPay, wallet: FakeWallet) -> list[str]:
+    """Telegram Premium: username в заказе, username в чате, лот «с заходом» (не наш), заказ магазина, цены по рынку."""
+    async def drain() -> None:
+        for _ in range(3):
+            await engine.funpay_poll()
+            while not engine.queue.empty():
+                oid = engine.queue.get_nowait()
+                engine._queued.discard(oid)
+                await engine.purchase(oid)
+                wallet.tick()
+                await engine.watch_purchases()
+            wallet.tick()
+            await engine.watch_purchases()
+
+    pr = engine.premium
+    if pr is None or not pr.enabled:
+        return []
+    await pr.refresh_quotes()                     # котировки Fragment без оплаты: себестоимость известна заранее
+    a = fp.buyer_pays_premium("Nina", 41, 3, 560.0, username="@alice_tg")
+    b = fp.buyer_pays_premium("Oleg", 42, 12, 1350.0)
+    login = fp.buyer_pays_premium("Pavel", 43, 3, 400.0, method="С заходом на аккаунт")
+    await drain()
+    fp.buyer_says(42, "а это точно premium без входа?")
+    await drain()
+    fp.buyer_says(42, "@bob_real")
+    await drain()
+    await drain()
+    fp.buyer_confirms(a)
+    await drain()
+    fp.buyer_says(44, "Здравствуйте, премиум на полгода есть?")
+    await drain()
+    shop = await pr.supply_order("demo-shop-1", "carol_star", 6, channel="shop", price=900.0)
+    await drain()
+    await engine.wallet_watch()
+    await pr.rtba_step()
+    return [a, b, login, shop.get("order_id", "")]

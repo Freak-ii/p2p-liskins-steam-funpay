@@ -309,6 +309,17 @@ class LotManager:
                 done += "выключен" in msg
                 key = ("gift_lot_amount:" if r["kind"] == "gift" else "lot_amount:") + str(r["offer_id"])
                 self.engine.db.kv_set(key, 0)
+        pr = getattr(self.engine, "premium", None)
+        if pr is not None and kind in (None, "premium"):
+            for l in pr.lots:                     # Premium в своём разделе FunPay (node 1391)
+                if not l.get("offer_id"):
+                    continue
+                try:
+                    await self.engine.fp.update_lot(int(l["offer_id"]), pr.node, active=False)
+                    done += 1
+                except FunPayError as err:
+                    log.warning("лот Premium %s: %s", l["offer_id"], err)
+                self.engine.db.kv_set(f"premium_lot_amount:{l['offer_id']}", 0)
         if reason:
             self.engine.db.add_event("-", "lots_closed", lot_kind=kind or "all", reason=reason)
         return f"выключено лотов: {done}"

@@ -90,6 +90,7 @@ class FakeGgsel:
 
 
 DEMO_PRODUCTS = [{"stars": n, "offer_id": str(5100000 + n)} for n in (50, 100, 250, 500)]
+DEMO_PREMIUM_PRODUCTS = [{"months": m, "offer_id": str(5200000 + m)} for m in (3, 6, 12)]
 
 
 async def run_ggsel_demo(engine, wallet) -> dict:
@@ -125,5 +126,12 @@ async def run_ggsel_demo(engine, wallet) -> dict:
     gg.confirm(a)
     gg.refund(d)
     await ch.poll()
+    invoices = [a, b, c, d]
+    if getattr(engine, "premium", None) is not None and engine.premium.enabled and \
+            any(p.get("months") for p in ch.products()):
+        e = gg.buyer_buys(5200006, 990.0, "@nika_tg")                  # Telegram Premium на 6 месяцев
+        await ch.poll()
+        await settle()
+        invoices.append(e)
     await engine.wallet_watch()
-    return {"invoices": [a, b, c, d]}
+    return {"invoices": invoices}

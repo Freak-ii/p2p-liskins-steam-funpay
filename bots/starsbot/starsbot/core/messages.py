@@ -123,7 +123,8 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "аккаунте!). Баланс иногда обновляется до 10 минут. Если звёзд всё равно нет — напишите здесь, "
             "продавец уже видит ваше сообщение и проверит платёж."
         ),
-        "faq_premium": "В этом лоте продаются только Telegram Stars (звёзды). Telegram Premium здесь не продаётся.",
+        "faq_premium": ("В этом лоте продаются Telegram Stars (звёзды). Telegram Premium мы продаём отдельными лотами "
+                        "в разделе FunPay «Telegram → Premium» — тоже с автовыдачей по username."),
         "faq_where": "Звёзды видны в Telegram → Настройки → «Мои звёзды» (Telegram Stars) на аккаунте получателя.",
         "greeting_need_username_gift": (
             "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
@@ -162,6 +163,88 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "пожалуйста, выполнение заказа на его странице. Если есть проблема — напишите, разберёмся здесь в чате."
         ),
         "review_reply": "Спасибо за отзыв, {buyer}! Рады, что {stars} ⭐ дошли быстро. Будем рады видеть вас снова 🙌",
+        "greeting_need_username_premium": (
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
+            "💎 Товар: Telegram Premium на {months_text}\n"
+            "🤖 Выдача автоматическая через официальную платформу Telegram — Fragment, обычно 1–5 минут. "
+            "Входить в аккаунт не нужно: Premium приходит подарком от Telegram.\n\n"
+            "👉 Пришлите в этот чат username получателя в Telegram, например: @username\n{last_hint}"
+            "Найти его: Telegram → Настройки → «Имя пользователя».\n\n"
+            "ℹ️ Username нужен только для подарка Premium: мы не пишем вам в Telegram, всё общение — здесь, "
+            "в чате FunPay. Пожалуйста, подтверждайте заказ только после того, как Premium активируется."
+        ),
+        "greeting_with_username_premium": (
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
+            "💎 Telegram Premium на {months_text} → @{username}{name_part}\n"
+            "🤖 Оформляю автоматически через Fragment, обычно 1–5 минут. Входить в аккаунт не нужно.\n"
+            "❗ Premium дарится сразу на username из заказа — после оплаты сменить получателя нельзя.\n"
+            "Пожалуйста, подтверждайте заказ только после того, как Premium активируется."
+        ),
+        "username_ok_premium": "✅ Аккаунт найден: @{username}{name_part}. Оформляю Telegram Premium на {months_text}…",
+        "delivered_premium": (
+            "🎉 Готово! Telegram Premium на {months_text} подарен аккаунту @{username} (заказ #{order_id}).\n"
+            "В Telegram придёт сообщение о подарке Premium — он активируется сам, обычно в течение пары минут. "
+            "Проверить: Telegram → Настройки → Telegram Premium.\n\n"
+            "Огромное спасибо за покупку, {buyer} ❤️\n"
+            "Пожалуйста, подтвердите выполнение заказа кнопкой «Подтвердить выполнение заказа» на странице "
+            "заказа — и, если не сложно, оставьте отзыв. Это очень помогает нам!"
+        ),
+        "reminder_premium": (
+            "👋 {buyer}, напоминаю: чтобы получить Telegram Premium на {months_text} по заказу #{order_id}, "
+            "пришлите username получателя в Telegram (например, @username)."
+        ),
+        "slow_network_premium": (
+            "⏳ Оплата Premium по заказу #{order_id} уже отправлена, сеть TON подтверждает её чуть дольше обычного. "
+            "Premium придёт автоматически в ближайшие минуты, я напишу."
+        ),
+        "awaiting_approval_premium": (
+            "🔎 Заказ #{order_id} проходит стандартную проверку безопасности — обычно это несколько минут. "
+            "Premium будет оформлен сразу после неё."
+        ),
+        "delay_premium": (
+            "⚠️ {buyer}, выдача заказа #{order_id} ненадолго задерживается по техническим причинам. Продавец уже "
+            "уведомлён и оформит Premium в ближайшее время — или вернёт деньги, если вы предпочтёте."
+        ),
+        "after_delivery_premium": (
+            "Telegram Premium по заказу #{order_id} уже подарен аккаунту @{username} ✅ Если он не активировался "
+            "за 10 минут, откройте чат «Telegram» в приложении или напишите «!продавец»."
+        ),
+        "change_username_late_premium": (
+            "Premium по заказу #{order_id} уже оплачен на @{username} — сменить получателя после оплаты нельзя. "
+            "Если это ошибка, напишите «!продавец»."
+        ),
+        "faq_not_arrived_done_premium": (
+            "Premium по заказу #{order_id} уже оформлен ✅ {delivered_at} — {months_text} на @{username}{ref_part}.\n"
+            "Проверьте на аккаунте @{username} (не на другом!): Telegram → Настройки → Telegram Premium, и сообщение "
+            "о подарке в чате «Telegram». Если Premium всё равно нет — напишите здесь, продавец проверит платёж."
+        ),
+        "faq_premium_premium": (
+            "Да, это заказ Telegram Premium на {months_text}: он дарится через официальную платформу Fragment по "
+            "username, без входа в аккаунт."
+        ),
+        "faq_gift_premium": (
+            "Premium приходит подарком от Telegram на аккаунт по username и активируется сам — ничего нажимать "
+            "не нужно."
+        ),
+        "faq_where_premium": "Проверить Premium: Telegram → Настройки → Telegram Premium на аккаунте получателя.",
+        "faq_time_premium": "Обычно Premium оформляется за 1–5 минут после оплаты и получения username. {status_hint}",
+        "help_premium": (
+            "Команды: «!статус» — состояние заказа, «!продавец» — позвать продавца. Чтобы получить Premium, "
+            "просто пришлите username получателя в Telegram."
+        ),
+        "unknown_premium": (
+            "Не совсем понял 🙂 Для выдачи Premium по заказу #{order_id} нужен username получателя в Telegram, "
+            "например @username. Если нужен продавец — напишите «!продавец»."
+        ),
+        "confirm_reminder_premium": (
+            "{buyer}, подскажите, пожалуйста: активировался ли Premium по заказу #{order_id}? Если да — подтвердите, "
+            "пожалуйста, выполнение заказа на его странице. Если есть проблема — напишите, разберёмся здесь в чате."
+        ),
+        "review_reply_premium": "Спасибо за отзыв, {buyer}! Рады, что Premium пришёл быстро. Будем рады видеть вас снова 🙌",
+        "presale_premium": (
+            "Здравствуйте! 👋 Telegram Premium ({premium_terms}) выдаётся автоматически подарком через Fragment, "
+            "без входа в аккаунт: оплатите лот и пришлите username получателя — обычно 1–5 минут."
+        ),
     },
     "en": {
         "greeting_need_username": (
@@ -228,7 +311,8 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "account!). The balance can take up to 10 minutes to update. If they're still missing, write here — the "
             "seller already sees your message and will check the payment."
         ),
-        "faq_premium": "This listing sells Telegram Stars only, not Telegram Premium.",
+        "faq_premium": ("This listing sells Telegram Stars. Telegram Premium is sold as separate offers in the "
+                        "FunPay section Telegram → Premium, also delivered automatically by username."),
         "faq_where": "Stars are shown in Telegram → Settings → My Stars on the recipient account.",
         "greeting_need_username_gift": ("Hi {buyer}! {returning}Thanks for paying for order #{order_id} 🎉\n"
                                         "🎁 {stars} ⭐ as Telegram gifts. Delivery is automatic, 1–5 minutes.\n"
@@ -246,6 +330,43 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "confirm_reminder": ("{buyer}, did everything arrive for order #{order_id}? If yes, please confirm the order "
                              "on its page. If there's a problem, write here and we'll sort it out."),
         "review_reply": "Thank you for the review, {buyer}! Glad your {stars} ⭐ arrived quickly. See you again 🙌",
+        "greeting_need_username_premium": ("Hi {buyer}! {returning}Thanks for paying for order #{order_id} 🎉\n"
+                                           "💎 Telegram Premium for {months_text}, gifted automatically via Fragment, "
+                                           "no account login needed.\n"
+                                           "👉 Please send the recipient's Telegram username here, e.g. @username\n"
+                                           "{last_hint}Please confirm the order only after Premium is active."),
+        "greeting_with_username_premium": ("Hi {buyer}! {returning}Thanks for paying for order #{order_id} 🎉\n"
+                                           "💎 Telegram Premium for {months_text} → @{username}{name_part}. Gifting "
+                                           "automatically via Fragment.\nPlease confirm the order only after Premium "
+                                           "is active."),
+        "username_ok_premium": "✅ Account found: @{username}{name_part}. Gifting Telegram Premium for {months_text}…",
+        "delivered_premium": ("🎉 Done! Telegram Premium for {months_text} has been gifted to @{username} (order "
+                              "#{order_id}). It activates by itself within a couple of minutes: Settings → Telegram "
+                              "Premium.\nPlease confirm the order on its page and leave a review if you can. Thank you ❤️"),
+        "reminder_premium": "👋 {buyer}, to receive Telegram Premium for order #{order_id}, please send the username.",
+        "slow_network_premium": ("⏳ The Premium payment for #{order_id} is sent; the TON network is confirming it a "
+                                 "bit slower than usual. I'll write when it's done."),
+        "awaiting_approval_premium": "🔎 Order #{order_id} is passing a standard security check. Premium will follow.",
+        "delay_premium": ("⚠️ {buyer}, delivery of #{order_id} is briefly delayed for technical reasons. The seller "
+                          "has been notified and will gift Premium shortly, or refund if you prefer."),
+        "after_delivery_premium": "Premium for #{order_id} was gifted to @{username} ✅ Check Settings → Telegram Premium.",
+        "change_username_late_premium": ("Premium for #{order_id} has already been paid to @{username}; the recipient "
+                                         "can't be changed. If it's a mistake, write \"!seller\"."),
+        "faq_not_arrived_done_premium": ("Premium for #{order_id} was gifted ✅ {delivered_at} — {months_text} to "
+                                         "@{username}{ref_part}. Check Settings → Telegram Premium on @{username}. If "
+                                         "it's still missing, write here and the seller will check the payment."),
+        "faq_premium_premium": "Yes, this is a Telegram Premium order for {months_text}, gifted via Fragment by username.",
+        "faq_gift_premium": "Premium arrives as a gift from Telegram and activates by itself.",
+        "faq_where_premium": "Check Premium in Telegram → Settings → Telegram Premium on the recipient account.",
+        "faq_time_premium": "Premium is usually gifted within 1–5 minutes after payment and username. {status_hint}",
+        "help_premium": "Commands: \"!status\", \"!seller\". To receive Premium just send the recipient's username.",
+        "unknown_premium": ("I didn't quite get that 🙂 To deliver Premium for #{order_id} I need the recipient's "
+                            "Telegram username, e.g. @username."),
+        "confirm_reminder_premium": ("{buyer}, is Premium active for order #{order_id}? If yes, please confirm the "
+                                     "order on its page. If there's a problem, write here."),
+        "review_reply_premium": "Thank you for the review, {buyer}! Glad Premium arrived quickly. See you again 🙌",
+        "presale_premium": ("Hi! 👋 Telegram Premium ({premium_terms}) is gifted automatically via Fragment, no login "
+                            "needed: pay for the offer and send the recipient's username — usually 1–5 minutes."),
     },
 }
 
@@ -293,7 +414,8 @@ TEMPLATE_VARS = {
     "reason": "аккаунт не найден", "attempt": 1, "max_attempts": 3, "status_text": "ждём username",
     "denominations": "50, 75, 100", "status_hint": "", "returning": "Рады видеть вас снова 🙌 ",
     "last_hint": "Прошлый заказ вы получали на @durov — если аккаунт тот же, просто пришлите его ещё раз.\n",
-    "gifts": "2×🏆100⭐", "value": 170, "delivered_at": "20.11 05:20", "ref_part": " (платёж Fragment Ref#AbC123)",
+    "gifts": "2×🏆100⭐", "value": 170, "delivered_at": "20.11 05:20", "ref_part": " (платёж Fragment Ref#AbC123)", "months": 3, "months_text": "3 месяца",
+    "premium_terms": "3, 6, 12 мес.",
 }
 
 

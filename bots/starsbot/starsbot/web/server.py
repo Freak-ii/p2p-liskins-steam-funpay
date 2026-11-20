@@ -582,6 +582,83 @@ def make_app(sup, log_handler=None) -> web.Application:
         audit(request, f"ggsel.{act}", str(f.get("invoice", "")), msg)
         raise web.HTTPFound(URL("/ggsel").with_query(msg=msg))
 
+    # ------------------------------------------------------------------ Telegram Premium
+    async def premium_page(request: web.Request):
+        pr = sup.engine.premium
+        c = sup.cfg.get("premium") or {}
+        gg = sup.cfg.get("ggsel") or {}
+        rows = pr.rows() if pr is not None else []
+        return render("premium.html", request, pr=pr, c=c, rows=rows, orders=pr.orders(100) if pr else [],
+                      sm=pr.summary() if pr else {}, gg_products=gg.get("premium_products") or [],
+                      ggsel_on="ggsel" in sup.engine.channels)
+
+    @friendly("/premium")
+    async def premium_action(request: web.Request):
+        need(request, "admin")
+        pr = sup.engine.premium
+        f = await request.post()
+        act = str(f.get("action", ""))
+        from starsbot.config import PREMIUM_MONTHS
+        if act == "save":
+            lots, gprods, fb = [], [], {}
+            for m in PREMIUM_MONTHS:
+                oid = str(f.get(f"lot_{m}", "")).strip()
+                lots.append({"months": m, "offer_id": int(oid) if oid.isdigit() else 0,
+                             "position": _num_in(f.get(f"pos_{m}"), 0)})
+                goid = str(f.get(f"gg_{m}", "")).strip()
+                gprods.append({"months": m, "offer_id": goid if goid.isdigit() else "",
+                               "price": _num(f.get(f"ggprice_{m}"), 0) or 0})
+                fb[str(m)] = _num(f.get(f"fb_{m}"), 0) or 0.0
+            mode = str(f.get("price_mode", "rtba"))
+            upd = {
+                "enabled": f.get("enabled") == "on", "lots": lots, "fallback_ton": fb,
+                "price_mode": mode if mode in ("rtba", "margin", "manual") else "rtba",
+                "margin_pct": _num_in(f.get("margin_pct"), 8.0, float),
+                "min_margin_pct": _num_in(f.get("min_margin_pct"), 3.0, float),
+                "target_position": max(1, _num_in(f.get("target_position"), 3)),
+                "undercut_abs": _num_in(f.get("undercut_abs"), 1.0, float),
+                "quote_username": str(f.get("quote_username", "")).strip().lstrip("@")[:32],
+                "pilot_orders": _num_in(f.get("pilot_orders"), 1),
+                "stock_sync": f.get("stock_sync") == "on",
+            }
+            was_on = bool((sup.cfg.get("premium") or {}).get("enabled"))
+            sup.save({"premium": upd, "ggsel": {"premium_products": gprods}}, rebuild=False)
+            live = sup.engine.cfg.get("premium")
+            if live is not None:
+                live.update(upd)
+            if sup.engine.cfg.get("ggsel") is not None:
+                sup.engine.cfg.ggsel["premium_products"] = gprods
+            msg = "Настройки Premium сохранены"
+            if was_on != upd["enabled"] and sup.state == "running":
+                sup.restart_required = True
+                msg += ". Перезапустите бота, чтобы включить/выключить циклы Premium"
+        elif pr is None:
+            msg = "Бот ещё не собран — запустите его"
+        elif act == "find":
+            report = await pr.find_own_lots()
+            lots = [dict(l) for l in (pr.c.get("lots") or [])]
+            sup.save({"premium": {"lots": lots}}, rebuild=False)
+            msg = "; ".join(report)
+        elif act == "sync":
+            for l in pr.lots:
+                if l.get("offer_id"):
+                    sup.db.kv_set(f"premium_lot_amount:{l['offer_id']}", None)
+            await sup.engine.wallet_watch()
+            msg = "Наличие лотов Premium пересчитано по балансу кошелька"
+        elif act == "rtba":
+            await pr.rtba_step()
+            msg = "Цены Premium пересчитаны"
+        elif act == "quote":
+            await pr.refresh_quotes()
+            msg = "Котировки Fragment обновлены" if pr.c.get("quote_username") else \
+                "Укажите свой username для котировок, иначе себестоимость берётся из последних покупок"
+        elif act == "close":
+            msg = await sup.engine.lot_manager.close_all(kind="premium", reason="кнопка Premium")
+        else:
+            msg = "?"
+        audit(request, f"premium.{act}", "", msg)
+        raise web.HTTPFound(URL("/premium").with_query(msg=msg))
+
     async def analytics_page(request: web.Request):
         a = sup.analytics
         days = _num(request.query.get("days"), 30) or 30
@@ -1124,6 +1201,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/ozon", ozon_page), web.post("/ozon", ozon_action),
         web.get("/ggsel", ggsel_page), web.post("/ggsel", ggsel_action),
         web.get("/gifts", gifts_page), web.post("/gifts", gifts_action),
+        web.get("/premium", premium_page), web.post("/premium", premium_action),
         web.get("/funpay", funpay_page), web.post("/funpay", funpay_action),
         web.get("/support/{name}", support_download),
         web.get("/crypto", crypto_page), web.post("/crypto", crypto_action),
