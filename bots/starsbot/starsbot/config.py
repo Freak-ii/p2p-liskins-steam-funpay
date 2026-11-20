@@ -207,6 +207,17 @@ DEFAULTS: dict[str, Any] = {
         "competitor_only_online": False, "outlier_iqr_factor": 1.5, "method_filter": "username",
         "raise_gap_pct": 3.0,
         "fallback_ton_per_star": 0.0,    # цена звезды в TON, пока не было ни одной покупки
+        # пресет цен (starsbot/core/strategy.py): custom — позиция лота + min_margin_pct, как раньше;
+        # turnover / balanced / margin — сегменты номиналов; auto — переключение по лимиту карты
+        "preset": "custom",
+        "segments": [],                  # свои сегменты для custom: [{from, to, position, max_position, margin_pct}]
+        "competitor_min_reviews": 0,     # не равняться на продавцов с меньшим числом отзывов
+        "competitor_min_rating": 0.0,    # и с рейтингом ниже (в таблице FunPay только целые звёзды)
+        "spread_buffer": {"enabled": False, "min_gap_rub": 5.0, "min_gap_pct": 1.5, "max_gap_pct": 10.0,
+                          "offset_rub": 0.05},
+        "night": {"enabled": False, "start_hour": 1, "end_hour": 8, "utc_offset_hours": 3, "floor_bonus_pct": 2.0},
+        "card_limit": {"daily_rub": 0.0, "monthly_rub": 0.0, "balanced_from": 0.7, "margin_from": 1.0,
+                       "no_limit_preset": "balanced"},
     },
     "economics": {
         "funpay_fee_pct": 0.0,           # комиссия FunPay, если она вычитается из вашей цены лота
