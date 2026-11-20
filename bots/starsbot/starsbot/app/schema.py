@@ -143,6 +143,8 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("interval_seconds", "Проверять рынок каждые, сек", "int", ""),
         ("strategy", "Стратегия", "choice:top1|topN|median", "top1 — дешевле лидера, topN — встать на позицию N, median — медиана"),
         ("target_position", "Позиция для topN", "int", ""),
+        ("buyer_markup_pct", "Наценка FunPay для покупателя, %", "float",
+         "Покупатель платит цену лота + столько процентов (лот 80 ₽ → покупатель 91,25 ₽ = 14,06%). Цены конкурентов в списке — уже с наценкой"),
         ("undercut_abs", "Шаг ниже конкурента, ₽", "float", ""),
         ("undercut_pct", "Шаг ниже конкурента, %", "float", ""),
         ("min_margin_pct", "Минимальная маржа над себестоимостью, %", "float", ""),

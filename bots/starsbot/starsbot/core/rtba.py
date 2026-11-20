@@ -110,7 +110,8 @@ class RTBAEngine:
         cfg = Section({**self.cfg, **overrides}) if overrides else self.cfg
         self._cur = cfg
         now = now or time.time()
-        markup = self.markup.get(offer_id, 1.0)
+        # наценка FunPay для покупателя: по своему лоту в списке, иначе из настроек (по умолчанию ~14%)
+        markup = self.markup.get(offer_id) or 1 + float(cfg.get("buyer_markup_pct", 14.06) or 0) / 100
         comps = filter_competitors(lots, cfg, stars, own_offer_ids, own_username)
         floor_lot = price_floor(cfg, stars, cost_per_star_rub, fee_pct)
         ceil_lot = float(cfg.ceiling_price_per_star or 0) * stars or None

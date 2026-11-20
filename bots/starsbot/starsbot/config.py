@@ -134,6 +134,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "rtba": {
         "enabled": False, "interval_seconds": 300, "strategy": "top1", "target_position": 1,
+        "buyer_markup_pct": 14.06,       # сколько FunPay добавляет к цене лота для покупателя (91.25 при лоте 80)
         "undercut_abs": 0.5, "undercut_pct": 0.0, "min_margin_pct": 8.0,
         "floor_price_per_star": 0.0, "ceiling_price_per_star": 0.0, "min_change": 0.3,
         "max_updates_per_hour": 6, "ignore_competitors": [], "competitor_min_amount": 1,
