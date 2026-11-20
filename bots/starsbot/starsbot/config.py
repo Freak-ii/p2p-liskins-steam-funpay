@@ -87,6 +87,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "fragment": {
         "cookies": "",                   # stel_ssid=…; stel_dt=…; stel_token=…; stel_ton_token=…
+        "user_agent": "",                # User-Agent браузера, из которого взяты cookie (пусто — как у FunPay)
         "min_interval": 1.0,
         "max_ton_per_star": 0.0,         # предохранитель: не покупать дороже (0 — без ограничения)
         "max_cost_share_pct": 100.0,     # не покупать, если себестоимость > X% от суммы заказа (защита от убытка)

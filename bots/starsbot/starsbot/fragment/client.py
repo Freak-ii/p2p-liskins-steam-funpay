@@ -206,7 +206,16 @@ class FragmentClient:
                          name=_strip_html(str(found.get("name") or "")))
 
     async def init_buy(self, recipient: str, quantity: int) -> tuple[str, float]:
-        resp = await self.api("initBuyStarsRequest", recipient=recipient, quantity=int(quantity))
+        try:
+            resp = await self.api("initBuyStarsRequest", recipient=recipient, quantity=int(quantity))
+        except FragmentAuthError as e:
+            if "access denied" in str(e).lower():
+                # поиск получателя работает и без входа, а покупка — только у вошедшего аккаунта с KYC
+                raise FragmentAuthError(
+                    "Fragment отказал в покупке (Access denied). Проверьте в браузере на fragment.com/stars/buy, "
+                    "что можете сами купить звёзды этим аккаунтом: чаще всего не пройдена верификация (KYC) "
+                    "или cookie/User-Agent взяты не из того браузера", "auth") from e
+            raise
         req_id = str(resp.get("req_id") or "")
         if not req_id:
             raise FragmentError(f"Fragment не создал запрос на покупку: {str(resp)[:200]}", "layout")

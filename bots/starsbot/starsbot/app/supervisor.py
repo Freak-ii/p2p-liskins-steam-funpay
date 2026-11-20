@@ -165,7 +165,8 @@ class Supervisor:
                                    dry_run=cfg.general.dry_run, mnemonic_type=cfg.ton.get("mnemonic_type", "auto"))
             except Exception as e:  # noqa: BLE001 — кошелёк ещё не настроен: панель и CRM работают без него
                 wallet = UnconfiguredWallet(str(e))
-            fragment = FragmentClient(cfg.fragment.cookies, wallet, user_agent=cfg.funpay.user_agent,
+            fragment = FragmentClient(cfg.fragment.cookies, wallet,
+                                      user_agent=cfg.fragment.get("user_agent") or cfg.funpay.user_agent,
                                       dry_run=cfg.general.dry_run, min_interval=cfg.fragment.min_interval)
             rates = RateProvider(cfg.rates, self.db)
         self.coord = coord
