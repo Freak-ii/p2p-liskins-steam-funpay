@@ -170,6 +170,8 @@ class FragmentClient:
             try:
                 async with sess.post(f"{BASE}/api", params={"hash": self.api_hash}, data=data, headers={
                         "X-Requested-With": "XMLHttpRequest", "Origin": BASE, "Referer": f"{BASE}/stars/buy",
+                        "X-Aj-Referer": f"{BASE}/stars",
+                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                         "Accept": "application/json, text/javascript, */*; q=0.01"}) as r:
                     text = await r.text()
                     if r.status == 429 or r.status >= 500:
@@ -206,8 +208,15 @@ class FragmentClient:
                          name=_strip_html(str(found.get("name") or "")))
 
     async def init_buy(self, recipient: str, quantity: int) -> tuple[str, float]:
+        # сайт перед созданием заявки обновляет состояние формы покупки; без этого Fragment может ответить
+        # «Access denied»
         try:
-            resp = await self.api("initBuyStarsRequest", recipient=recipient, quantity=int(quantity))
+            await self.api("updateStarsBuyState", mode="new", lv="false", dh=str(random.randint(100_000_000, 2_147_483_647)))
+        except FragmentError as e:
+            log.info("Fragment updateStarsBuyState: %s (продолжаем)", e)
+        try:
+            resp = await self.api("initBuyStarsRequest", recipient=recipient, quantity=int(quantity),
+                                  payment_method="ton")
         except FragmentAuthError as e:
             if "access denied" in str(e).lower():
                 # поиск получателя работает и без входа, а покупка — только у вошедшего аккаунта с KYC
@@ -239,6 +248,8 @@ class FragmentClient:
         await self.wallet.refresh()
         resp = await self.api("getBuyStarsLink", account=self._account(), device=self._device(), transaction=1,
                               id=req_id, show_sender=0)
+        if resp.get("need_verify"):
+            raise FragmentAuthError("Fragment требует верификацию аккаунта (KYC): пройдите её на fragment.com", "kyc")
         tx = resp.get("transaction") or {}
         msgs = [TonMessage(address=str(m.get("address")), amount=int(m.get("amount")), payload=m.get("payload") or "",
                            state_init=m.get("stateInit") or "") for m in tx.get("messages") or []]
