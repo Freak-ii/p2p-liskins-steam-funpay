@@ -44,6 +44,8 @@ def test_demo_pages_controls_and_money(tmp_path):
                 r = await client.get(path)
                 assert r.status == 200, path
             assert "bob_real" in await (await client.get("/orders?q=bob_real")).text()
+            hp = await (await client.get("/help")).text()
+            assert "<h3>1. Подготовка" in hp and "type='checkbox'" in hp and "<table>" in hp and "<code>v5r1</code>" in hp
             r = await client.post(f"/orders/{oid}", data={"action": "note", "text": "VIP"})
             assert r.status == 200 and sup.db.get_order(oid)["notes"] == "VIP"
             calc = await (await client.post("/api/calc", json={"prices": {"100": 200}})).json()
@@ -182,3 +184,10 @@ def test_pages_before_first_wallet_check(tmp_path):
             await client.close()
 
     asyncio.run(go())
+
+
+def test_mdlite_escapes_and_nests():
+    from starsbot.web.mdlite import render
+    h = render("# T\n- [x] a <b>\n  - **b** [x](https://evil) [ok](/money)\n\n| a | b |\n|---|---|\n| 1 | 2 |")
+    assert "&lt;b&gt;" in h and "checked" in h and h.count("<ul>") == 2 and h.count("</ul>") == 2
+    assert "evil" in h and 'href="https' not in h and 'href="/money"' in h and "<td>2</td>" in h

@@ -27,7 +27,7 @@ from starsbot.app import schema
 from starsbot.config import DENOMINATIONS
 from starsbot.core import messages as M
 from starsbot.core.models import OrderStatus as S
-from starsbot.web import charts
+from starsbot.web import charts, mdlite
 
 log = logging.getLogger("starsbot.web")
 
@@ -1298,6 +1298,12 @@ def make_app(sup, log_handler=None) -> web.Application:
             return web.json_response({"ok": False, "text": f"Неизвестная переменная: {e}"})
 
     # ------------------------------------------------------------------ журнал
+    async def help_page(request: web.Request):
+        src = Path(__file__).resolve().parents[2] / "FIRST_RUN.md"
+        doc = mdlite.render(src.read_text(encoding="utf-8")) if src.exists() else \
+            "<p>Файл FIRST_RUN.md не найден рядом с программой.</p>"
+        return render("help.html", request, doc=doc)
+
     async def logs(request: web.Request):
         return render("logs.html", request)
 
@@ -1320,7 +1326,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/analytics", analytics_page), web.get("/alerts", alerts),
         web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
         web.get("/api/summary", api_status), web.get("/api/health", api_health),
-        web.get(r"/export/{what}.csv", export), web.get("/api/stream", stream),
+        web.get(r"/export/{what}.csv", export), web.get("/help", help_page), web.get("/api/stream", stream),
         web.get("/setup", setup), web.post("/setup", setup),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),

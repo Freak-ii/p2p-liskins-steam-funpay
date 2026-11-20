@@ -61,7 +61,7 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
                      ('Продажи', [('/funpay', 'Лоты'), ('/pricing', 'Цены'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else []) + ([('/ggsel', 'GGSEL')] if ggsel_on else [])),
                      ('Выдача', [('/gifts', 'Подарки'), ('/premium', 'Premium')]),
                      ('Финансы', [('/treasury', 'Казначейство'), ('/crypto', 'Кошелёк и автопилот'), ('/money', 'Деньги')]),
-                     ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')])] %}
+                     ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал'), ('/help', 'Справка')])] %}
     {% for gname, items in groups %}<span class="navgroup">{% if gname %}<span class="navlabel">{{gname}}</span>{% endif %}
     {% for href, name in items %}<a href="{{href}}" class="{{ 'active' if path == href else '' }}">{{name}}</a>{% endfor %}</span>{% endfor %}
   </nav>

@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}Справка{% endblock %}
+{% block body %}<h1>Справка</h1>
+<div class="card"><h2>Быстрые ссылки</h2><div class="row">
+<a class="chip" href="/setup">Мастер настройки</a><a class="chip" href="/money">Деньги и калькулятор</a>
+<a class="chip" href="/alerts">Алерты</a><a class="chip" href="/api/health">Состояние (JSON)</a></div>
+<div class="help">Команды в Telegram-боте уведомлений: <code>/status</code>, <code>/orders</code>, <code>/balance</code>, <code>/report</code>, <code>/approve ID</code>, <code>/reject ID</code>, <code>/user ID username</code>, <code>/msg ID текст</code>, <code>/delivered ID</code>, <code>/refund ID</code>, <code>/pause</code>, <code>/resume</code>.</div></div>
+<div class="card md">{{ doc|safe }}</div>
+<style>.md h2{margin-top:18px}.md ul{padding-left:20px}.md li{margin:3px 0}.md input{margin-right:6px}</style>
+{% endblock %}
