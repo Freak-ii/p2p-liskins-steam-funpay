@@ -28,7 +28,7 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
             "⭐ {stars} Telegram Stars → @{username}{name_part}\n"
             "🤖 Отправляю автоматически через официальную платформу Telegram — Fragment, обычно 1–5 минут.\n"
-            "Если username указан с ошибкой, сразу напишите правильный в этот чат.\n"
+            "❗ Звёзды уходят сразу на username из заказа — после отправки сменить получателя или вернуть их нельзя.\n"
             "Пожалуйста, подтверждайте заказ только после того, как звёзды придут."
         ),
         "username_ok": "✅ Аккаунт найден: @{username}{name_part}. Отправляю {stars} ⭐…",
@@ -176,8 +176,9 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "greeting_with_username": (
             "Hi {buyer}! {returning}Thank you for paying for order #{order_id} 🎉\n"
             "⭐ {stars} Telegram Stars → @{username}{name_part}\n"
-            "🤖 Sending automatically via Fragment, usually 1–5 minutes. If the username is wrong, send the correct "
-            "one right away. Please confirm the order only after the stars arrive."
+            "🤖 Sending automatically via Fragment, usually 1–5 minutes. ❗ Stars go out right away to the username "
+            "from the order; once sent, the recipient can't be changed and the stars can't be returned. Please "
+            "confirm the order only after the stars arrive."
         ),
         "username_ok": "✅ Account found: @{username}{name_part}. Sending {stars} ⭐…",
         "bad_username": ("❗ {buyer}, {reason}.\nPlease send your Telegram username again (Latin letters, e.g. "

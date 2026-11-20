@@ -26,6 +26,9 @@ def _pick(options: list[tuple[str, str]], test) -> str | None:
 DESC_RU_USERNAME = (
     "⭐ {stars} звёзд Telegram — официально через Fragment, по username\n"
     "⚡ Автовыдача 24/7: обычно 1–5 минут после оплаты\n\n"
+    "❗❗ ПРОВЕРЬТЕ USERNAME ПЕРЕД ОПЛАТОЙ ❗❗\n"
+    "Звёзды уходят автоматически сразу после оплаты на тот username, который вы указали. Отменить отправку "
+    "или забрать звёзды с чужого аккаунта невозможно, поэтому после отправки возврат не делается.\n\n"
     "Как получить:\n"
     "1. Оплатите лот\n"
     "2. Пришлите в чат @username получателя (можно свой или друга)\n"
@@ -33,7 +36,6 @@ DESC_RU_USERNAME = (
     "✅ Без входа в аккаунт — не нужны пароли, коды и почта\n"
     "✅ Звёзды видны в Telegram → Настройки → «Мои звёзды»\n"
     "✅ Можно купить несколько лотов — пришлём сумму на один аккаунт\n"
-    "❗ Проверьте username: звёзды на чужой аккаунт вернуть невозможно\n"
     "❗ Подтвердите заказ, когда звёзды придут\n"
     "💬 Вопросы — в чат, бот отвечает сразу"
 )
@@ -51,13 +53,15 @@ DESC_RU_GIFT = (
 DESC_EN_USERNAME = (
     "{stars} Telegram Stars - official purchase via Fragment, delivered by username.\n"
     "Automatic delivery 24/7, usually 1-5 minutes after payment.\n\n"
+    "PLEASE DOUBLE-CHECK YOUR USERNAME BEFORE PAYING. Stars are sent automatically right after payment to the "
+    "username you entered. A sent transfer cannot be cancelled or taken back, so there are no refunds after "
+    "delivery.\n\n"
     "How to get them:\n"
     "1. Pay for the offer.\n"
     "2. Send the recipient's @username in the chat (yours or a friend's).\n"
     "3. The bot checks the account, shows the name and sends the stars right away.\n\n"
     "No account login needed: no passwords or codes.\n"
     "Stars appear in Telegram - Settings - My Stars.\n"
-    "Please double-check the username: stars sent to a wrong account cannot be returned.\n"
     "Confirm the order once the stars arrive. Questions - in the chat."
 )
 DESC_EN_GIFT = (
@@ -97,9 +101,9 @@ def lot_texts(stars: int, kind: str, description: str = "", custom: dict | None 
         (DESC_RU_GIFT if gift else DESC_RU_USERNAME)
     out = {
         "summary_ru": (f"🎁 {stars} ⭐ Telegram подарками | Автовыдача 1–5 мин | По username" if gift else
-                       f"⭐ {stars} звёзд Telegram | Автовыдача 1–5 мин | По username | Fragment"),
+                       f"⭐ {stars} звёзд Telegram | Автовыдача | Fragment | ❗ Проверьте свой username"),
         "summary_en": (f"{stars} Telegram Stars as gifts | Instant delivery | By username" if gift else
-                       f"{stars} Telegram Stars | Instant delivery 1-5 min | By username | Fragment"),
+                       f"{stars} Telegram Stars | Instant delivery | Fragment | Check your username!"),
         "desc_ru": _fmt(desc, stars),
         "desc_en": (DESC_EN_GIFT if gift else DESC_EN_USERNAME).format(stars=stars),
     }
