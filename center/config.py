@@ -38,6 +38,8 @@ DEFAULTS: dict = {
         "lisbot": {"enabled": True, "autostart": False, "port": 8802, "node": ""},
         # процесс StarsBot = его панель; торговля начнётся только после мастера настройки (кошелёк TON, Fragment)
         "starsbot": {"enabled": True, "autostart": True, "port": 8803, "python": ""},
+        # Telegram-магазин: пока выключен до настройки (токен бота, оплата, токены поставщиков)
+        "shopbot": {"enabled": True, "autostart": False, "port": 8806, "python": ""},
     },
     "restart": {
         "backoff_start": 2,          # первая пауза перед перезапуском, с
@@ -186,6 +188,7 @@ DEMO_DEFAULTS: dict = {
         "mannbot": {"autostart": True, "port": 18801},
         "lisbot": {"autostart": True, "port": 18802},
         "starsbot": {"autostart": True, "port": 18803},
+        "shopbot": {"autostart": True, "port": 18806},
     },
 }
 

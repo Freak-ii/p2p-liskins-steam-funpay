@@ -15,7 +15,7 @@ from center.inventory import Inventory
 from center.readiness import Readiness
 from center.tgcontrol import TelegramControl
 from center.updates import Updates
-from center.bots import BotWorker, LisBotWorker, MannBotWorker, StarsBotWorker
+from center.bots import BotWorker, LisBotWorker, MannBotWorker, ShopBotWorker, StarsBotWorker
 from center.config import CenterConfig
 from center.crm import Crm
 from center.coordinator import Coordinator
@@ -47,6 +47,9 @@ class Center:
                                      executable=wm.get("python") or "", demo=demo, vault=self.vault),
             "starsbot": StarsBotWorker(self.home / "starsbot", self.events, port=ws.get("port", 8803),
                                        restart=restart, executable=ws.get("python") or "", demo=demo, vault=self.vault),
+            "shopbot": ShopBotWorker(self.home / "shopbot", self.events, port=self.cfg.worker("shopbot").get("port", 8806),
+                                     restart=restart, executable=self.cfg.worker("shopbot").get("python") or "",
+                                     demo=demo, vault=self.vault),
         }
         for w in self.workers.values():             # адрес и токен реестра обменов (center/steamshare.py)
             w.extra_env = self.steamshare.bot_env

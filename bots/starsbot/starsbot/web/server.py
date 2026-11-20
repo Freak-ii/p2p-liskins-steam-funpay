@@ -174,8 +174,8 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     @web.middleware
     async def auth(request: web.Request, handler):
-        if request.path in ("/login", "/api/ping"):
-            return await handler(request)
+        if request.path in ("/login", "/api/ping") or request.path.startswith("/api/supply/"):
+            return await handler(request)           # /api/supply/* проверяет свой X-Supply-Token (supply_api.py)
         role = role_for(request.cookies.get(COOKIE, ""))
         if not role:
             if request.path.startswith("/api/"):
@@ -1030,6 +1030,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         return web.json_response({"lines": lines[-500:], "state": sup.status()})
 
     app = web.Application(middlewares=[auth], client_max_size=2 * 1024 * 1024)
+    from starsbot.supply_api import install as install_supply
+    install_supply(app, sup)                        # контракт поставщика для ShopBot
     app.add_routes([
         web.get("/login", login), web.post("/login", login), web.post("/logout", logout), web.get("/api/ping", ping),
         web.get("/", dashboard), web.get("/orders", orders), web.get("/orders/{oid}", order),

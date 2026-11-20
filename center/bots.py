@@ -527,6 +527,123 @@ class StarsBotWorker(MannBotWorker):
                 return r.status in (200, 302, 303)
 
 
+# ====================================================================== ShopBot
+class ShopBotWorker(BotWorker):
+    """ShopBot (Python): Telegram-магазин экосистемы. Товар берёт у StarsBot (звёзды, Premium), TG Gift (подарки)
+    и MannBot (ключи) через их /api/supply/*; своих денег и кошелька TON не тратит."""
+
+    name = "shopbot"
+    title = "ShopBot · Telegram-магазин"
+    src = BOTS_DIR / "shopbot"
+    cookie = "shop_token"
+
+    def __init__(self, *a, demo: bool = False, **kw):
+        super().__init__(*a, **kw)
+        self.demo = demo
+
+    @property
+    def _cfg_path(self) -> Path:
+        return self.home / ("demo" if self.demo else "") / "config.yaml"
+
+    def check_deps(self) -> str | None:
+        if not (self.src / "shopbot").is_dir():
+            return f"нет исходников ShopBot в {self.src}"
+        try:
+            import aiohttp as _a, jinja2 as _j, yaml as _y  # noqa: F401
+        except ImportError as e:
+            return f"не установлены Python-пакеты ({e.name}): pip install -r requirements.txt"
+        return None
+
+    def command(self) -> list[str]:
+        py = self.executable or sys.executable
+        if Path(py).name.lower() == "pythonw.exe":
+            py = str(Path(py).with_name("python.exe"))
+        cmd = [py, "-m", "shopbot", "--home", str(self.home), "--host", self.bind_host, "--port", str(self.port),
+               "--no-browser"]
+        if self.demo:
+            cmd.append("--demo")
+        return cmd
+
+    def cwd(self) -> Path:
+        return self.src
+
+    def env(self) -> dict[str, str]:
+        return {"PYTHONPATH": str(self.src) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+
+    def classify_exit(self, code: int | None, tail: str) -> tuple[str, str] | None:
+        if "занят другой программой" in tail:
+            return CRASHED, f"порт {self.port} занят: смените workers.shopbot.port в center.yaml"
+        return None
+
+    def token(self) -> str:
+        try:
+            raw = yaml.safe_load(self._cfg_path.read_text(encoding="utf-8")) or {}
+            return str((raw.get("dashboard") or {}).get("token") or "")
+        except (OSError, yaml.YAMLError):
+            return ""
+
+    def panel_url(self) -> str:
+        return f"{self.base_url}/login?token={self.token()}"
+
+    def _cookies(self) -> dict:
+        return {self.cookie: self.token()}
+
+    async def health(self) -> bool:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
+            async with s.get(f"{self.base_url}/api/ping") as r:
+                return r.status == 200 and "shopbot" in await r.text()
+
+    async def identify(self, base_url: str) -> int | None:
+        token = self.token()
+        if not token:
+            return None
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies={self.cookie: token}) as s:
+            async with s.get(f"{base_url}/api/ping") as r:
+                ping = await r.json(content_type=None) if r.status == 200 else {}
+            if ping.get("app") != "shopbot":
+                return None
+            async with s.get(f"{base_url}/api/status", allow_redirects=False) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json(content_type=None)
+        if bool(d.get("demo")) != self.demo:
+            return None
+        return int(ping.get("pid") or 0)
+
+    async def summary(self) -> dict | None:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
+            async with s.get(f"{self.base_url}/api/status", allow_redirects=False) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json()
+        sm = d.get("summary") or {}
+        closed = d.get("rtba_closed") or []
+        return {"bot_state": d.get("state"), "dry_run": d.get("dry_run"), "demo": d.get("demo"),
+                "kpi": {"Заказов за 24 ч": sm.get("orders"), "Выручка за 24 ч, ₽": sm.get("revenue"),
+                        "Маржа за 24 ч, ₽": sm.get("margin"), "Выкуп за 24 ч, $": sm.get("buyback_usdt"),
+                        "Требуют внимания": sm.get("attention"), "Баланс выплат, $": d.get("treasury_usdt"),
+                        "Закрыто RTBA": ", ".join(closed) if closed else "ничего"}}
+
+    def alerts(self, limit: int = 50) -> list[dict]:
+        con = _read_only(self.home / ("demo" if self.demo else "") / "data" / "shopbot.sqlite3")
+        if con is None:
+            return []
+        try:
+            rows = con.execute("SELECT id, ts, level, code, text, acknowledged FROM alerts ORDER BY id DESC LIMIT ?",
+                               (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
+        finally:
+            con.close()
+        return [{"source": self.name, "id": r["id"], "ts": float(r["ts"] or 0), "level": str(r["level"] or "").lower(),
+                 "code": r["code"], "message": r["text"], "acked": bool(r["acknowledged"])} for r in rows]
+
+    async def ack_alert(self, alert_id: int | None) -> bool:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, cookies=self._cookies()) as s:
+            async with s.post(f"{self.base_url}/alerts/ack", allow_redirects=False) as r:
+                return r.status in (200, 302, 303)
+
+
 # ====================================================================== LisBot
 LIS_SECRET_KEYS = ["LIS_API_KEY", "STEAM_ACCOUNT_NAME", "STEAM_PASSWORD", "STEAM_SHARED_SECRET",
                    "STEAM_IDENTITY_SECRET", "STEAM_TRADE_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]

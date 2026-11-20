@@ -1,0 +1,24 @@
+{% extends "base.html" %}{% block body %}
+<div class="grid">
+<div class="kpi"><span>Заказов за 24 ч</span><b>{{ s1.orders }}</b></div>
+<div class="kpi"><span>Выручка 24 ч</span><b>{{ '%.0f'|format(s1.revenue) }} ₽</b></div>
+<div class="kpi"><span>Маржа 24 ч</span><b>{{ '%.0f'|format(s1.margin) }} ₽</b></div>
+<div class="kpi"><span>Комиссии оплат (клиенты)</span><b>{{ '%.0f'|format(s1.pay_fees) }} ₽</b></div>
+<div class="kpi"><span>Рефералам начислено</span><b>{{ '%.0f'|format(s1.ref_paid) }} ₽</b></div>
+<div class="kpi"><span>Выкуп 24 ч</span><b>{{ s1.buyback_n }} · {{ s1.buyback_usdt }} $</b></div>
+<div class="kpi"><span>Требуют внимания</span><b class="{{ 'warn' if s1.attention }}">{{ s1.attention }}</b></div>
+<div class="kpi"><span>Клиентов / новых</span><b>{{ s1.users }} / {{ s1.new_users }}</b></div>
+<div class="kpi"><span>Баланс выплат</span><b>{{ treasury.usdt|round(2) if treasury.usdt is not none else '—' }} $</b></div>
+<div class="kpi"><span>Курс Bybit</span><b>{{ rates.usdt_rub }} ₽</b><span>TON {{ rates.ton_rub }} ₽ · {{ rates.source }}{% if not rates.fresh %} · <b class="warn">устарел</b>{% endif %}</span></div>
+</div>
+<div class="card" style="margin-top:14px"><h2>RTBA — пульт пунктов</h2><div class="scroll"><table>
+<tr><th>Пункт</th><th>Состояние</th><th>Режим</th><th>Сейчас</th><th>Почему</th></tr>
+{% for p in points %}<tr><td>{{ p.title }} <span class="mute">{{ p.group }}</span></td><td><span class="pill {{ p.state }}">{{ 'открыт' if p.state == 'open' else 'закрыт' }}</span></td>
+<td>{{ p.mode }}</td><td>{{ p.value }}</td><td class="mute">{{ p.reason }}</td></tr>{% endfor %}</table></div></div>
+<div class="card"><h2>По товарам за 7 дней</h2><table><tr><th>Товар</th><th>Заказов</th><th>Выручка</th><th>Маржа</th></tr>
+{% for k, v in s7.by_product.items() %}<tr><td>{{ PRODUCTS.get(k, k) }}</td><td>{{ v.n }}</td><td>{{ v.rev }} ₽</td><td>{{ v.margin }} ₽</td></tr>{% else %}<tr><td colspan=4 class="mute">пока нет продаж</td></tr>{% endfor %}</table></div>
+<div class="card"><h2>Требуют внимания</h2><table>
+{% for o in attention %}<tr><td><a href="/orders/{{ o.id }}">#{{ o.id }}</a></td><td>{{ PRODUCTS.get(o.product, o.product) }}</td><td>{{ STATUS.get(o.status, o.status) }}</td><td class="mute">{{ o.fail_reason }}</td></tr>{% else %}<tr><td class="mute">всё спокойно</td></tr>{% endfor %}</table></div>
+<div class="card"><h2>Тревоги</h2><form method="post" action="/alerts/ack" style="float:right;margin-top:-34px"><button class="ghost">Прочитаны</button></form><table>
+{% for a in alerts %}<tr><td class="mute">{{ a.ts|ts }}</td><td>{{ a.level }}</td><td>{{ a.text }}</td></tr>{% else %}<tr><td class="mute">нет</td></tr>{% endfor %}</table></div>
+{% endblock %}

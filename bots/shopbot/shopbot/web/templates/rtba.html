@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h2>RTBA: каждый пункт под контролем</h2>
+<p class="mute">auto — RTBA сам открывает и закрывает пункт по проверкам (поставщик, цена и маржа, курс, баланс выплат, лимиты, сбои). on — открыт принудительно (кроме жёстких запретов). off — закрыт.</p>
+<form method="post"><input type="hidden" name="action" value="tick"><button class="ghost">Проверить сейчас</button></form>
+<div class="scroll"><table><tr><th>Пункт</th><th>Состояние</th><th>Сейчас</th><th>Причина</th><th>Проверен</th><th>Режим</th></tr>
+{% for p in points %}<tr><td>{{ p.title }}<br><span class="mute">{{ p.key }}</span></td><td><span class="pill {{ p.state }}">{{ 'открыт' if p.state == 'open' else 'закрыт' }}</span></td>
+<td>{{ p.value }}</td><td class="mute">{{ p.reason }}</td><td class="mute">{{ p.checked_at|ts }}</td>
+<td><form method="post" style="display:flex;gap:4px"><input type="hidden" name="key" value="{{ p.key }}">
+<select name="mode">{% for m in ['auto','on','off'] %}<option {{ 'selected' if m == p.mode }}>{{ m }}</option>{% endfor %}</select><button>OK</button></form></td></tr>{% endfor %}</table></div></div>
+<div class="card"><h2>Журнал решений</h2><div class="scroll"><table>{% for r in log %}<tr><td class="mute">{{ r.ts|ts }}</td><td>{{ RTBA_TITLES.get(r.key, r.key) }}</td><td>{{ r.decision }}</td><td class="mute">{{ r.reason }}</td></tr>{% else %}<tr><td class="mute">пусто</td></tr>{% endfor %}</table></div></div>
+<div class="card"><h2>Сбои поставщиков</h2><table>{% for r in fails %}<tr><td class="mute">{{ r.ts|ts }}</td><td>{{ r.supplier }}</td><td>{{ r.error }}</td></tr>{% else %}<tr><td class="mute">нет</td></tr>{% endfor %}</table></div>
+{% endblock %}

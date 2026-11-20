@@ -211,6 +211,8 @@ class Supervisor:
                                sess if sess.is_absolute() else self.home / sess, dry_run=cfg.general.dry_run)
         self.engine.gifts = GiftService(cfg, self.engine, tg)
         self.engine.channels["internal"] = InternalChannel(self.engine.gifts)
+        from starsbot.supply_api import ShopChannel
+        self.engine.channels["shop"] = ShopChannel(self.engine)     # заказы Telegram-магазина (ShopBot)
         from starsbot.funpay.lots import LotManager
         self.engine.lot_manager = LotManager(self.engine, save_config=self.save)
         from starsbot.autopilot import Autopilot
