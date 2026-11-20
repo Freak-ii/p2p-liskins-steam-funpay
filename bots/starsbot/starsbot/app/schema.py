@@ -32,7 +32,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("enabled", "Выдача подарками Telegram", "bool", "Заказы раздела «Звёзды → Подарком»"),
         ("api_id", "api_id Telegram", "int", "my.telegram.org → API development tools"),
         ("api_hash", "api_hash Telegram", "secret", ""),
-        ("phone", "Номер аккаунта", "str", "Вход — в разделе «Юзеры / Подарки»"),
+        ("phone", "Номер аккаунта", "str", "Вход — в разделе «Подарки»"),
         ("mode", "Подбор подарков", "choice:convert|price", "convert — по сумме конвертации (13/21/43/85), price — по цене"),
         ("per_gift_penalty", "«Штраф» за каждый подарок, ⭐", "float", "Больше — меньше подарков в наборе"),
         ("max_gifts_per_order", "Подарков в заказе, максимум", "int", ""),
@@ -67,7 +67,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("min_funpay_rub", "И на балансе FunPay не меньше, ₽", "float", ""),
         ("keep_rub", "Оставлять на FunPay, ₽", "float", ""),
         ("max_per_day_rub", "Не больше в сутки, ₽", "float", ""),
-        ("method", "Способ вывода (значение из списка FunPay)", "str", "Выбирается в разделе «Крипта»"),
+        ("method", "Способ вывода (значение из списка FunPay)", "str", "Выбирается в разделе «Кошелёк и автопилот»"),
         ("wallet", "Куда выводить", "str", "Пусто — кошелёк бота"),
         ("require_approval", "Каждый вывод — после кнопки", "bool", ""),
     ]),
@@ -199,7 +199,7 @@ SECTION_TITLES = {
     "notifications.telegram": "Telegram", "notifications": "Уведомления", "dashboard": "Доступ к панели (роли)",
     "sla": "Сроки (SLA)", "ozon": "Ozon: продажи", "ozon.activation_bot": "Ozon: бот активации",
     "ozon.activation_web": "Ozon: страница активации",
-    "gifts": "Юзеры / Подарки: выдача подарками", "gifts.topup": "Подарки: автопополнение звёзд",
+    "gifts": "Подарки: выдача подарками Telegram", "gifts.topup": "Подарки: автопополнение звёзд",
     "autopilot": "Автопилот", "autopilot.withdraw": "Автопилот: вывод с FunPay",
 }
 

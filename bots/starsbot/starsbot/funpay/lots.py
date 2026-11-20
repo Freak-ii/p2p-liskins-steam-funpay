@@ -24,7 +24,7 @@ def _pick(options: list[tuple[str, str]], test) -> str | None:
 
 
 def build_lot_fields(base: dict[str, str], selects: dict[str, list[tuple[str, str]]], *, stars: int, kind: str,
-                     price: float, amount: int, description: str = "") -> dict[str, str]:
+                     price: float, amount: int, description: str = "", active: bool = True) -> dict[str, str]:
     """Поля формы нового лота из образца: количество, способ, цена, наличие, описание."""
     f = {k: v for k, v in base.items() if k not in ("offer_id", "csrf_token")}
     qty_set = method_set = False
@@ -46,11 +46,21 @@ def build_lot_fields(base: dict[str, str], selects: dict[str, list[tuple[str, st
         raise FunPayError("в форме лота нет способа «" + ("По username" if kind == "username" else "Подарком") + "»")
     f["price"] = f"{price:.2f}"
     f["amount"] = str(max(1, int(amount)))
-    f["active"] = "on"
-    if description:
-        for key in list(f):
-            if re.match(r"fields\[desc\]\[ru\]", key):
-                f[key] = description
+    if active:
+        f["active"] = "on"
+    else:
+        f.pop("active", None)                 # чекбокс не отправлен = лот выключен
+    f.pop("deleted", None)
+    how = "по username" if kind == "username" else "подарком"
+    for key in list(f):
+        if description and key.startswith("fields[desc]"):
+            f[key] = description
+        # «Краткое описание» обязательно, а у лота-образца в нём другой номинал — всегда пишем своё
+        if key.startswith("fields[summary]"):
+            f[key] = (f"{stars} звёзд Telegram {how}, автовыдача" if key.endswith("[ru]")
+                      else f"{stars} Telegram Stars, instant delivery")
+    if "fields[summary][ru]" not in f:
+        f["fields[summary][ru]"] = f"{stars} звёзд Telegram {how}, автовыдача"
     return f
 
 
@@ -115,11 +125,17 @@ class LotManager:
                     base, selects = await e.fp.get_lot_form(node, templates.get(kind) or 0)
                     desc = str(self.cfg.funpay.get("gift_lot_description" if kind == "gift" else "lot_description")
                                or "")
+                    # в тестовом режиме лот всё равно создаётся, но выключенным: покупатель не сможет оплатить,
+                    # пока бот ничего не выдаёт; включит его синхронизация наличия после выхода из теста
+                    test_mode = bool(e.fp.dry_run)
                     fields = build_lot_fields(base, selects, stars=stars, kind=kind,
-                                              price=self._start_price(stars, kind), amount=1, description=desc)
-                    new_id = await e.fp.create_lot(fields)
-                    if not new_id and not e.fp.dry_run:
+                                              price=self._start_price(stars, kind), amount=1, description=desc,
+                                              active=not test_mode)
+                    new_id = await e.fp.create_lot(fields, force=True)
+                    if not new_id:
                         new_id = await self._find_new(node, stars, kind)
+                    if not new_id:
+                        raise FunPayError("FunPay принял форму, но лот не найден в ваших лотах — проверьте раздел вручную")
                 except FunPayError as err:
                     report.append(f"{stars} ⭐ {'подарком' if kind == 'gift' else 'по username'}: {err}")
                     continue
@@ -127,8 +143,8 @@ class LotManager:
                     l["offer_id"] = int(new_id)
                     changed = True
                     e.db.add_event("-", "lot_created", stars=stars, lot_kind=kind, offer_id=new_id)
-                report.append(f"{stars} ⭐ {'подарком' if kind == 'gift' else 'по username'}: " +
-                              (f"выставлен, id {new_id}" if new_id else "dry-run — лот не создан"))
+                report.append(f"{stars} ⭐ {'подарком' if kind == 'gift' else 'по username'}: выставлен, id {new_id}" +
+                              (" (выключен, пока включён тестовый режим)" if test_mode else ""))
             if changed:
                 updates[kind] = lots
         if updates and self.save_config is not None:

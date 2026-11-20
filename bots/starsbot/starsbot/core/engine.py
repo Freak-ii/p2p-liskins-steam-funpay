@@ -1433,6 +1433,13 @@ class Engine:
         await self.fp.login()
         await self.recover()
         await self.ensure_fragment()
+        if not self.cfg.general.dry_run:
+            # остатки, записанные в тестовом режиме, на FunPay не отправлялись: первая синхронизация
+            # в боевом режиме должна выставить наличие и включить лоты заново
+            for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:")):
+                for l in ((self.cfg.get(section) or {}).get("lots") or []):
+                    if l.get("offer_id"):
+                        self.db.kv_set(prefix + str(l["offer_id"]), None)
         lm = getattr(self, "lot_manager", None)
         if lm is not None and self.cfg.funpay.get("auto_create_lots"):
             try:

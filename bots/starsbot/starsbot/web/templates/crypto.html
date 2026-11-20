@@ -1,6 +1,6 @@
-{% extends "base.html" %}{% block title %}Крипта{% endblock %}
+{% extends "base.html" %}{% block title %}Кошелёк и автопилот{% endblock %}
 {% block body %}
-<h1>Крипта: кошелёк GRAM (TON) и автопилот</h1>
+<h1>Кошелёк и автопилот</h1>
 {% set wd = acfg.withdraw or {} %}
 <div class="grid">
   <div class="card kpi"><div class="v">{{ winfo.balance|ton if winfo.balance is not none else '—' }}</div><div class="l">GRAM (TON) на кошельке бота{% if rate %} · ≈ {{ ((winfo.balance or 0) * rate)|money }} ₽{% endif %}</div></div>

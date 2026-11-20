@@ -665,7 +665,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         audit(request, f"test.{what}", "", "ok" if res.get("ok") else "fail")
         return web.json_response(res)
 
-    # ------------------------------------------------------------------ Юзеры / подарки
+    # ------------------------------------------------------------------ Подарки
     def _num_in(v, default=0, cast=int):
         try:
             return cast(str(v).strip().replace(",", ".")) if str(v).strip() != "" else default
@@ -782,7 +782,7 @@ def make_app(sup, log_handler=None) -> web.Application:
             q["login"] = login_step
         raise web.HTTPFound(URL("/gifts").with_query(**q))
 
-    # ------------------------------------------------------------------ FunPay / Fragment
+    # ------------------------------------------------------------------ Лоты
     async def funpay_page(request: web.Request):
         lm = sup.engine.lot_manager
         ap = sup.engine.autopilot
@@ -847,7 +847,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         return web.Response(body=p.read_bytes(), content_type="text/plain", charset="utf-8",
                             headers={"Content-Disposition": f'attachment; filename="{p.name}"'})
 
-    # ------------------------------------------------------------------ Крипта
+    # ------------------------------------------------------------------ Кошелёк и автопилот
     async def crypto_page(request: web.Request):
         e = sup.engine
         ap = e.autopilot

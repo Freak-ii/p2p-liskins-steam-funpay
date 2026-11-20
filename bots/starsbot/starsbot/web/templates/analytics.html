@@ -1,6 +1,6 @@
-{% extends "base.html" %}{% block title %}Аналитика{% endblock %}
+{% extends "base.html" %}{% block title %}Статистика{% endblock %}
 {% block body %}
-<div class="row" style="justify-content:space-between"><h1>Аналитика</h1>
+<div class="row" style="justify-content:space-between"><h1>Статистика</h1>
 <div class="row">{% for d in [7,30,90] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/analytics?days={{d}}">{{d}} дн.</a>{% endfor %}</div></div>
 <div class="grid">
   <div class="card kpi"><div class="v">{{ s.revenue|money }}</div><div class="l">Выручка, ₽</div></div>

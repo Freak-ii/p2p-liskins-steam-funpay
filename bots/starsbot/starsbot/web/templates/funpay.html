@@ -1,6 +1,6 @@
-{% extends "base.html" %}{% block title %}FunPay / Fragment{% endblock %}
+{% extends "base.html" %}{% block title %}Лоты{% endblock %}
 {% block body %}
-<h1>FunPay / Fragment: лоты, позиции, подтверждение сделок</h1>
+<h1>Лоты</h1>
 
 <div class="grid">
   <div class="card kpi"><div class="v {{ 'c-green' if fr.session == 'ok' else 'c-red' }}">{{ {'ok': 'активна', 'expired': 'истекла'}.get(fr.session, 'не проверена') }}</div><div class="l">сессия Fragment · KYC {{ {'verified': 'пройден', 'required': 'НУЖЕН'}.get(fr.kyc, '—') }}{% if fr_age is not none %} · cookies {{ fr_age }} дн.{% endif %}</div></div>
@@ -25,7 +25,7 @@
     <td>{{ r.amount if r.amount is not none else '—' }}</td><td>{{ r.price|money if r.price else '—' }}</td><td>{{ r.rank or '—' }}</td><td>{{ r.best|money if r.best else '—' }}</td>
     <td>{% if r.offer_id and is_admin %}<button form="t{{r.offer_id}}" title="Включить">▶</button><button form="f{{r.offer_id}}" title="Выключить">■</button>{% endif %}</td>
   </tr>{% endfor %}</table>
-  {% if not gifts_on %}<div class="help">Лоты «Подарком» появятся здесь, когда вы включите подарки в разделе «Юзеры / Подарки».</div>{% endif %}
+  {% if not gifts_on %}<div class="help">Лоты «Подарком» появятся здесь, когда вы включите подарки в разделе «Подарки».</div>{% endif %}
   {% if is_admin %}<div class="cols" style="margin-top:8px">
     <div><label><input type="checkbox" name="auto_create" {{ 'checked' if fp.auto_create_lots }}> Выставлять недостающие лоты автоматически при запуске</label>
       <label class="f">Стартовая цена нового лота, ₽ за звезду</label><input type="number" step="0.01" name="start_price" value="{{ fp.lot_price_per_star }}" style="max-width:120px"></div>

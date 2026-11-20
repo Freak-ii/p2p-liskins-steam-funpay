@@ -20,6 +20,7 @@ DEMO_TON_PER_STAR = 0.0115
 
 
 class FakeFunPay:
+    dry_run = False               # эмулятор всегда «боевой»; тест может включить тестовый режим
     def __init__(self):
         self.user_id = 1
         self.username = "StarsSeller"
@@ -139,7 +140,7 @@ class FakeFunPay:
                 "fields[desc][ru]": "", "price": "", "amount": "", "active": "on"}
         return base, {"fields[quantity]": qty, "fields[method]": method}
 
-    async def create_lot(self, fields):
+    async def create_lot(self, fields, force=False):
         new_id = str(1000 + len(self.lots) + 1)
         self.lots[new_id] = {**fields, "offer_id": new_id}
         return new_id

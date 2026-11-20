@@ -249,11 +249,12 @@ class FunPayClient:
             raise FunPayError("не удалось открыть форму лота")
         return fields, P.parse_offer_selects(page)
 
-    async def create_lot(self, fields: dict[str, str]) -> str:
-        """Создаёт лот (offer_id=0). Возвращает id нового лота, если FunPay его сообщил."""
+    async def create_lot(self, fields: dict[str, str], force: bool = False) -> str:
+        """Создаёт лот (offer_id=0). Возвращает id нового лота, если FunPay его сообщил.
+        force=True — создать и в тестовом режиме (LotManager создаёт такой лот выключенным)."""
         form = dict(fields)
         form["offer_id"] = "0"
-        if self.dry_run:
+        if self.dry_run and not force:
             log.info("[DRY-RUN] новый лот: %s", {k: v for k, v in form.items() if k != "csrf_token"})
             return ""
         form["csrf_token"] = self.csrf
@@ -263,7 +264,7 @@ class FunPayClient:
         except json.JSONDecodeError as e:
             raise FunPayError(f"создание лота: не JSON ({body[:120]!r})") from e
         if data.get("error") or data.get("errors"):
-            raise FunPayError(f"лот не создан: {data.get('errors') or data.get('error')}")
+            raise FunPayError(f"лот не создан: {data.get('msg') or data.get('errors') or data.get('error')}")
         import re as _re
         m = _re.search(r"(?:offer=|id=)(\d+)", str(data.get("url") or data.get("redirect") or ""))
         return m.group(1) if m else str(data.get("offer_id") or data.get("id") or "")

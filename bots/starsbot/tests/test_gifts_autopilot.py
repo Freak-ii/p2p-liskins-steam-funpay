@@ -265,7 +265,7 @@ def test_new_pages_render(tmp_path):
                 r = await client.get(path)
                 assert r.status == 200, (path, await r.text())
             t = await (await client.get("/")).text()
-            assert "Юзеры / Подарки" in t and "FunPay / Fragment" in t and "Крипта" in t
+            assert "Продажи" in t and "Выдача" in t and "Финансы" in t
             r = await client.post("/api/wallet/addresses", json={"mnemonic": " ".join(W12)})
             items = (await r.json())["items"]
             assert {x["version"] for x in items} == {"v5r1", "v4r2"}
@@ -280,3 +280,23 @@ def test_new_pages_render(tmp_path):
     asyncio.run(go())
     assert next(l for l in e.cfg.gifts.lots if int(l["stars"]) == 13)["position"] == 3
     assert next(l for l in e.cfg.funpay.lots if int(l["stars"]) == 50)["position"] == 2
+
+
+def test_create_lot_in_test_mode_is_real_but_inactive(tmp_path):
+    """Тестовый режим: лот создаётся на FunPay выключенным, с кратким описанием своего номинала."""
+    sup, e, fp, wallet = make(tmp_path, funpay={"lots": [{"stars": 50, "offer_id": 1}, {"stars": 75, "offer_id": 0}]})
+    fp.dry_run = True
+    rep = asyncio.run(e.lot_manager.create_missing(kinds=("username",)))
+    new = next(l for l in e.cfg.funpay.lots if int(l["stars"]) == 75)["offer_id"]
+    assert new and "выключен" in rep[0]
+    lot = fp.lots[str(new)]
+    assert not lot.get("active") and lot["fields[summary][ru]"].startswith("75 звёзд")
+
+
+def test_build_lot_fields_rewrites_template_summary_and_inactive():
+    base = {"fields[quantity]": "1", "fields[method]": "1", "fields[summary][ru]": "100 звёзд по username",
+            "active": "on", "deleted": ""}
+    selects = {"fields[quantity]": [("1", "100 звёзд"), ("2", "250 звёзд")],
+               "fields[method]": [("1", "По username"), ("2", "Подарком")]}
+    f = build_lot_fields(base, selects, stars=250, kind="username", price=500, amount=1, active=False)
+    assert f["fields[summary][ru]"].startswith("250 звёзд") and "active" not in f and "deleted" not in f

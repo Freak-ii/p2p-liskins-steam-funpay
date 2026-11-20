@@ -199,7 +199,7 @@ class Autopilot:
             ton = [v for v, t in info.methods if "ton" in t.lower() or "gram" in t.lower()]
             method = ton[0] if ton else ""
         if not method:
-            return "не выбран способ вывода (в списке FunPay нет TON — выберите способ в панели → Крипта)"
+            return "не выбран способ вывода (в списке FunPay нет TON — выберите способ в панели → Кошелёк и автопилот)"
         wallet = str(w.get("wallet") or getattr(self.engine.wallet, "friendly_address", "") or "")
         if not wallet or wallet == "—":
             return "не задан кошелёк для вывода"
