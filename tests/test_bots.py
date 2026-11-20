@@ -1,7 +1,7 @@
 import json
 import sqlite3
 
-from center.bots import LisBotWorker, MannBotWorker, read_env_file, write_env_file
+from center.bots import LisBotWorker, MannBotWorker, StarsBotWorker, read_env_file, write_env_file
 from center.events import EventStore
 
 
@@ -17,14 +17,15 @@ def test_lisbot_secrets_and_config(tmp_path):
     w.save_secrets({"LIS_API_KEY": "k", "STEAM_PASSWORD": "pw"})
     tok = w.token()
     assert len(tok) >= 16                                        # токен панели создаётся автоматически
-    w.save_secrets({"LIS_API_KEY": "k2", "STEAM_PASSWORD": ""})  # пустой пароль не затирает сохранённый
-    s = read_env_file(w.secrets_path)
-    assert s["LIS_API_KEY"] == "k2" and s["STEAM_PASSWORD"] == "pw" and s["DASHBOARD_TOKEN"] == tok
+    w.save_secrets({"LIS_API_KEY": "lis-key-2", "STEAM_PASSWORD": ""})  # пустой пароль не затирает сохранённый
+    s = w.secrets()
+    assert not w.secrets_path.exists() and b"lis-key-2" not in (tmp_path / "secrets.dat").read_bytes()
+    assert s["LIS_API_KEY"] == "lis-key-2" and s["STEAM_PASSWORD"] == "pw" and s["DASHBOARD_TOKEN"] == tok
     m = w.masked_secrets()
     assert m["STEAM_PASSWORD"] == "" and m["STEAM_PASSWORD_SET"] is True
-    w.config_path.write_text(json.dumps({"strategy": {"minRoi": 0.1}}))
+    w.config_path.write_text(json.dumps({"strategy": {"minRoi": 0.1}}), encoding="utf-8")
     w.prepare()
-    cfg = json.loads(w.config_path.read_text())
+    cfg = json.loads(w.config_path.read_text(encoding="utf-8"))
     assert cfg["strategy"]["minRoi"] == 0.1                       # настройки, сохранённые панелью бота, не теряются
     assert cfg["dataDir"] == str(w.data_dir) and cfg["dashboard"]["port"] == w.port
     assert cfg["telegram"]["enabled"] is False
@@ -67,3 +68,43 @@ def test_mannbot_command(tmp_path):
     cmd = w.command()
     assert cmd[1:3] == ["-m", "mannbot.app.launcher"] and "--demo" in cmd and "--no-browser" in cmd
     assert str(w.src) in w.env()["PYTHONPATH"]
+
+
+def test_starsbot_command_and_shared_coordination(tmp_path):
+    ev = EventStore(tmp_path / "c.sqlite3")
+    stars = StarsBotWorker(tmp_path / "starsbot", ev, port=18803)
+    mann = MannBotWorker(tmp_path / "mannbot", ev, port=18801)
+    cmd = stars.command()
+    assert cmd[1:3] == ["-m", "starsbot.app.launcher"] and "--no-browser" in cmd and "18803" in cmd
+    assert str(stars.src) in stars.env()["PYTHONPATH"] and stars.src.name == "starsbot"
+    # оба бота одного аккаунта FunPay получают один файл координации
+    assert stars.env()["FUNPAY_COORD_DB"] == mann.env()["FUNPAY_COORD_DB"]
+    assert stars.env()["FUNPAY_COORD_DB"].endswith("funpay_coord.sqlite3")
+    demo = StarsBotWorker(tmp_path / "starsbot", ev, port=1, demo=True)
+    assert demo.env()["FUNPAY_COORD_DB"].endswith("funpay_coord_demo.sqlite3") and "--demo" in demo.command()
+    s = stars._summary({"state": "running", "summary": {"orders": 3, "stars_sold": 300},
+                        "wallet": {"balance": 12.34567, "capacity": 1000}, "fragment": {"session": "ok"}})
+    assert s["kpi"]["Звёзд выдано"] == 300 and s["kpi"]["TON на кошельке"] == 12.346 and s["kpi"]["Fragment"] == "активна"
+
+
+def test_center_remote_cmd_file(tmp_path):
+    """Центром можно управлять файлом remote_cmd.txt в папке данных: статус и автозапуск без панели."""
+    import asyncio
+    from center.app import Center
+    c = Center(tmp_path)
+    (tmp_path / "remote_cmd.txt").write_text("status\nlisbot autostart_on\nnobot start\nmannbot pause\n", encoding="utf-8")
+    assert asyncio.run(c.remote_inbox_once()) == 4
+    out = (tmp_path / "remote_cmd.out.txt").read_text(encoding="utf-8")
+    assert "starsbot:" in out and "автозапуск с центром включён" in out
+    assert "неизвестный бот nobot" in out and "не запущен" in out
+    assert c.cfg.worker("lisbot")["autostart"] is True and not (tmp_path / "remote_cmd.txt").exists()
+    c.events.close()
+
+
+def test_shopbot_command(tmp_path):
+    from center.bots import ShopBotWorker
+    ev = EventStore(tmp_path / "ev.sqlite3")
+    shop = ShopBotWorker(tmp_path / "shopbot", ev, port=18806, demo=True)
+    cmd = shop.command()
+    assert cmd[1:3] == ["-m", "shopbot"] and "--demo" in cmd and "18806" in cmd
+    assert str(shop.src) in shop.env()["PYTHONPATH"] and shop.check_deps() is None

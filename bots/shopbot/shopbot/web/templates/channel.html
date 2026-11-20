@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block body %}<div class="card"><h2>Канал магазина</h2>
+<p class="mute">Посты — черновики в стиле Tribute с кнопками в бот. Публикация {{ 'разрешена' if enabled else 'выключена' }}{% if chat_id %} в {{ chat_id }}{% endif %}. Включить: Настройки → «Канал: публикация разрешена» и chat_id (бот — админ канала). Пост с ценами RTBA обновляет сам.</p></div>
+<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">{% for p in posts %}
+<div class="card" style="max-width:420px"><div class="mute">{{ p.title }}{% if p.status == 'published' %} · опубликован {{ p.published_at|ts }}{% endif %}</div>
+<div style="background:var(--bg);border-radius:14px;padding:12px;margin:8px 0;white-space:pre-wrap">{{ p.text|replace('<b>','')|replace('</b>','') }}</div>
+{% for row in p.buttons %}<div style="display:flex;gap:4px;margin-bottom:4px">{% for b in row %}<span class="btn" style="flex:1;text-align:center;font-size:13px">{{ b[0] }}</span>{% endfor %}</div>{% endfor %}
+<form method="post"><input type="hidden" name="post" value="{{ p.id }}"><button class="ghost" {{ 'disabled' if not enabled }}>Опубликовать</button></form></div>{% endfor %}</div>{% endblock %}

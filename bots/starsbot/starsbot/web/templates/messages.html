@@ -1,0 +1,24 @@
+{% extends "base.html" %}{% block title %}Сообщения покупателям{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>Сообщения покупателям</h1>
+<div class="row"><a class="chip {{ 'c-blue' if lang=='ru' }}" href="/messages?lang=ru">Русский</a><a class="chip {{ 'c-blue' if lang=='en' }}" href="/messages?lang=en">English</a></div></div>
+<div class="card"><b>Важно (правила FunPay):</b> не добавляйте контакты (Telegram, Discord и т. п.) и ссылки на сторонние сайты; не просите подтвердить заказ до выдачи — это можно только в сообщении «Успешная сделка».
+<div class="help" style="margin-top:6px">Переменные в фигурных скобках подставляются автоматически: {% for v in vars %}<code>{{ '{' ~ v ~ '}' }}</code> {% endfor %}</div></div>
+<form method="post"><input type="hidden" name="lang" value="{{lang}}">
+{% for key, title, text, custom in items %}
+<div class="card">
+  <div class="row" style="justify-content:space-between"><h2 style="margin:0">{{title}} {% if custom %}<span class="chip c-blue">изменено</span>{% endif %}</h2>
+  <div class="row">{% if custom %}<label class="muted"><input type="checkbox" name="reset_{{key}}"> вернуть стандартный</label>{% endif %}
+  <button type="button" onclick="preview('{{key}}')">Предпросмотр</button></div></div>
+  <textarea name="{{key}}" id="t_{{key}}" rows="{{ [3, text.count('\n') + 2]|max }}" style="margin-top:8px">{{text}}</textarea>
+  {% if errors[key] %}<div class="result bad">Ошибка: {{ errors[key] }} — изменение не сохранено</div>{% endif %}
+  <pre id="p_{{key}}" class="help" style="display:none;margin-top:6px;padding:8px;background:var(--chip);border-radius:6px"></pre>
+</div>
+{% endfor %}
+<div style="position:sticky;bottom:0;padding:10px 0;background:var(--bg)"><button class="primary" style="font-size:15px;padding:9px 22px">Сохранить тексты</button></div>
+</form>
+<script>
+async function preview(k){const res=await postJSON('/api/preview',{text:document.getElementById('t_'+k).value});const p=document.getElementById('p_'+k);
+p.style.display='block';p.style.color=res.ok?'':'var(--red)';p.textContent=res.text}
+</script>
+{% endblock %}

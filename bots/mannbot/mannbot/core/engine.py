@@ -8,6 +8,8 @@ import re
 import time
 from typing import Any
 
+from mannbot.coord import Coordinator
+from mannbot.ai.agent import AIAgent
 from mannbot.core import messages as M
 from mannbot.core.models import ChatMessage, FunPayOrder, OrderStatus as S, TradeOfferState as T
 from mannbot.core.risk import RiskEngine
@@ -17,6 +19,7 @@ from mannbot.funpay.client import FunPayAuthError, FunPayError
 from mannbot.funpay.parsers import classify_system
 from mannbot.notify.notifier import Notifier
 from mannbot.steam.client import SteamAuthError, SteamError
+from mannbot.steam.shared import CenterShare, ShareUnavailable
 from mannbot.steam.tradelink import TradeLinkError, find_trade_url, looks_like_wrong_link, parse_trade_url
 
 log = logging.getLogger("engine")
@@ -27,13 +30,16 @@ BUYER_DATA_ERRORS = {"invalid_token", "cannot_trade", "trade_banned", "inventory
 
 
 class Engine:
-    def __init__(self, cfg, db: Database, funpay, steam, notifier: Notifier, analytics=None):
+    def __init__(self, cfg, db: Database, funpay, steam, notifier: Notifier, analytics=None, coord=None):
         self.cfg = cfg
+        # общий координатор с другими ботами аккаунта FunPay (StarsBot); без пути — выключен
+        self.coord = coord or Coordinator(None, "mannbot")
         self.db = db
         self.fp = funpay
         self.steam = steam
         self.notifier = notifier
         self.analytics = analytics
+        self.external_commands = False
         self.risk = RiskEngine(cfg.risk, db)
         self.rtba = RTBAEngine(cfg.rtba)
         self.queue: asyncio.Queue[str] = asyncio.Queue()
@@ -44,6 +50,8 @@ class Engine:
         self.started_at = time.time()
         self.last_ok: dict[str, float] = {}
         self.stock_cache: dict[str, Any] = {"total": None, "ts": 0}
+        self.ai = AIAgent(cfg, db, notifier, sender=self.say_text)
+        self.share = CenterShare.from_env()      # реестр обменов центра: один аккаунт Steam с LisBot
 
     # ================================================================== helpers
     @property
@@ -93,7 +101,10 @@ class Engine:
         if event:
             self.db.add_event(order_id, event, status=status.value if status else None,
                               **{k: v for k, v in fields.items() if k != "status"})
-        return self.db.get_order(order_id)
+        o = self.db.get_order(order_id)
+        if o is not None and status is not None and status.is_final:
+            self.coord.release_chat(o["chat_id"], order_id)
+        return o
 
     def enqueue(self, order_id: str) -> None:
         if order_id not in self._queued:
@@ -117,6 +128,8 @@ class Engine:
             if row is None:
                 if so.status != "paid" or not self._order_re.search(so.description or ""):
                     continue
+                if not self.coord.claim_order(so.order_id):
+                    continue                 # заказ уже ведёт другой бот аккаунта
                 await self.on_new_order(so, imported=first_run)
             elif row["fp_status"] != so.status:
                 await self.on_fp_status_change(row, so.status)
@@ -142,6 +155,7 @@ class Engine:
                                keys=keys)
         self.db.add_event(so.order_id, "created", price=so.price, keys=keys, imported=imported)
         o = self.db.get_order(so.order_id)
+        self.coord.claim_chat(o["chat_id"], so.order_id)
         if imported:
             # заказы, оплаченные до первого запуска бота, — только продавцу: их могли уже выдать вручную
             self._set(so.order_id, S.MANUAL, "imported_on_first_run")
@@ -262,8 +276,10 @@ class Engine:
             asyncio.create_task(self._fetch_review_later(oid, delay=5))
 
     async def on_buyer_message(self, chat_id: str, msg: ChatMessage) -> None:
-        self.db.log_message(chat_id, None, "in", msg.text)
         o = self.db.active_order_for_chat(chat_id)
+        if o is None and self.coord.chat_is_foreign(chat_id):
+            return                           # в чате идёт заказ другого бота (например, звёзды у StarsBot)
+        self.db.log_message(chat_id, None, "in", msg.text)
         if o is None and find_trade_url(msg.text):
             # покупатель прислал ссылку раньше, чем мы увидели оплату — синхронизируем заказы
             await self.sync_orders()
@@ -273,6 +289,8 @@ class Engine:
                                     (chat_id,))
             if M.is_off_platform_request(msg.text) and delivered:
                 await self.say(delivered, "off_platform")
+            elif await self._ask_ai(chat_id, delivered, msg):
+                return
             # п. 2.1.4 — не игнорируем: пересылаем продавцу
             await self.notifier.notify("INFO", "chat_message",
                                        f"💬 {msg.author_name}: {msg.text[:500]}", throttle_key=f"chat:{chat_id}")
@@ -325,14 +343,26 @@ class Engine:
             wrong = looks_like_wrong_link(msg.text)
             if wrong:
                 await self.bad_data(o, wrong)
-            else:
-                await self.say(o, "unknown")
-                if "?" in msg.text:
-                    await self.notifier.notify("INFO", "buyer_question", f"Вопрос в заказе #{oid}: {msg.text[:300]}",
-                                               order_id=oid)
+                return
+            res = await self.ai.handle(chat_id, o, msg.text, msg.author_name) if self.ai.active else None
+            if res and res.sent:
+                return
+            await self.say(o, "unknown")
+            if "?" in msg.text and not (res and res.drafted):
+                await self.notifier.notify("INFO", "buyer_question", f"Вопрос в заказе #{oid}: {msg.text[:300]}",
+                                           order_id=oid)
+            return
+        if await self._ask_ai(chat_id, o, msg):
             return
         await self.notifier.notify("INFO", "buyer_message", f"💬 #{oid} {msg.author_name}: {msg.text[:300]}",
                                    order_id=oid)
+
+    async def _ask_ai(self, chat_id: str, o, msg: ChatMessage) -> bool:
+        """Отдать непонятное сообщение ИИ-агенту. True — ИИ ответил сам или продавец уже получил черновик."""
+        if self.paused or not self.ai.active:
+            return False
+        res = await self.ai.handle(chat_id, o, msg.text, msg.author_name)
+        return res.sent or res.drafted
 
     # ================================================================== ссылка на обмен
     async def bad_data(self, o, code: str, detail: str = "") -> None:
@@ -456,6 +486,7 @@ class Engine:
             except Exception as e:  # noqa: BLE001
                 log.exception("ошибка выдачи %s", oid)
                 await self.notifier.notify("CRITICAL", "deliver_crash", f"Сбой выдачи #{oid}: {e!r}", order_id=oid)
+                await self.hold_lots("сбой выдачи")
                 self._set(oid, S.MANUAL, "deliver_crash", fail_reason=str(e)[:200])
 
     async def deliver(self, oid: str) -> None:
@@ -500,19 +531,26 @@ class Engine:
         self.db.reserve_assets(oid, assets)
         message = self.cfg.steam.offer_message.format(order_id=oid, qty=need)
         try:
+            share_id = None
+            if not getattr(self.steam, "dry_run", False):
+                try:   # один аккаунт с LisBot: сначала записываем обмен в центр (mannbot/steam/shared.py)
+                    share_id = await self.share.intent(oid, link.steam_id64, self.cfg.steam.appid, assets)
+                except ShareUnavailable as e:
+                    raise SteamError(str(e), "center_share") from e
             sent = await self.steam.send_offer(link, assets, message)
         except SteamError as e:
             self.db.release_assets(oid)
             self.db.add_event(oid, "send_failed", code=e.code, error=str(e))
             if e.code in BUYER_DATA_ERRORS:
                 await self.bad_data(o, e.code, str(e))
-            elif e.code in ("rate_limit", "network", "timeout", "server", "too_many_offers"):
+            elif e.code in ("rate_limit", "network", "timeout", "server", "too_many_offers", "center_share"):
                 fails = int(self.db.kv_get(f"send_fail:{oid}", 0)) + 1
                 self.db.kv_set(f"send_fail:{oid}", fails)
                 if fails >= 5:
                     self._set(oid, S.MANUAL, "send_retry_limit", fail_reason=e.code)
                     await self.notifier.notify("CRITICAL", "send_retry_limit", f"#{oid}: Steam не принимает трейд "
                                                f"({e}). Требуется вмешательство.", order_id=oid)
+                    await self.hold_lots("Steam не принимает трейды")
                 else:
                     asyncio.get_running_loop().call_later(30 * fails, self.enqueue, oid)
             else:
@@ -521,6 +559,7 @@ class Engine:
             return
         self.db.record_offer(sent.offer_id, oid, int(T.NEEDS_CONFIRMATION if sent.needs_confirmation else T.ACTIVE),
                              assets)
+        await self.share.bind(share_id, sent.offer_id)
         self._set(oid, event="offer_created", offer_id=sent.offer_id)
         if sent.needs_confirmation:
             ok = await self.steam.confirm_offer(sent.offer_id)
@@ -529,6 +568,7 @@ class Engine:
                 await self.notifier.notify("CRITICAL", "confirm_failed",
                                            f"#{oid}: трейд {sent.offer_id} создан, но НЕ подтверждён в Steam Guard. "
                                            "Проверьте identity_secret / подтвердите вручную.", order_id=oid)
+                await self.hold_lots("трейд не подтверждается в Steam Guard")
                 return
             self.db.update_offer_state(sent.offer_id, int(T.ACTIVE))
         o = self._set(oid, S.OFFER_SENT, "offer_sent", offer_sent_at=time.time())
@@ -551,6 +591,7 @@ class Engine:
             self._set(o["order_id"], S.MANUAL, "offer_mismatch", fail_reason="offer_mismatch")
             await self.notifier.notify("CRITICAL", "offer_mismatch", f"Трейд {offer_id} по #{o['order_id']} не совпал "
                                        "с ожидаемым (получатель/предметы) и отменён!", order_id=o["order_id"])
+            await self.hold_lots("трейд не совпал с заказом")
 
     async def _safe_steam(self, coro):
         try:
@@ -674,10 +715,41 @@ class Engine:
                                            "смените пароль, отзовите API-ключ и завершите все сессии!",
                                            throttle_key=f"foreign:{oid}")
         for off in received:
-            if off.get("items_to_give") and sec.decline_incoming_requests:
-                await self._safe_steam(self.steam.decline_offer(str(off.get("tradeofferid"))))
-                self.db.metric("declined_incoming", 1)
+            if off.get("items_to_give"):
+                if sec.decline_incoming_requests:
+                    await self._safe_steam(self.steam.decline_offer(str(off.get("tradeofferid"))))
+                    self.db.metric("declined_incoming", 1)
+            else:
+                await self._accept_bridge_gift(off)
         self.last_ok["security"] = time.time()
+
+    async def _accept_bridge_gift(self, off: dict) -> None:
+        """Мост ключей: принимаем обмен от аккаунта LisBot (security.accept_gifts_from), только если от нас
+        ничего не просят и внутри одни ключи Mann Co. Остальные входящие обмены не трогаем."""
+        allowed = {str(x).strip() for x in (self.cfg.security.get("accept_gifts_from") or []) if str(x).strip()}
+        oid = str(off.get("tradeofferid"))
+        partner = str(int(off.get("accountid_other") or 0) + 76561197960265728)
+        items = off.get("items_to_receive") or []
+        if not allowed or partner not in allowed or not items or off.get("items_to_give") \
+                or self.db.kv_get(f"gift_done:{oid}"):
+            return
+        st = self.cfg.steam
+        names = await self._safe_steam(self.steam.get_offer_item_names(oid))
+        if names is None:
+            return
+        if (len(names) != len(items) or any(int(i.get("appid") or 0) != int(st.appid) for i in items)
+                or any(n != st.key_market_hash_name for n in names)):
+            self.db.kv_set(f"gift_done:{oid}", "skipped")
+            await self.notifier.notify("WARNING", "bridge_gift_foreign",
+                                       f"Обмен {oid} от аккаунта LisBot содержит не только ключи, не принимаю. "
+                                       "Решите вручную.", throttle_key=f"gift:{oid}")
+            return
+        if not await self._safe_steam(self.steam.accept_offer(oid, partner)):
+            return
+        self.db.kv_set(f"gift_done:{oid}", "accepted")
+        self.db.metric("bridge_keys_in", len(items))
+        await self.notifier.notify("INFO", "bridge_gift", f"🔑 Мост ключей: принято {len(items)} ключ(ей) "
+                                   f"от аккаунта LisBot (обмен {oid})")
 
     async def steam_auth_problem(self, e: Exception) -> None:
         await self.notifier.notify("CRITICAL", "steam_auth", f"Steam-сессия недействительна: {e}. Пробую перелогин.",
@@ -685,9 +757,11 @@ class Engine:
         try:
             await self.steam.ensure_session()
             await self.notifier.notify("INFO", "steam_auth_ok", "Steam: сессия восстановлена")
+            await self.release_lots("steam")
         except Exception as e2:  # noqa: BLE001
             await self.notifier.notify("CRITICAL", "steam_login_failed", f"Steam: перелогин не удался: {e2}. "
                                        "Выдача остановлена до исправления.", throttle_key="steam_login_failed")
+            await self.hold_lots("Steam не входит, выдать ключи нельзя", auto_release="steam")
 
     # ================================================================== таймеры / SLA
     async def timers(self) -> None:
@@ -731,15 +805,19 @@ class Engine:
         self.db.kv_set("last_stock", avail)
         if not self.cfg.funpay.stock_sync or self.paused:
             return
+        await self._sync_lots(avail)
+
+    async def _sync_lots(self, avail: int) -> None:
+        held = bool(self.db.kv_get("lots_hold"))
         for lot in self.cfg.funpay.lots:
             if not lot.get("offer_id"):
                 continue
             per = int(lot.get("keys_per_unit", 1) or 1)
-            amount = max(0, min(avail // per, int(self.cfg.funpay.max_display_amount)))
+            amount = 0 if held else max(0, min(avail // per, int(self.cfg.funpay.max_display_amount)))
             key = f"lot_amount:{lot['offer_id']}"
             if self.db.kv_get(key) == amount:
                 continue
-            active = amount > 0 or not self.cfg.funpay.deactivate_when_empty
+            active = not held and (amount > 0 or not self.cfg.funpay.deactivate_when_empty)
             try:
                 await self.fp.update_lot(int(lot["offer_id"]), int(lot["node_id"]), amount=max(amount, 1 if active else 0),
                                          active=active)
@@ -748,6 +826,44 @@ class Engine:
             except FunPayError as e:
                 await self.notifier.notify("WARNING", "lot_update_failed", f"Лот {lot['offer_id']}: {e}",
                                            throttle_key=f"lot:{lot['offer_id']}")
+
+    # ------------------------------------------------------------------ лоты на время проблем
+    async def hold_lots(self, reason: str, *, auto_release: str = "") -> bool:
+        """Скрыть все лоты, пока не решена проблема с выдачей (правило продавца: при проблемах с заказами лоты
+        закрываются). auto_release — код события, которое само снимает удержание (например, steam: вход вернулся)."""
+        if not self.cfg.deal.get("hold_lots_on_problems", True) and auto_release != "manual":
+            return False
+        if self.db.kv_get("lots_hold"):
+            return False
+        self.db.kv_set("lots_hold", {"reason": reason, "auto": auto_release, "ts": time.time()})
+        for lot in self.cfg.funpay.lots:
+            if lot.get("offer_id"):
+                self.db.kv_set(f"lot_amount:{lot['offer_id']}", None)   # следующая сверка склада перепишет лот
+        try:
+            await self._sync_lots(0)
+        except Exception:  # noqa: BLE001 — удержание записано, лоты скроет следующая сверка склада
+            log.exception("не удалось скрыть лоты")
+        await self.notifier.notify("CRITICAL", "lots_hold", f"⛔ Лоты скрыты: {reason}. "
+                                   + ("Вернутся сами, когда проблема пройдёт." if auto_release not in ("", "manual")
+                                      else "Вернуть: /lots_on"), throttle_key="lots_hold")
+        return True
+
+    async def release_lots(self, source: str = "") -> bool:
+        hold = self.db.kv_get("lots_hold")
+        if not hold or (source and hold.get("auto") != source):
+            return False
+        self.db.kv_set("lots_hold", None)
+        for lot in self.cfg.funpay.lots:
+            if lot.get("offer_id"):
+                self.db.kv_set(f"lot_amount:{lot['offer_id']}", None)
+        try:
+            avail = await self.available_keys(force=True)
+            if avail is not None and self.cfg.funpay.stock_sync and not self.paused:
+                await self._sync_lots(avail)
+        except Exception:  # noqa: BLE001 — лоты вернёт следующая сверка склада
+            log.exception("не удалось вернуть лоты")
+        await self.notifier.notify("INFO", "lots_released", "✅ Лоты снова выставлены (склад сверится автоматически)")
+        return True
 
     async def _inventory_drop_check(self) -> None:
         """Ключи пропали из инвентаря не через наши трейды → возможна компрометация аккаунта."""
@@ -879,6 +995,9 @@ class Engine:
             return "заказ не найден"
         await self.say_text(o, text)
         self.db.add_event(oid, "admin_message", text=text)
+        # продавец ответил сам — старые черновики ИИ в этом чате больше не актуальны
+        self.db.exec("UPDATE ai_replies SET status='expired', decided_at=? WHERE chat_id=? AND status='pending'",
+                     (time.time(), o["chat_id"]))
         return "отправлено"
 
     def admin_blacklist(self, buyer_id: int, value: bool = True, note: str = "") -> str:
@@ -916,6 +1035,11 @@ class Engine:
             return await self.admin_resend(a0)
         if cmd == "refund":
             return await self.admin_refund(a0, "telegram")
+        if cmd == "lots_off":
+            await self.hold_lots("скрыты командой продавца", auto_release="manual")
+            return "⛔ Лоты скрыты. Вернуть: /lots_on"
+        if cmd == "lots_on":
+            return "✅ Лоты снова выставлены" if await self.release_lots() else "Лоты и так выставлены"
         if cmd == "delivered":
             return await self.admin_mark_delivered(a0)
         if cmd == "msg" and len(args) > 1:
@@ -928,15 +1052,23 @@ class Engine:
             return f"Свободно ключей: {await self.available_keys(force=True)}"
         if cmd == "report" and self.analytics:
             return self.analytics.text_report()
-        return ("Команды: /status /orders /stock /report /pause /resume /approve ID /reject ID /resend ID "
-                "/refund ID /delivered ID /take ID /msg ID текст")
+        if cmd == "ai":
+            return self.ai.pending_text()
+        if cmd in ("aiok", "aino", "aiedit"):
+            if not a0.isdigit():
+                return f"укажите номер черновика: /{cmd} 12"
+            action = {"aiok": "approve", "aino": "reject", "aiedit": "edit"}[cmd]
+            return await self.ai.decide(int(a0), action, " ".join(args[1:]), by="telegram")
+        return ("Команды: /status /orders /stock /report /pause /resume /lots_off /lots_on /approve ID /reject ID /resend ID "
+                "/refund ID /delivered ID /take ID /msg ID текст · ИИ: /ai /aiok N /aiedit N текст /aino N")
 
     def status_text(self) -> str:
         counts = {r["status"]: r["n"] for r in self.db.q("SELECT status, COUNT(*) n FROM orders GROUP BY status")}
         up = (time.time() - self.started_at) / 3600
         lines = [f"{'⏸ ПАУЗА' if self.paused else '▶️ работает'} · аптайм {up:.1f} ч"
                  f"{' · DRY-RUN' if self.cfg.general.dry_run else ''}",
-                 f"Свободно ключей: {self.db.kv_get('last_stock', '?')}",
+                 f"Свободно ключей: {self.db.kv_get('last_stock', '?')}"
+                 + (f" · ⛔ лоты скрыты: {self.db.kv_get('lots_hold')['reason']}" if self.db.kv_get('lots_hold') else ""),
                  "Заказы: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))]
         for k, ts in self.last_ok.items():
             lines.append(f"{k}: {int(time.time() - ts)} c назад")
@@ -1007,8 +1139,9 @@ class Engine:
             self._loop("raise", 300, self.raise_lots),
             self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),
             self.deliver_worker(),
-            self.notifier.poll_commands(),
         ]
+        if not self.external_commands:      # в приложении команды Telegram слушает Supervisor, даже когда бот остановлен
+            loops.append(self.notifier.poll_commands())
         if self.analytics:
             loops.append(self._loop("analytics", 600, self.analytics.tick))
         self._tasks = [asyncio.create_task(c) for c in loops]

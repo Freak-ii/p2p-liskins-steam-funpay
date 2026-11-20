@@ -1,0 +1,9 @@
+aiohttp>=3.9
+beautifulsoup4>=4.12
+lxml>=5.0
+PyYAML>=6.0
+Jinja2>=3.1
+pytoniq-core>=0.1.40,<0.3
+PyNaCl>=1.5
+pytest>=8
+telethon>=1.40,<2

@@ -5,19 +5,29 @@ import asyncio
 import datetime as dt
 import hmac
 import json
+import os
+import time
 from pathlib import Path
 
 import jinja2
 from aiohttp import web
 from yarl import URL
 
+from mannbot.ai import guard
+from mannbot.ai.agent import STATUS_TEXT as AI_STATUS, TOPIC_TEXT as AI_TOPICS
 from mannbot.analytics.analytics import fmt_dur
 from mannbot.app import schema
 from mannbot.app.supervisor import parse_mafile
 from mannbot.core import messages as M
+from mannbot.core.rtba import price_floor
 from mannbot.core.models import OrderStatus as S, TradeOfferState
 from mannbot.web import charts
 
+# правила RTBA, которые центр может менять через /api/rtba/config (ключ -> тип)
+RTBA_EDITABLE = {"enabled": "bool", "strategy": "strategy", "target_position": "int", "undercut_abs": "float",
+                 "undercut_pct": "float", "cost_per_key": "float", "min_margin_pct": "float", "floor_price": "float",
+                 "ceiling_price": "float", "funpay_fee_pct": "float", "min_change": "float",
+                 "max_updates_per_hour": "int", "scarcity_premium_pct": "float", "raise_gap_pct": "float"}
 TPL_DIR = Path(__file__).parent / "templates"
 STATUS_COLORS = {"new": "gray", "awaiting_link": "blue", "pending_approval": "amber", "ready_to_send": "blue",
                  "offer_sent": "blue", "escrow": "amber", "delivered": "green", "completed": "green",
@@ -59,6 +69,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("app", sup.status())
         ctx.setdefault("paused", sup.engine.paused)
         ctx.setdefault("dry_run", sup.cfg.general.dry_run)
+        ctx.setdefault("ai_pending", db.scalar("SELECT COUNT(*) FROM ai_replies WHERE status='pending'"))
         ctx.setdefault("alerts_open", db.scalar("SELECT COUNT(*) FROM alerts WHERE acknowledged=0 AND level!='INFO'"))
         ctx.setdefault("flash", request.query.get("msg", "") if request is not None else "")
         ctx.setdefault("path", request.path if request is not None else "")
@@ -92,7 +103,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         return render("login.html", request, alerts_open=0)
 
     async def ping(request: web.Request):
-        return web.json_response({"app": "mannbot", "ok": True})
+        return web.json_response({"app": "mannbot", "ok": True, "pid": os.getpid()})
 
     def back(request: web.Request, msg: str, default: str = "/") -> web.HTTPFound:
         ref = request.headers.get("Referer")
@@ -171,6 +182,28 @@ def make_app(sup, log_handler=None) -> web.Application:
                                    str(data.get("note", "")))
         raise web.HTTPFound("/customers")
 
+    # JSON для CRM центра: заметки к заказу, заметки/теги/чёрный список покупателя
+    async def api_order(request: web.Request):
+        oid = request.match_info["oid"]
+        if not sup.db.get_order(oid):
+            return web.json_response({"ok": False, "error": "заказ не найден"}, status=404)
+        data = await request.json()
+        if not isinstance(data.get("notes"), str):
+            return web.json_response({"ok": False, "error": "нужно поле notes"}, status=400)
+        sup.db.update_order(oid, notes=data["notes"][:2000])
+        sup.db.add_event(oid, "dashboard_action", action="note", result="заметка сохранена", by=data.get("by", "api"))
+        return web.json_response({"ok": True})
+
+    async def api_customer(request: web.Request):
+        cid = int(request.match_info["cid"])
+        data = await request.json()
+        text = lambda k, n: data[k][:n] if isinstance(data.get(k), str) else None  # noqa: E731
+        if not sup.db.update_customer(cid, notes=text("notes", 2000), tags=text("tags", 200)):
+            return web.json_response({"ok": False, "error": "покупатель не найден"}, status=404)
+        if isinstance(data.get("blacklisted"), bool):
+            sup.engine.admin_blacklist(cid, data["blacklisted"])
+        return web.json_response({"ok": True})
+
     async def pricing(request: web.Request):
         db, a = sup.db, sup.analytics
         snap = db.one("SELECT * FROM competitor_snapshots ORDER BY id DESC LIMIT 1")
@@ -185,6 +218,51 @@ def make_app(sup, log_handler=None) -> web.Application:
     async def alerts_ack(request: web.Request):
         sup.db.exec("UPDATE alerts SET acknowledged=1")
         raise web.HTTPFound("/alerts")
+
+    async def api_alerts_ack(request: web.Request):
+        # JSON-вариант для центра: {"id": 5} — одна тревога, {"all": true} — все
+        data = await request.json()
+        if data.get("all"):
+            sup.db.exec("UPDATE alerts SET acknowledged=1")
+        else:
+            sup.db.exec("UPDATE alerts SET acknowledged=1 WHERE id=?", (int(data.get("id", 0)),))
+        return web.json_response({"ok": True})
+    # ------------------------------------------------------------------ ИИ-агент
+    def _ai_rows(status: str = "", limit: int = 200):
+        sql, params = "SELECT * FROM ai_replies", []
+        if status:
+            sql += " WHERE status=?"
+            params.append(status)
+        return sup.db.q(sql + " ORDER BY id DESC LIMIT ?", [*params, limit])
+
+    async def ai_page(request: web.Request):
+        st = request.query.get("status", "")
+        days = float(request.query.get("days", 30))
+        return render("ai.html", request, rows=_ai_rows(st), st=st, days=days, stats=sup.engine.ai.stats(days),
+                      ai=sup.engine.ai.state(), cfg=sup.cfg.ai, topic_text=AI_TOPICS, status_text=AI_STATUS,
+                      guard_text=guard.ISSUE_TEXT)
+
+    async def ai_action(request: web.Request):
+        rid = int(request.match_info["rid"])
+        data = await request.post()
+        act = str(data.get("action", ""))
+        ai = sup.engine.ai
+        if act in ("rate_up", "rate_down", "rate_clear"):
+            ai.rate(rid, {"rate_up": 1, "rate_down": -1, "rate_clear": 0}[act])
+            msg = "оценка сохранена"
+        elif act in ("approve", "edit", "reject"):
+            if act != "reject" and sup.state != "running" and not sup.status()["demo"]:
+                raise back(request, "Сначала запустите бота", "/ai")
+            msg = await ai.decide(rid, act, str(data.get("text", "")), by="dashboard")
+        else:
+            msg = "неизвестное действие"
+        raise back(request, msg, "/ai")
+
+    async def api_ai(request: web.Request):
+        days = float(request.query.get("days", 30))
+        rows = _ai_rows(request.query.get("status", ""), min(500, int(request.query.get("limit", 50))))
+        return web.json_response({**sup.engine.ai.state(), "stats": sup.engine.ai.stats(days),
+                                  "replies": [{**dict(r), "issues": json.loads(r["issues"] or "[]")} for r in rows]})
 
     # ------------------------------------------------------------------ управление ботом
     async def control(request: web.Request):
@@ -212,7 +290,64 @@ def make_app(sup, log_handler=None) -> web.Application:
         raise back(request, msg)
 
     async def api_status(request: web.Request):
-        return web.json_response({**sup.status(), "summary": sup.analytics.summary(1)})
+        return web.json_response({**sup.status(), "summary": sup.analytics.summary(1), "ai": sup.engine.ai.state()})
+
+    # ------------------------------------------------------------------ RTBA для центра (JSON)
+    async def api_rtba(request: web.Request):
+        db, rt = sup.db, sup.engine.rtba
+        snap = db.one("SELECT * FROM competitor_snapshots ORDER BY id DESC LIMIT 1")
+        hist = db.q("SELECT * FROM price_history ORDER BY id DESC LIMIT ?", (int(request.query.get("limit", 100)),))
+        since = time.time() - 86400
+        return web.json_response({
+            "config": {k: sup.cfg.rtba.get(k) for k in RTBA_EDITABLE} | {"enabled": bool(sup.cfg.rtba.enabled)},
+            "markup": rt.markup, "floor": price_floor(sup.cfg.rtba), "updates_last_hour": len(rt.updates),
+            "state": sup.state, "restart_required": sup.restart_required, "dry_run": bool(sup.cfg.general.dry_run),
+            "stock": db.kv_get("last_stock"), "lots": [l.get("offer_id") for l in sup.cfg.funpay.lots or []],
+            "history": [dict(r) for r in hist],
+            "day": dict(db.one("SELECT COUNT(*) checks, COALESCE(SUM(applied),0) applied FROM price_history WHERE ts>=?",
+                               (since,)) or {}),
+            "competitors": json.loads(snap["data"]) if snap else [], "competitors_ts": snap["ts"] if snap else None,
+        })
+
+    async def api_rtba_config(request: web.Request):
+        """Изменение правил RTBA из центра. Работающему боту правила применяются сразу, без перезапуска."""
+        try:
+            data = await request.json()
+        except ValueError:
+            return web.json_response({"ok": False, "error": "нужен JSON"}, status=400)
+        clean, errors = {}, []
+        for k, v in (data.get("changes") or {}).items():
+            kind = RTBA_EDITABLE.get(k)
+            if kind is None:
+                errors.append(f"{k}: нельзя менять")
+            elif kind == "strategy":
+                if v not in ("top1", "topN", "median"):
+                    errors.append(f"{k}: top1, topN или median")
+                else:
+                    clean[k] = v
+            elif kind == "bool":
+                clean[k] = bool(v)
+            else:
+                try:
+                    num = int(v) if kind == "int" else float(v)
+                except (TypeError, ValueError):
+                    errors.append(f"{k}: не число")
+                    continue
+                if num < 0 or (k.endswith("_pct") and num > 100):
+                    errors.append(f"{k}: вне допустимого диапазона")
+                else:
+                    clean[k] = num
+        if errors:
+            return web.json_response({"ok": False, "error": "; ".join(errors)}, status=400)
+        if not clean:
+            return web.json_response({"ok": True, "applied": {}})
+        running = sup.state == "running"
+        sup.save({"rtba": clean}, rebuild=not running)
+        if running:
+            sup.engine.rtba.cfg.update(clean)      # тот же объект читают RTBAEngine и аналитика бота
+        db_note = ", ".join(f"{k}={v}" for k, v in clean.items())
+        sup.db.add_event("-", "rtba_config", source="center", changes=db_note)
+        return web.json_response({"ok": True, "applied": clean, "live": running})
 
     # ------------------------------------------------------------------ мастер настройки
     async def setup(request: web.Request):
@@ -295,6 +430,77 @@ def make_app(sup, log_handler=None) -> web.Application:
                       secret=lambda s, k: sup.secret_is_set(s, k), problems=sup.problems,
                       config_path=str(sup.config_path))
 
+    # ------------------------------------------------------------------ JSON-настройки для центра
+    def _coerce(typ: str, key: str, v):
+        if typ == "bool":
+            return bool(v)
+        if typ == "int":
+            return int(float(v or 0))
+        if typ == "float":
+            return float(str(v or 0).replace(",", "."))
+        if typ == "list":
+            items = v if isinstance(v, list) else str(v or "").replace(",", "\n").splitlines()
+            items = [str(x).strip() for x in items if str(x).strip()]
+            return [int(x) if key == "admin_chat_ids" and x.lstrip("-").isdigit() else x for x in items]
+        if typ.startswith("choice:") and str(v) not in typ[7:].split("|"):
+            raise ValueError(f"{key}: допустимо {typ[7:]}")
+        return str(v if v is not None else "").strip()
+
+    async def api_settings(request: web.Request):
+        """Те же поля, что на странице «Настройки», в JSON: центр показывает и меняет их у себя.
+        Секреты не отдаются — только признак, задан ли секрет. Пустой секрет при сохранении = «не менять»."""
+        if request.method == "POST":
+            data = await request.json()
+            values = data.get("values") or {}
+            upd: dict = {}
+            errors = []
+            for section, fields in schema.SETTINGS:
+                got = values.get(section) or {}
+                for key, _label, typ, _help in fields:
+                    if key not in got:
+                        continue
+                    try:
+                        val = _coerce(typ, key, got[key])
+                    except (TypeError, ValueError) as e:
+                        errors.append(f"{section}.{key}: {e}")
+                        continue
+                    node = upd
+                    for part in section.split("."):
+                        node = node.setdefault(part, {})
+                    node[key] = val
+            if isinstance(data.get("lots"), list):
+                lots = []
+                for l in data["lots"]:
+                    try:
+                        if str(l.get("offer_id", "")).strip().isdigit():
+                            lots.append({"offer_id": int(l["offer_id"]), "node_id": int(l.get("node_id") or 1808),
+                                         "game_id": int(l.get("game_id") or 435),
+                                         "keys_per_unit": int(l.get("keys_per_unit") or 1)})
+                    except (TypeError, ValueError):
+                        errors.append(f"лот {l.get('offer_id')}: неверные числа")
+                upd.setdefault("funpay", {})["lots"] = lots
+            if errors:
+                return web.json_response({"ok": False, "error": "; ".join(errors)}, status=400)
+            sup.save(upd)
+            return web.json_response({"ok": True, "restart_required": sup.restart_required,
+                                      "configured": sup.configured, "problems": sup.problems})
+        sections = []
+        for section, fields in schema.SETTINGS:
+            out = []
+            for key, label, typ, hlp in fields:
+                f = {"key": key, "label": label, "type": typ, "help": hlp}
+                if typ == "secret":
+                    f["set"] = sup.secret_is_set(section, key)
+                else:
+                    f["value"] = schema.get_value(sup.cfg, section, key)
+                out.append(f)
+            sections.append({"id": section, "title": schema.SECTION_TITLES.get(section, section), "fields": out})
+        lots = [{k: l.get(k) for k in ("offer_id", "node_id", "game_id", "keys_per_unit")}
+                for l in (sup.cfg.funpay.lots or []) if l.get("offer_id")]
+        return web.json_response({"sections": sections, "lots": lots, "problems": sup.problems,
+                                  "configured": sup.configured, "restart_required": sup.restart_required,
+                                  "state": sup.state})
+
     # ------------------------------------------------------------------ сообщения
     async def messages_page(request: web.Request):
         lang = request.query.get("lang", "ru") if request.query.get("lang") in ("ru", "en") else "ru"
@@ -343,13 +549,17 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/login", login), web.post("/login", login), web.get("/api/ping", ping),
         web.get("/", dashboard), web.get("/orders", orders), web.get("/orders/{oid}", order),
         web.post("/orders/{oid}", order_action), web.get("/customers", customers),
-        web.post("/customers/{cid}", customer_action), web.get("/pricing", pricing), web.get("/alerts", alerts),
-        web.post("/alerts/ack", alerts_ack), web.post("/control", control), web.get("/api/status", api_status),
-        web.get("/api/summary", api_status),
+        web.post("/customers/{cid}", customer_action), web.post("/api/orders/{oid}", api_order),
+        web.post("/api/customers/{cid:\\d+}", api_customer), web.get("/pricing", pricing), web.get("/alerts", alerts),
+        web.post("/alerts/ack", alerts_ack), web.post("/api/alerts/ack", api_alerts_ack),
+        web.post("/control", control), web.get("/api/status", api_status),
+        web.get("/api/summary", api_status), web.get("/api/settings", api_settings), web.post("/api/settings", api_settings),
+        web.get("/api/rtba", api_rtba), web.post("/api/rtba/config", api_rtba_config),
         web.get("/setup", setup), web.post("/setup", setup), web.post("/setup/mafile", setup_mafile),
         web.post("/api/test/{what}", api_test), web.get("/settings", settings), web.post("/settings", settings),
         web.get("/messages", messages_page), web.post("/messages", messages_page),
-        web.post("/api/preview", preview_message), web.get("/logs", logs), web.get("/api/logs", api_logs),
+        web.post("/api/preview", preview_message), web.get("/ai", ai_page), web.post("/ai/{rid}", ai_action),
+        web.get("/api/ai", api_ai), web.get("/logs", logs), web.get("/api/logs", api_logs),
     ])
     return app
 

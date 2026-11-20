@@ -1,0 +1,63 @@
+{% extends "base.html" %}{% block title %}#{{o.order_id}}{% endblock %}
+{% block body %}
+<h1>Заказ #{{o.order_id}} <span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></h1>
+<div class="cols">
+<div class="card"><h2>Детали</h2><table>
+{% if o.channel == 'ozon' %}<tr><td>Площадка</td><td><span class="chip c-blue">Ozon</span> отправление {{ozon_code.posting_number if ozon_code else '—'}}</td></tr>
+<tr><td>Код активации</td><td>{% if ozon_code %}<code>{{ozon_code.display}}</code> · {{ {'new':'ещё не передан в Ozon','issued':'выдан покупателю','cancelled':'аннулирован','declined':'не выдан'}.get(ozon_code.state, ozon_code.state) }}{% if ozon_code.redeemed_at %} · активирован {{ozon_code.redeemed_at|ts}}{% endif %}{% if ozon_code.tg_chat_id %} · через бота{% endif %}{% else %}—{% endif %}</td></tr>
+{% if o.payout is not none %}<tr><td>Выплата Ozon</td><td>{{o.payout|money}} ₽</td></tr>{% endif %}
+{% elif o.channel == 'ggsel' %}<tr><td>Площадка</td><td><span class="chip c-amber">GGSEL</span> счёт {{ o.order_id[3:] }} · {{ {'paid':'оплачен','closed':'закрыт покупателем','refunded':'возврат'}.get(o.fp_status, o.fp_status) }}</td></tr>
+{% if o.payout is not none %}<tr><td>Выплата GGSEL (оценка)</td><td>{{o.payout|money}} ₽</td></tr>{% endif %}
+{% else %}<tr><td>Покупатель</td><td><a href="/customers/{{o.buyer_id}}">{{o.buyer_username}}</a>{% if customer %} {% for t, color in segments_of(customer) %}<span class="chip c-{{color}}">{{t}}</span> {% endfor %}{% endif %}{% if customer %} · заказов {{customer.orders_count}}, LTV {{customer.total_spent|money}} ₽{% if customer.blacklisted %} <span class="chip c-red">ЧС</span>{% endif %}{% endif %}</td></tr>{% endif %}
+<tr><td>Товар</td><td>{{o.description}}</td></tr>
+{% if o.delivery == 'premium' %}<tr><td>Товар</td><td><b>💎 Telegram Premium {{o.premium_months}} мес.</b> (подарок через Fragment)</td></tr>{% else %}<tr><td>Звёзды</td><td><b>{{o.stars}}⭐</b> ({{o.quantity}} × {{o.stars_per_unit}})</td></tr>{% endif %}
+<tr><td>Сумма</td><td>{{o.price|money}} {{o.currency}}</td></tr>
+{% if o.channel not in ('ozon', 'ggsel') %}<tr><td>Статус FunPay</td><td>{{o.fp_status}}</td></tr>{% endif %}
+<tr><td>Получатель</td><td>{% if o.tg_username %}<b>@{{o.tg_username}}</b>{% if o.tg_name %} · {{o.tg_name}}{% endif %} <span class="muted">({{o.username_source or '—'}}, попыток {{o.username_attempts}})</span>{% else %}—{% endif %}</td></tr>
+<tr><td>Fragment</td><td>{% if o.req_id %}req {{o.req_id}}{% else %}—{% endif %}{% if o.ton_amount %} · {{o.ton_amount|ton}} TON{% endif %}{% if o.ton_rate %} · курс {{o.ton_rate|money}} ₽{% endif %}</td></tr>
+<tr><td>Транзакция</td><td style="word-break:break-all">{% if o.tx_hash %}<a href="https://tonviewer.com/transaction/{{o.tx_hash}}" target="_blank" rel="noopener">{{o.tx_hash}}</a>{% elif o.tx_seqno is not none %}seqno {{o.tx_seqno}}, действительна до {{o.tx_valid_until|ts}}{% else %}—{% endif %}{% if o.tx_fee_ton %} <span class="muted">газ {{o.tx_fee_ton|ton}} TON</span>{% endif %}</td></tr>
+<tr><td>Попыток покупки</td><td>{{o.purchase_attempts}}</td></tr>
+<tr><td>Риск</td><td>{{o.risk_score}}{% for r in risk %}<div class="muted">{{r}}</div>{% endfor %}</td></tr>
+<tr><td>Причина сбоя</td><td>{{o.fail_reason or '—'}}</td></tr>
+<tr><td>Хронология</td><td>оплачен {{o.paid_at|ts}}<br>username {{o.username_at|ts}}<br>покупка {{o.purchase_started_at|ts}}<br>транзакция {{o.sent_at|ts}}<br>выдан {{o.delivered_at|ts}}<br>закрыт {{o.completed_at|ts}}</td></tr>
+<tr><td>Отзыв</td><td>{{ (o.review_stars ~ '★') if o.review_stars else '—' }}</td></tr>
+</table>
+{% if o.channel not in ('ozon', 'ggsel') %}<p><a href="https://funpay.com/orders/{{o.order_id}}/" target="_blank" rel="noopener">Открыть на FunPay ↗</a></p>{% endif %}</div>
+<div>
+{% if flow %}<div class="card"><h2>Деньги по заказу</h2><table>
+<tr><td>Цена</td><td>{{flow.price|money}} ₽</td></tr>
+<tr><td>− комиссия {{ {'ozon': 'Ozon', 'ggsel': 'GGSEL'}.get(o.channel, 'FunPay') }}</td><td>{{flow.funpay_fee|money}} ₽</td></tr>
+<tr><td>− комиссия вывода</td><td>{{flow.withdraw_fee|money}} ₽</td></tr>
+<tr><td>= чистыми</td><td><b>{{flow.net_rub|money}} ₽</b></td></tr>
+<tr><td>TON на звёзды + газ</td><td>{{flow.ton_stars|ton}} + {{flow.ton_gas|ton}} = {{flow.ton_total|ton}} TON</td></tr>
+<tr><td>Себестоимость</td><td>{{flow.cost_rub|money}} ₽ <span class="muted">по {{flow.ton_rate|money}} ₽/TON</span></td></tr>
+<tr><td>Прибыль</td><td><b class="{{ 'c-green' if (flow.profit or 0) >= 0 else 'c-red' }}">{{flow.profit|money}} ₽</b> ({{flow.margin_pct}}%)</td></tr>
+</table></div>{% endif %}
+<div class="card"><h2>Действия</h2>
+{% if can_op %}
+<form method="post" class="row" style="margin-bottom:10px">
+<button class="primary" name="action" value="approve" title="Одобрить проверку риска / снять с ручного">✔ Одобрить</button>
+<button name="action" value="reject" title="Перевести в ручную обработку">✋ В ручную</button>
+{% if is_admin %}
+<button name="action" value="delivered" onclick="return confirm('Отметить выданным (звёзды уже получены) и отправить покупателю сообщение?')">✅ Выдан вручную</button>
+<button class="danger" name="action" value="refund" onclick="return confirm('Оформить ВОЗВРАТ денег покупателю?')">💸 Возврат</button>
+{% endif %}
+</form>
+<form method="post" class="row" style="margin-bottom:10px"><input type="hidden" name="action" value="set_username">
+<input name="username" placeholder="@username получателя" style="flex:1" value="{{ o.tg_username or '' }}"><button>Задать получателя</button></form>
+<form method="post"><input type="hidden" name="action" value="message"><textarea name="text" placeholder="{{ 'Сообщение покупателю в бот активации (дойдёт, если он активировал код через Telegram)' if o.channel == 'ozon' else ('Сообщение покупателю в чат заказа GGSEL (без ссылок и контактов — правила GGSEL)' if o.channel == 'ggsel' else 'Сообщение покупателю в чат FunPay (без контактов и сторонних ссылок!)') }}"></textarea>
+<button>Отправить в чат</button></form>
+<form method="post" style="margin-top:10px"><input type="hidden" name="action" value="note"><textarea name="text" placeholder="Заметка CRM">{{o.notes}}</textarea><button>Сохранить заметку</button></form>
+{% else %}<span class="muted">Только просмотр.</span>{% if o.notes %}<pre style="margin-top:8px">{{o.notes}}</pre>{% endif %}{% endif %}
+</div></div></div>
+{% if purchases %}<div class="card tw"><h2>Покупки на Fragment</h2><table><tr><th>#</th><th>req_id</th><th>⭐</th><th>Получатель</th><th>TON</th><th>seqno</th><th>до</th><th>Состояние</th><th>Хэш / ошибка</th></tr>
+{% for p in purchases %}<tr><td>{{p.id}}</td><td>{{p.req_id}}</td><td>{{p.stars}}</td><td>@{{p.recipient}}</td><td>{{ (p.amount_nano or 0) / 1e9 }}</td><td>{{p.seqno}}</td><td>{{p.valid_until|ts}}</td>
+<td>{{p.state}}</td><td style="word-break:break-all;font-size:12px">{{p.tx_hash or p.msg_hash or ''}} <span class="c-red">{{p.error or ''}}</span></td></tr>{% endfor %}</table></div>{% endif %}
+<div class="cols">
+<div class="card"><h2>События</h2><div class="tw"><table>{% for e in events %}<tr><td class="muted" style="white-space:nowrap">{{e.ts|ts}}</td><td><b>{{e.kind}}</b>
+{% set d = e.data|jsonload %}{% if d %}<div class="muted">{% for k,v in d.items() if v not in (none,'') %}{{k}}={{ v|ts if k.endswith('_at') else v }} {% endfor %}</div>{% endif %}</td></tr>{% endfor %}</table></div></div>
+<div class="card"><h2>Переписка</h2>{% for m in msgs %}<div style="margin:6px 0;padding:6px 8px;border-radius:8px;background:var(--chip);{% if m.direction=='out' %}margin-left:30px{% else %}margin-right:30px{% endif %}">
+<div class="muted" style="font-size:11px">{{ 'бот' if m.direction=='out' else 'покупатель' }} · {{m.ts|ts}}</div><pre>{{m.text}}</pre></div>{% else %}<span class="muted">Нет сообщений</span>{% endfor %}</div>
+</div>
+<script>const OID={{ o.order_id|tojson|safe }};onLive(ev=>{if(ev.order_id===OID&&!document.querySelector('textarea:focus,input:focus'))setTimeout(()=>location.reload(),800)})</script>
+{% endblock %}

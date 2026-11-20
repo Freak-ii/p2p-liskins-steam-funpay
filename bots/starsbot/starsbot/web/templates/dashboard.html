@@ -1,0 +1,91 @@
+{% extends "base.html" %}{% block title %}Главная{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>Главная</h1>
+<div class="row">{% for d in [1,7,30] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/?days={{d}}">{{d}} дн.</a>{% endfor %}</div></div>
+
+{% if health %}<div class="card" id="c-health" style="padding:8px 12px"><div class="row">
+  <b>Здоровье:</b>
+  {% for c in health.checks %}<span class="chip c-{{ 'green' if c.ok else 'red' }}" title="{{ c.detail or ('обновлялось ' ~ c.age ~ ' c назад, норма до ' ~ c.limit ~ ' c') }}">{{ health_names.get(c.name, c.name) }}</span>{% endfor %}
+  <span class="muted">работает {{ health.uptime|dur }}</span>
+</div></div>{% endif %}
+
+<div class="cols">
+  <div class="card" id="c-fragment"><h2>Fragment</h2>
+    {% set fs = fragment.session or 'unknown' %}{% set ky = fragment.kyc or 'unknown' %}
+    <div class="row">
+      <span class="chip c-{{ 'green' if fs == 'ok' else ('red' if fs == 'expired' else 'gray') }}" id="f-session">Сессия: {{ {'ok':'активна','expired':'истекла','unknown':'не проверена'}.get(fs, fs) }}</span>
+      <span class="chip c-{{ 'green' if ky == 'verified' else ('red' if ky == 'required' else 'gray') }}" id="f-kyc">KYC: {{ {'verified':'пройден','required':'нужен','unknown':'не проверен'}.get(ky, ky) }}</span>
+      {% if cookie_age is not none %}<span class="chip c-{{ 'amber' if warn_days and cookie_age >= warn_days else 'gray' }}" id="f-age" title="Сколько дней назад вставлены cookies">cookies: {{ cookie_age|int }} дн.</span>{% endif %}
+      <span class="muted" id="f-checked">проверено {{ fragment.checked_at|ts }}</span>
+      {% if is_admin %}<form method="post" action="/control"><button name="action" value="check_fragment">Проверить сейчас</button></form>{% endif %}
+    </div>
+    {% if fragment.error %}<div class="c-red" style="margin-top:6px" id="f-error">{{ fragment.error }}</div>{% endif %}
+    {% if fs == 'expired' %}<div class="help">Войдите на fragment.com в браузере, подключите кошелёк бота и вставьте свежие cookies в <a href="/setup">мастере настройки</a>. Пока сессии нет, лоты скрыты (остаток 0).</div>{% endif %}
+  </div>
+  <div class="card" id="c-wallet"><h2>Кошелёк TON</h2>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr);margin:0">
+      <div class="kpi"><div class="v" id="w-balance">{{ wallet.balance|ton }}</div><div class="l">TON на балансе</div></div>
+      <div class="kpi"><div class="v" id="w-capacity">{{ wallet.capacity if wallet.capacity is not none else '—' }}</div><div class="l">звёзд можно выдать</div></div>
+      <div class="kpi"><div class="v">{{ rate[0]|money }} ₽</div><div class="l">курс TON ({{ rate[1] }})</div></div>
+    </div>
+    <div class="row" style="margin-top:8px">{% for c in cap %}<span class="chip" title="{{c.ton|ton}} TON за заказ">{{c.stars}}⭐ × {{ c.orders if c.orders is not none else '—' }}</span>{% endfor %}</div>
+    <div class="help">Потрачено за сутки: {{ spent24|ton }} TON{% if safety.daily_ton_limit %} из {{ safety.daily_ton_limit }} (лимит){% endif %}{% if not dry_run and not app.demo and safety.pilot_orders and live_done < safety.pilot_orders %} · <b class="c-amber">пилот: боевых оплат {{ live_done }} из {{ safety.pilot_orders }}, каждая — с вашего одобрения</b>{% endif %}</div>
+    <div class="help">В работе: {{ wallet.committed or 0 }} звёзд (уже оплачены покупателями, ещё не куплены). <a href="/money">Деньги и калькулятор →</a></div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ s.revenue|money }}</div><div class="l">Выручка, ₽</div></div>
+  <div class="card kpi"><div class="v">{{ s.profit|money }}</div><div class="l">Прибыль, ₽ (после комиссий и TON)</div></div>
+  <div class="card kpi"><div class="v">{{ s.orders }}</div><div class="l">Заказов · ср. чек {{ s.avg_check|money }}</div></div>
+  <div class="card kpi"><div class="v">{{ s.stars_sold }}</div><div class="l">Звёзд выдано · {{ s.ton_spent|ton }} TON</div></div>
+  <div class="card kpi"><div class="v">{{ s.delivery_rate }}%</div><div class="l">Выдано · авто {{ s.auto_rate }}%</div></div>
+  <div class="card kpi"><div class="v">{{ s.confirm_rate }}%</div><div class="l">Подтверждают</div></div>
+  <div class="card kpi"><div class="v">{{ s.t_total|dur }}</div><div class="l">Оплата → звёзды (медиана)</div></div>
+  <div class="card kpi"><div class="v">{{ s.refund_rate }}%</div><div class="l">Возвраты</div></div>
+</div>
+
+{% if recs %}<div class="card"><h2>💡 Рекомендации</h2>
+{% for r in recs %}<div class="{{r.severity}}" style="margin:4px 0">• {{ r.text }}</div>{% endfor %}</div>{% endif %}
+
+<div class="cols">
+  <div class="card"><h2>Активные заказы <span class="muted" id="act-hint"></span></h2><div class="tw"><table id="active">
+  <tr><th>Заказ</th><th>Покупатель</th><th>⭐</th><th>Получатель</th><th>Статус</th><th>Оплачен</th></tr>
+  {% for o in active %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{% if o.delivery == 'premium' %}💎 {{o.premium_months}} мес.{% else %}{{o.stars}}{% endif %}</td>
+  <td>{{ ('@' ~ o.tg_username) if o.tg_username else '—' }}</td>
+  <td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{{o.paid_at|ts}}</td></tr>
+  {% else %}<tr><td colspan="6" class="muted">Нет активных заказов</td></tr>{% endfor %}</table></div></div>
+  <div class="card"><h2>Лента событий</h2><div id="feed" style="max-height:330px;overflow:auto;font-size:13px">
+  {% for e in feed %}<div><span class="muted">{{e.ts|ts}}</span> <a href="/orders/{{e.order_id}}">#{{e.order_id}}</a> {{e.kind}}</div>{% endfor %}</div></div>
+</div>
+
+<div class="cols">
+  <div class="card"><h2>Выручка и заказы, 30 дней</h2>{{ charts.bar_line(series|map(attribute='date')|map('md')|list, series|map(attribute='revenue')|list, series|map(attribute='orders')|list, bar_name='Выручка', line_name='Заказы', every=5)|safe }}</div>
+  <div class="card"><h2>Воронка</h2>
+  {% set top = funnel[0][1] or 1 %}
+  {% for name, n in funnel %}<div style="margin:6px 0"><div class="row" style="justify-content:space-between"><span>{{name}}</span><b>{{n}}</b></div>
+  <div class="bar" style="width:{{ (n/top*100)|round(1) }}%"></div></div>{% endfor %}
+  <h2 style="margin-top:14px">Время этапов (медиана)</h2>
+  <table><tr><td>Оплата → username</td><td>{{s.t_username|dur}}</td></tr><tr><td>Username → оплата Fragment</td><td>{{s.t_purchase|dur}}</td></tr>
+  <tr><td>Транзакция в сети</td><td>{{s.t_chain|dur}}</td></tr><tr><td>Выдача → подтверждение</td><td>{{s.t_confirm|dur}}</td></tr></table></div>
+</div>
+<div class="cols">
+  <div class="card"><h2>По номиналам ({{days|int}} дн.)</h2><table><tr><th>Номинал</th><th>Заказов</th><th>Выручка</th><th>TON</th></tr>
+  {% for d in denoms %}<tr><td>{{d.stars}}⭐</td><td>{{d.orders}}</td><td>{{d.revenue|money}}</td><td>{{d.ton|ton}}</td></tr>{% else %}<tr><td colspan=4 class="muted">Нет продаж</td></tr>{% endfor %}</table></div>
+  <div class="card"><h2>Причины сбоев (30 дн.)</h2>
+  {% if fails %}<table>{% for k,n in fails %}<tr><td>{{k}}</td><td>{{n}}</td></tr>{% endfor %}</table>{% else %}<span class="muted">Сбоев нет</span>{% endif %}</div>
+</div>
+<div class="card"><h2>Состояние бота</h2><pre id="status">{{ status }}</pre></div>
+<script>
+let reloadT=null;const hint=document.getElementById('act-hint');
+onLive(ev=>{
+  if(ev.type==='event'||ev.type==='order'){const f=document.getElementById('feed'),d=document.createElement('div');d.className='hl';
+    d.innerHTML='<span class="muted">'+new Date().toLocaleTimeString()+'</span> ';const a=document.createElement('a');a.href='/orders/'+ev.order_id;a.textContent='#'+ev.order_id;d.appendChild(a);
+    d.appendChild(document.createTextNode(' '+(ev.kind||('статус → '+ev.status))));f.prepend(d)}
+  if(ev.type==='wallet'){if(ev.balance!=null)document.getElementById('w-balance').textContent=(+ev.balance).toFixed(4);
+    document.getElementById('w-capacity').textContent=ev.capacity==null?'—':ev.capacity}
+  if(ev.type==='fragment'){clearTimeout(reloadT);reloadT=setTimeout(()=>location.reload(),1500)}
+  if(ev.type==='order'){hint.textContent='· обновлено';clearTimeout(reloadT);reloadT=setTimeout(()=>{if(!document.querySelector('textarea:focus,input:focus'))location.reload()},4000)}
+});
+</script>
+{% endblock %}

@@ -68,18 +68,40 @@ class Notifier:
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 log.warning("Telegram недоступен: %s", e)
 
-    async def poll_commands(self) -> None:
-        """Long-poll Telegram: команды принимаются ТОЛЬКО из admin_chat_ids."""
-        if not (self.tg.enabled and self.tg.commands and self.tg.bot_token):
-            return
-        allowed = {int(x) for x in self.tg.admin_chat_ids}
-        offset = 0
-        sess = await self._sess()
+    async def poll_commands(self, settings: Callable[[], object] | None = None) -> None:
+        """Long-poll Telegram: команды принимаются ТОЛЬКО из admin_chat_ids.
+        settings — функция, возвращающая актуальный раздел notifications.telegram: тогда опрос живёт всё время
+        работы приложения и подхватывает новые настройки без перезапуска (так его запускает Supervisor)."""
+        offset, token, warned = 0, None, ""
         while True:
+            tg = settings() if settings else self.tg
+            self.tg = tg
+            if not (tg.enabled and tg.commands and tg.bot_token and tg.admin_chat_ids):
+                if not settings:
+                    return
+                await asyncio.sleep(15)
+                continue
+            if tg.bot_token != token:
+                offset, token = 0, tg.bot_token
+            allowed = {int(x) for x in tg.admin_chat_ids}
             try:
-                async with sess.get(f"https://api.telegram.org/bot{self.tg.bot_token}/getUpdates",
+                sess = await self._sess()
+                async with sess.get(f"https://api.telegram.org/bot{token}/getUpdates",
                                     params={"timeout": 30, "offset": offset}) as r:
-                    data = await r.json()
+                    data = await r.json(content_type=None)
+                if not data.get("ok"):
+                    # 409 — этот токен уже читает другая программа (часто LisBot с тем же ботом) или стоит webhook;
+                    # 401 — токен неверный. Без паузы цикл крутился бы вхолостую, а команды молча не работали бы.
+                    desc = str(data.get("description") or f"HTTP {r.status}")
+                    hint = (" Команды получает другая программа с тем же ботом: у LisBot и MannBot должны быть разные "
+                            "Telegram-боты (токены)." if data.get("error_code") == 409 else "")
+                    if desc != warned:
+                        warned = desc
+                        await self.notify("WARNING", "telegram_commands", f"Команды Telegram не работают: {desc}.{hint}",
+                                          throttle_key="telegram_commands")
+                    await asyncio.sleep(30)
+                    continue
+                warned = ""
                 for upd in data.get("result", []):
                     offset = upd["update_id"] + 1
                     msg = upd.get("message") or {}
@@ -95,7 +117,7 @@ class Notifier:
                             reply = await self.command_handler(cmd, parts[1:])
                         except Exception as e:  # noqa: BLE001
                             reply = f"Ошибка: {e}"
-                    await sess.post(f"https://api.telegram.org/bot{self.tg.bot_token}/sendMessage",
+                    await sess.post(f"https://api.telegram.org/bot{token}/sendMessage",
                                     json={"chat_id": chat_id, "text": reply[:4000]})
             except asyncio.CancelledError:
                 raise

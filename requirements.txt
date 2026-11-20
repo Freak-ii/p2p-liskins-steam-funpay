@@ -1,2 +1,5 @@
-# Центр и MannBot работают на одном Python (3.11+)
+# Центр, MannBot и StarsBot работают на одном Python (3.11+)
 -r bots/mannbot/requirements.txt
+-r bots/starsbot/requirements.txt
+-r bots/shopbot/requirements.txt
+anthropic>=1.15   # ИИ-координатор центра (без ключа не используется)

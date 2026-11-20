@@ -1,0 +1,28 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ shop_name }} · ShopBot</title>
+<style>
+:root{--bg:#f6f5fb;--card:#fff;--ink:#1d1b26;--mute:#6f6a80;--line:#e7e4f0;--acc:#6c4cf5;--ok:#13a36b;--bad:#d9434e;--warn:#d98a14}
+@media (prefers-color-scheme:dark){:root{--bg:#121118;--card:#1c1a24;--ink:#ecebf3;--mute:#9a95ab;--line:#2c2938;--acc:#9a83ff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2}
+header b{margin-right:12px}header a{color:var(--mute);text-decoration:none;padding:6px 10px;border-radius:10px}
+header a.on{background:var(--acc);color:#fff}main{max-width:1200px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}.kpi b{display:block;font-size:22px}
+.kpi span{color:var(--mute);font-size:12px}table{width:100%;border-collapse:collapse}td,th{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--mute);font-weight:500;font-size:12px}.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:var(--line)}
+.open{background:#13a36b22;color:var(--ok)}.closed{background:#d9434e22;color:var(--bad)}.warn{color:var(--warn)}
+.mute{color:var(--mute)}a{color:var(--acc)}button,.btn{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:7px 12px;cursor:pointer;font:inherit}
+button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)}input,select,textarea{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.flash{background:#6c4cf522;border-radius:12px;padding:10px 14px;margin-bottom:12px}.banner{background:#d98a1422;padding:8px 16px;text-align:center}
+.scroll{overflow-x:auto}h2{margin:0 0 10px;font-size:17px}h3{margin:14px 0 8px;font-size:15px}
+</style></head><body>
+{% if demo %}<div class="banner">🧪 Демо: Telegram, оплата и поставщики эмулируются, деньги не двигаются</div>
+{% elif dry_run %}<div class="banner">Тестовый режим: платежи принимаются, выдача товара выключена (Настройки → снять галочку)</div>{% endif %}
+<header><b>✨ {{ shop_name }}</b>
+{% for href, t in [('/', 'Сводка'), ('/rtba', 'RTBA'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/channel', 'Канал'), ('/settings', 'Настройки')] %}
+<a href="{{ href }}" class="{{ 'on' if path == href else '' }}">{{ t }}</a>{% endfor %}
+{% if demo %}<a href="/demo" class="{{ 'on' if path == '/demo' else '' }}">💬 Демо-чат</a>{% endif %}
+<span style="flex:1"></span>{% if alerts_open %}<span class="pill closed">⚠ {{ alerts_open }}</span>{% endif %}<span class="mute">{{ role }} · v{{ VERSION }}</span></header>
+<main>{% if msg %}<div class="flash">{{ msg }}</div>{% endif %}{% block body %}{% endblock %}</main></body></html>

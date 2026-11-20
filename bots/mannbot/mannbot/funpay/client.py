@@ -27,8 +27,9 @@ class FunPayAuthError(FunPayError):
 
 
 class FunPayClient:
-    def __init__(self, golden_key: str, user_agent: str, *, dry_run: bool = False):
+    def __init__(self, golden_key: str, user_agent: str, *, dry_run: bool = False, coordinator=None):
         self.golden_key = golden_key
+        self.coord = coordinator          # общий лимит запросов с другими ботами аккаунта
         self.user_agent = user_agent
         self.dry_run = dry_run
         self.session: aiohttp.ClientSession | None = None
@@ -64,6 +65,8 @@ class FunPayClient:
                 if wait > 0:
                     await asyncio.sleep(wait)
                 self._last_request = time.monotonic()
+                if self.coord is not None:
+                    await self.coord.wait_turn("funpay")
             try:
                 async with sess.request(method, url, headers=headers, allow_redirects=True, **kw) as r:
                     body = await r.text()

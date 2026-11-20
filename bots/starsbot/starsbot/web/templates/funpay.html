@@ -1,0 +1,74 @@
+{% extends "base.html" %}{% block title %}Лоты{% endblock %}
+{% block body %}
+<h1>Лоты</h1>
+
+<div class="grid">
+  <div class="card kpi"><div class="v {{ 'c-green' if fr.session == 'ok' else 'c-red' }}">{{ {'ok': 'активна', 'expired': 'истекла'}.get(fr.session, 'не проверена') }}</div><div class="l">сессия Fragment · KYC {{ {'verified': 'пройден', 'required': 'НУЖЕН'}.get(fr.kyc, '—') }}{% if fr_age is not none %} · cookies {{ fr_age }} дн.{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ unconfirmed|length }}</div><div class="l">выдано, ждут подтверждения покупателя</div></div>
+  <div class="card kpi"><div class="v {{ 'c-amber' if ap.support_due else '' }}">{{ ap.support_due }}</div><div class="l">пора в поддержку (нет подтверждения дольше порога)</div></div>
+  <div class="card kpi"><div class="v">{{ 'вкл' if rtba.enabled else 'выкл' }}</div><div class="l">автоцена RTBA · стратегия {{ rtba.strategy }}{% if rtba.strategy == 'topN' %} #{{ rtba.target_position }}{% endif %}</div></div>
+</div>
+
+<form method="post">
+<div class="card tw">
+  <div class="row" style="justify-content:space-between"><h2>Лоты бота и позиция на странице</h2>
+  {% if is_admin %}<div class="row">
+    <button name="action" value="create" onclick="return confirm('Выставить на FunPay лоты для номиналов без ID?')">➕ Выставить недостающие</button>
+    <button name="action" value="open_all" onclick="return confirm('Включить все лоты бота (наличие — по балансу)?')">✅ Включить все лоты</button>
+    <button name="action" value="close_all" class="danger" onclick="return confirm('Выключить все лоты бота?')">⛔ Закрыть все лоты</button>
+  </div>{% endif %}</div>
+  <div class="help">Позиция — какое место занимать в списке раздела «Звёзды» (1 — первым, 3 — третьим). Бот ставит цену чуть ниже конкурента на этой позиции, но не ниже себестоимости + маржи. 0 — по общим настройкам RTBA. Позиции работают, даже если общая автоцена выключена. Наличие лотов бот ведёт сам: лот выключается, когда не хватает TON/звёзд, и включается снова, когда они появились.</div>
+  <table><tr><th>Способ</th><th>Номинал</th><th>ID лота</th><th>Позиция</th><th>Наличие</th><th>Цена</th><th>Место сейчас</th><th>Лидер</th><th></th></tr>
+  {% for r in rows %}<tr>
+    <td>{{ '🎁 Подарком' if r.kind == 'gift' else '⭐ По username' }}</td><td><b>{{r.stars}}</b></td>
+    <td><input type="number" name="offer_{{r.kind}}_{{r.stars}}" value="{{ r.offer_id or '' }}" style="max-width:120px">{% if r.offer_id %} <a href="https://funpay.com/lots/offer?id={{r.offer_id}}" target="_blank" rel="noopener">↗</a>{% endif %}</td>
+    <td><input type="number" name="pos_{{r.kind}}_{{r.stars}}" value="{{r.position}}" min="0" style="max-width:64px"></td>
+    <td>{{ r.amount if r.amount is not none else '—' }}</td><td>{{ r.price|money if r.price else '—' }}</td><td>{{ r.rank or '—' }}</td><td>{{ r.best|money if r.best else '—' }}</td>
+    <td>{% if r.offer_id and is_admin %}<button form="t{{r.offer_id}}" title="Включить">▶</button><button form="f{{r.offer_id}}" title="Выключить">■</button>{% endif %}</td>
+  </tr>{% endfor %}</table>
+  {% if not gifts_on %}<div class="help">Лоты «Подарком» появятся здесь, когда вы включите подарки в разделе «Подарки».</div>{% endif %}
+  {% if is_admin %}<div class="cols" style="margin-top:8px">
+    <div><label><input type="checkbox" name="auto_create" {{ 'checked' if fp.auto_create_lots }}> Выставлять недостающие лоты автоматически при запуске</label>
+      <label class="f">Стартовая цена нового лота, ₽ за звезду</label><input type="number" step="0.01" name="start_price" value="{{ fp.lot_price_per_star }}" style="max-width:120px"></div>
+    <div><label class="f">Лот-образец (ID, необязательно)</label><input type="number" name="template" placeholder="ID вашего лота — бот скопирует его поля" style="max-width:260px">
+      <div class="help">Бот берёт форму вашего лота (или пустую форму раздела) и выставляет «Количество» и «Способ» по тексту вариантов.</div></div>
+  </div>
+  <button class="primary" name="action" value="positions" style="margin-top:8px">Сохранить ID и позиции</button>{% endif %}
+</div>
+</form>
+{% if is_admin %}<div class="card tw">
+  <h2>Карточка товара</h2>
+  <div class="help">Название и описание лотов на FunPay. <b>{stars}</b> бот заменит номиналом (50, 100…). Английские поля — только латиница, без эмодзи: FunPay проверяет их отдельно. Без ссылок и контактов вне FunPay. После сохранения бот обновит все свои лоты этого способа.</div>
+  {% for kind in (['username', 'gift'] if gifts_on else ['username']) %}{% set t = texts[kind] %}
+  <form method="post" style="margin-top:10px"><input type="hidden" name="kind" value="{{kind}}">
+    <h3>{{ '🎁 Подарком' if kind == 'gift' else '⭐ По username' }}{% if t.custom %} <span class="muted">— ваш текст</span>{% endif %}</h3>
+    <label class="f">Название (RU)</label><input name="summary_ru" value="{{ t.summary_ru }}" maxlength="120" style="width:100%">
+    <label class="f">Описание (RU)</label><textarea name="desc_ru" rows="10" maxlength="1500" style="width:100%">{{ t.desc_ru }}</textarea>
+    <label class="f">Название (EN)</label><input name="summary_en" value="{{ t.summary_en }}" maxlength="120" style="width:100%">
+    <label class="f">Описание (EN)</label><textarea name="desc_en" rows="6" maxlength="1500" style="width:100%">{{ t.desc_en }}</textarea>
+    <label><input type="checkbox" name="manage" {{ 'checked' if manage_texts }}> Бот обновляет тексты лотов (снимите, если правите карточки прямо на FunPay — тогда бот их не трогает)</label>
+    <div class="row" style="margin-top:6px"><button class="primary" name="action" value="texts_save">💾 Сохранить и обновить лоты</button>
+    <button name="action" value="texts_reset" onclick="return confirm('Вернуть стандартный текст карточки?')">↺ Стандартный текст</button></div>
+  </form>{% endfor %}
+</div>{% endif %}
+{% for r in rows %}{% if r.offer_id %}<form id="t{{r.offer_id}}" method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="offer_id" value="{{r.offer_id}}"><input type="hidden" name="active" value="1"></form><form id="f{{r.offer_id}}" method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="offer_id" value="{{r.offer_id}}"><input type="hidden" name="active" value="0"></form>{% endif %}{% endfor %}
+
+<div class="cols">
+<div class="card tw">
+  <h2>Подтверждение сделок</h2>
+  <div class="help">После выдачи бот просит подтвердить заказ (п. 2.1.2 — только после выдачи), через {{ (ap.get('confirm_reminder_hours') or 24) }} ч автопилот один раз вежливо напоминает. Если покупатель молчит — бот готовит файл для поддержки FunPay: номер заказа, что и когда выдано, доказательства (транзакция TON на Fragment или список подарков), переписка. Откройте тикет в поддержке FunPay («Покупатель не подтверждает заказ») и приложите файл.</div>
+  {% if is_admin %}<form method="post" class="row" style="margin:8px 0">
+    <button name="action" value="support">📄 Сформировать файл для поддержки</button>
+    <button name="action" value="remind">🔔 Напомнить покупателям сейчас</button></form>{% endif %}
+  <table><tr><th>Заказ</th><th>Покупатель</th><th>Выдан</th><th>Напомнили</th><th>Файл</th></tr>
+  {% for o in unconfirmed[:40] %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{{o.delivered_at|ts}}</td><td>{{ '✔' if o.confirm_reminded else '—' }}</td><td>{{ '✔' if o.support_file else '—' }}</td></tr>{% else %}<tr><td colspan="5" class="muted">все выданные заказы подтверждены</td></tr>{% endfor %}</table>
+</div>
+<div class="card tw">
+  <h2>Файлы для поддержки</h2>
+  <table><tr><th>Файл</th><th>Создан</th><th></th></tr>
+  {% for f in files %}<tr><td>{{f.name}}</td><td>{{f.ts|ts}}</td><td><a href="/support/{{f.name}}">скачать</a></td></tr>{% else %}<tr><td colspan="3" class="muted">пока нет</td></tr>{% endfor %}</table>
+  <h2 style="margin-top:14px">Fragment</h2>
+  <div class="help">Cookies Fragment и KYC — в <a href="/setup">мастере настройки</a>. {% if fr.error %}<span class="c-red">Последняя ошибка: {{ fr.error }}</span>{% endif %}</div>
+</div>
+</div>
+{% endblock %}

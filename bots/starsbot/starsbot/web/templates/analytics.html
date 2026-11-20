@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% block title %}Статистика{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>Статистика</h1>
+<div class="row">{% for d in [7,30,90] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/analytics?days={{d}}">{{d}} дн.</a>{% endfor %}</div></div>
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ s.revenue|money }}</div><div class="l">Выручка, ₽</div></div>
+  <div class="card kpi"><div class="v">{{ s.profit|money }}</div><div class="l">Прибыль, ₽</div></div>
+  <div class="card kpi"><div class="v">{{ s.stars_sold }}</div><div class="l">Звёзд выдано</div></div>
+  <div class="card kpi"><div class="v">{{ velocity|round(0)|int }}</div><div class="l">Звёзд в сутки (3 дн.)</div></div>
+  <div class="card kpi"><div class="v">{{ s.confirm_rate }}%</div><div class="l">Подтверждают</div></div>
+  <div class="card kpi"><div class="v">{{ s.avg_review|round(2) if s.avg_review else '—' }}</div><div class="l">Средний отзыв ★</div></div>
+</div>
+<div class="cols">
+  <div class="card"><h2>Выручка и заказы</h2>{{ charts.bar_line(series|map(attribute='date')|map('md')|list, series|map(attribute='revenue')|list, series|map(attribute='orders')|list, bar_name='Выручка', line_name='Заказы', every=(series|length // 6) or 1)|safe }}</div>
+  <div class="card"><h2>Звёзды и TON по дням</h2>{{ charts.lines(series|map(attribute='date')|map('md')|list, [('Звёзд', series|map(attribute='stars')|list, 'var(--accent)')], every=(series|length // 6) or 1)|safe }}</div>
+</div>
+<div class="cols">
+  <div class="card"><h2>Заказы по часам</h2>{{ charts.bar_line(range(24)|map('string')|list, heat, bar_name='Заказы', every=3)|safe }}</div>
+  <div class="card tw"><h2>Номиналы</h2><table><tr><th>Номинал</th><th>Заказов</th><th>Штук</th><th>Выручка</th><th>TON</th></tr>
+  {% for d in denoms %}<tr><td>{{d.stars}}⭐</td><td>{{d.orders}}</td><td>{{d.units}}</td><td>{{d.revenue|money}}</td><td>{{d.ton|ton}}</td></tr>{% else %}<tr><td colspan=5 class="muted">Нет продаж</td></tr>{% endfor %}</table></div>
+</div>
+<div class="cols">
+  <div class="card tw"><h2>Топ клиентов</h2><table><tr><th>Покупатель</th><th>Заказов</th><th>Звёзд</th><th>LTV</th></tr>
+  {% for c in top %}<tr><td><a href="/orders?q={{c.username}}">{{c.username}}</a></td><td>{{c.orders_count}}</td><td>{{c.stars_bought}}</td><td>{{c.total_spent|money}}</td></tr>{% else %}<tr><td colspan=4 class="muted">Пусто</td></tr>{% endfor %}</table></div>
+  <div class="card"><h2>Причины сбоев</h2>{% if fails %}<table>{% for k,n in fails %}<tr><td>{{k}}</td><td>{{n}}</td></tr>{% endfor %}</table>{% else %}<span class="muted">Сбоев нет</span>{% endif %}</div>
+</div>
+<div class="card"><h2>Отчёт (как в Telegram)</h2><pre>{{ report }}</pre></div>
+{% endblock %}
