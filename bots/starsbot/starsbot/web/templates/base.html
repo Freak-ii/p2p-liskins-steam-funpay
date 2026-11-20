@@ -58,7 +58,7 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
   <span class="logo">⭐ StarsBot</span>
   <nav>
     {% set groups = [('', [('/', 'Главная'), ('/orders', 'Заказы'), ('/customers', 'Покупатели'), ('/analytics', 'Статистика')]),
-                     ('Продажи', [('/funpay', 'Лоты'), ('/pricing', 'Цены'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else [])),
+                     ('Продажи', [('/funpay', 'Лоты'), ('/pricing', 'Цены'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else []) + ([('/ggsel', 'GGSEL')] if ggsel_on else [])),
                      ('Выдача', [('/gifts', 'Подарки')]),
                      ('Финансы', [('/crypto', 'Кошелёк и автопилот'), ('/money', 'Деньги')]),
                      ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')])] %}

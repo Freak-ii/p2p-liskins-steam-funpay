@@ -28,7 +28,8 @@ log = logging.getLogger("app")
 
 SECRET_FIELDS = {("gifts", "api_hash"), ("funpay", "golden_key"), ("fragment", "cookies"), ("ton", "mnemonic"), ("ton", "toncenter_api_key"),
                  ("notifications.telegram", "bot_token"), ("dashboard", "token"), ("dashboard", "operator_token"),
-                 ("dashboard", "viewer_token"), ("ozon", "api_key"), ("ozon.activation_bot", "bot_token")}
+                 ("dashboard", "viewer_token"), ("ozon", "api_key"), ("ozon.activation_bot", "bot_token"),
+                 ("ggsel", "api_key")}
 
 
 class MemoryLogHandler(logging.Handler):
@@ -219,6 +220,10 @@ class Supervisor:
         ozon = build_channel(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
         if ozon is not None:
             self.engine.channels["ozon"] = ozon
+        from starsbot.ggsel.channel import build_channel as build_ggsel
+        ggsel = build_ggsel(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
+        if ggsel is not None:
+            self.engine.channels["ggsel"] = ggsel
 
     async def start(self) -> str:
         if self.state in ("running", "starting"):

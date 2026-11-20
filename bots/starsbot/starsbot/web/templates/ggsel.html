@@ -1,0 +1,72 @@
+{% extends "base.html" %}{% block title %}GGSEL{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>GGSEL: продажа звёзд по username</h1>
+{% if ch and is_admin %}<div class="row"><form method="post"><button name="action" value="poll">Проверить заказы сейчас</button></form>
+<form method="post"><button name="action" value="sync">Отправить цены и остатки</button></form>
+<form method="post"><button name="action" value="test">Проверить API</button></form></div>{% endif %}</div>
+
+{% if not ch %}
+<div class="card"><h2>GGSEL выключен</h2>
+<p>Как это работает: на GGSEL выставлены товары «Telegram Stars» по номиналам. Покупатель при оформлении указывает
+свой @username в поле товара. После оплаты бот покупает звёзды на Fragment с того же кошелька, что и для FunPay, и пишет
+покупателю в чат заказа GGSEL. Если поле пустое или с ошибкой — бот спросит username в чате.</p>
+<p>FunPay это не мешает: работает один бот с общим кошельком и общей очередью покупок, поэтому одни и те же TON не
+потратятся дважды, а остатки на обеих площадках считаются от одного свободного баланса.</p>
+<p>Что нужно: аккаунт продавца GGSEL с пройденной идентификацией (п. 6.13 правил), ключ API (кабинет → Настройки → API),
+товары по номиналам с полем «{{T.OPTION_NAME}}».</p>
+{% if is_admin %}<p><a href="/settings#s-ggsel">Настройки → GGSEL</a></p>{% endif %}</div>
+{% else %}
+<div class="grid">
+  <div class="card kpi"><div class="v">{% if s.last_ok %}{{ s.last_ok|ts }}{% else %}—{% endif %}</div><div class="l">последний опрос GGSEL{% if s.error %} · <span class="c-red">{{s.error}}</span>{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ s.active }}</div><div class="l">заказов в работе</div></div>
+  <div class="card kpi"><div class="v">{{ s.awaiting_confirm }}</div><div class="l">выдано, ждут подтверждения покупателем</div></div>
+  <div class="card kpi"><div class="v">{{ gg.price_mode == 'margin' and ('маржа ' ~ gg.margin_pct ~ '%') or 'вручную' }}</div><div class="l">цены · минимум {{gg.min_margin_pct}}%</div></div>
+</div>
+
+{% if s.skipped %}<div class="card tw"><h2 class="c-red">Оплачены до включения бота</h2>
+<div class="help">Эти продажи бот не выдаёт сам: их мог выдать продавец. Если звёзды не выданы — возьмите заказ в работу.</div><table>
+<tr><th>Счёт</th><th>Товар</th><th></th></tr>
+{% for r in s.skipped %}<tr><td>{{r.invoice_id}}</td><td>{{r.product_id}}</td><td>{% if is_admin %}<form method="post"><input type="hidden" name="invoice" value="{{r.invoice_id}}"><button name="action" value="take">Взять в работу</button></form>{% endif %}</td></tr>{% endfor %}</table></div>{% endif %}
+
+<div class="cols">
+<div class="card"><h2>Товары и цены</h2>
+<div class="help" style="margin-bottom:8px">ID товара — число из ссылки на товар в кабинете GGSEL. Остаток бот выставляет сам по балансу кошелька, цену — по марже или из таблицы.</div>
+<form method="post"><input type="hidden" name="action" value="products">
+<div class="row" style="margin-bottom:8px"><label><input type="radio" name="price_mode" value="margin" {% if gg.price_mode == 'margin' %}checked{% endif %} {% if not is_admin %}disabled{% endif %}> по марже</label>
+<input name="margin_pct" value="{{gg.margin_pct}}" style="width:60px" {% if not is_admin %}disabled{% endif %}>%
+<label><input type="radio" name="price_mode" value="manual" {% if gg.price_mode != 'margin' %}checked{% endif %} {% if not is_admin %}disabled{% endif %}> вручную</label>
+· минимум <input name="min_margin_pct" value="{{gg.min_margin_pct}}" style="width:60px" {% if not is_admin %}disabled{% endif %}>%</div>
+<table>
+<tr><th>Номинал</th><th>ID товара</th><th>Цена вручную, ₽</th><th>Цена сейчас</th><th>Маржа</th><th>Остаток</th></tr>
+{% for p in gg.products %}{% set oid = p.offer_id|string %}<tr><td><b>{{p.stars}}⭐</b></td>
+<td><input name="offer_{{p.stars}}" value="{{p.offer_id or ''}}" style="width:110px" {% if not is_admin %}disabled{% endif %}></td>
+<td><input name="price_{{p.stars}}" value="{{p.price or ''}}" style="width:90px" {% if not is_admin %}disabled{% endif %}></td>
+<td>{{ s.targets.get(oid)|money if p.offer_id and s.targets.get(oid) else '—' }}</td>
+<td>{% set m = margins.get(oid) %}{% if m is not none %}<span class="{{ 'c-red' if m < gg.min_margin_pct else 'c-green' }}">{{m}}%</span>{% else %}—{% endif %}</td>
+<td>{{ s.stocks.get(oid, '—') if p.offer_id else '—' }}</td></tr>{% endfor %}
+{% if is_admin %}<tr><td><input name="extra_stars" placeholder="⭐" style="width:70px"></td><td><input name="extra_offer" placeholder="ID товара" style="width:110px"></td><td><input name="extra_price" placeholder="₽" style="width:90px"></td><td colspan="3" class="muted">ещё номинал; 1 ⭐ — товар «за звезду» с количеством</td></tr>{% endif %}
+</table>{% if is_admin %}<button>Сохранить</button>{% endif %}</form></div>
+
+<div class="card"><h2>Как оформить товар на GGSEL</h2>
+<div class="help" style="margin-bottom:6px">Тексты без ссылок, контактов и превосходных степеней — так требуют правила GGSEL (п. 1.1, 2.2, 2.3).</div>
+<p><b>Название:</b> <code>{{ T.PRODUCT_TITLE.format(stars=100) }}</code></p>
+<p><b>Параметр товара</b> (текстовое поле, обязательное): <code>{{T.OPTION_NAME}}</code></p>
+<p><b>Раздел:</b> Telegram → Звёзды (если раздела нет — попросите поддержку GGSEL создать, п. 1.6).</p>
+<p><b>Описание:</b></p>
+<pre style="white-space:pre-wrap">{{ T.PRODUCT_DESCRIPTION.format(stars=100) }}</pre></div>
+</div>
+
+{% if calc %}<div class="card tw"><h2>Экономика номиналов на GGSEL</h2>
+<div class="help" style="margin-bottom:8px">Комиссия GGSEL {{gg.commission_pct}}%, вывод {{gg.withdraw_fee_pct}}%. Подробный калькулятор — на странице «Деньги».</div>
+<table><tr><th>Номинал</th><th>Цена, ₽</th><th>− GGSEL</th><th>= чистыми</th><th>Себестоимость</th><th>Прибыль</th><th>Безубыток</th></tr>
+{% for f in calc %}<tr><td>{{f.stars}}⭐</td><td>{{f.price|money}}</td><td>{{f.funpay_fee|money}}</td><td>{{f.net_rub|money}}</td><td>{{f.cost_rub|money}}</td>
+<td class="{{ 'c-green' if (f.profit or 0) >= 0 else 'c-red' }}">{{f.profit|money}}</td><td>{{f.breakeven_price|money}}</td></tr>{% endfor %}</table></div>{% endif %}
+
+<div class="card tw"><h2>Заказы GGSEL</h2><table>
+<tr><th>Заказ</th><th>⭐</th><th>Сумма</th><th>Получатель</th><th>Статус</th><th>Счёт GGSEL</th><th>Оплачен</th><th>Выдан</th></tr>
+{% for o in rows %}<tr><td><a href="/orders/{{o.order_id}}">{{o.order_id}}</a></td><td>{{o.stars}}</td><td>{{o.price|money}} {{o.currency}}</td>
+<td>{{ ('@' ~ o.tg_username) if o.tg_username else '—' }}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td>
+<td>{{ {1:'создан',2:'отменён',3:'оплачен',4:'закрыт',5:'возврат'}.get(o.inv_state, o.inv_state) }}</td><td>{{o.paid_at|ts}}</td><td>{{o.delivered_at|ts}}</td></tr>
+{% else %}<tr><td colspan="8" class="muted">Заказов с GGSEL пока не было</td></tr>{% endfor %}</table></div>
+{% endif %}
+{% endblock %}
