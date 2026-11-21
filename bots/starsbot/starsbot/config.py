@@ -36,7 +36,7 @@ DEFAULTS: dict[str, Any] = {
         "stock_sync": True,              # «Наличие» лотов = сколько раз хватит баланса кошелька
         "max_display_amount": 200,
         "deactivate_when_empty": True,
-        "presale_replies": True,         # отвечать на вопросы о звёздах в чатах без заказа
+        "presale_replies": True,         # ответить шаблоном тому, кто пишет без заказа (один раз на чат)
         "coord_db": "",                  # общий файл координации с другими ботами (обычно задаёт Центр)
         # заказы этих подразделов не наши, даже если в описании есть число звёзд: «Подарки» ведёт бот TG Gift
         "foreign_subcategory_regex": r"(?i)подарки|\bgifts\b",
@@ -215,6 +215,7 @@ DEFAULTS: dict[str, Any] = {
         "auto_refund_no_funds": False,   # авто-возврат, если на кошельке нет денег
         "message_rate_limit_seconds": 2,
         "review_reply": True,            # отвечать на отзывы 4–5★ (на 1–3★ — только алерт, отвечаете вы)
+        "confirm_reminder_minutes": 10,  # одно напоминание подтвердить заказ через N мин после выдачи (0 — не напоминать)
     },
     "risk": {
         "enabled": True, "manual_review_score": 60, "block_score": 90, "large_order_stars": 1500,

@@ -69,6 +69,7 @@ class Engine:
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self._queued: set[str] = set()
         self._chat_last_sent: dict[str, float] = {}
+        self._chat_last_text: dict[str, tuple[str, float]] = {}   # чат → (последний автоответ, когда) — против повторов
         self._tasks: list[asyncio.Task] = []
         self._purchase_lock = asyncio.Lock()
         self._order_re = re.compile(cfg.funpay.order_match_regex)
@@ -168,16 +169,23 @@ class Engine:
         await self.say_text(o, M.render(o["lang"] or self.cfg.general.language, key,
                                         **{**self._order_vars(o), **extra}))
 
-    async def say_text(self, o, text: str) -> None:
+    async def say_text(self, o, text: str, dedupe: bool = True) -> None:
         ch = self.channel_of(o)
         if ch is not None:
             await ch.say_text(o, text)
             return
-        await self.send_chat(o["chat_id"], text, o["order_id"])
+        await self.send_chat(o["chat_id"], text, o["order_id"], dedupe=dedupe)
 
-    async def send_chat(self, chat_id: str | None, text: str, order_id: str | None = None) -> None:
+    REPEAT_WINDOW = 15 * 60          # тот же автоответ в тот же чат не чаще раза в 15 минут
+
+    async def send_chat(self, chat_id: str | None, text: str, order_id: str | None = None,
+                        dedupe: bool = True) -> None:
         if not chat_id:
             await self.notifier.notify("WARNING", "no_chat", f"У заказа #{order_id} не найден чат", order_id=order_id)
+            return
+        prev = self._chat_last_text.get(str(chat_id))
+        if dedupe and prev and prev[0] == text and time.time() - prev[1] < self.REPEAT_WINDOW:
+            log.info("чат %s: тот же автоответ уже отправлен %.0f с назад — не повторяем", chat_id, time.time() - prev[1])
             return
         gap = float(self.cfg.deal.message_rate_limit_seconds) - (time.time() - self._chat_last_sent.get(chat_id, 0))
         if gap > 0:
@@ -185,6 +193,7 @@ class Engine:
         try:
             await self.fp.send_message(chat_id, text)
             self._chat_last_sent[chat_id] = time.time()
+            self._chat_last_text[str(chat_id)] = (text, time.time())
             self.db.log_message(chat_id, order_id, "out", text)
         except FunPayError as e:
             await self.notifier.notify("WARNING", "send_message_failed",
@@ -647,20 +656,23 @@ class Engine:
         last = self.db.last_order_for_chat(chat_id)
         if last is not None:
             self.db.log_message(chat_id, last["order_id"], "in", msg.text)
+            st = S(last["status"])
+            since = time.time() - (last["delivered_at"] or 0)
+            faq = M.detect_faq(msg.text)
             replied = True
             if M.is_off_platform_request(msg.text):
                 await self.say(last, "off_platform")
-            elif M.detect_faq(msg.text) and S(last["status"]) in (S.DELIVERED, S.COMPLETED) and \
-                    time.time() - (last["delivered_at"] or 0) < 7 * 86400:
-                await self.answer_faq(last, msg.text)
-            elif S(last["status"]) == S.DELIVERED or (S(last["status"]) == S.COMPLETED and M.is_question(msg.text)
-                                                      and time.time() - (last["delivered_at"] or 0) < 3 * 86400):
-                await self.say(last, "after_delivery")
+            elif st in (S.DELIVERED, S.COMPLETED) and since < 7 * 86400 and \
+                    (faq or (M.is_question(msg.text) and (st == S.DELIVERED or since < 3 * 86400))):
+                await self.reply_after_delivery(last, msg.text, faq)
+            elif st == S.DELIVERED or (st == S.COMPLETED and since < 86400 and not self.presale_topic(msg.text)
+                                       and not self.presale_hello(msg.text)):
+                pass                             # «спасибо», «ок» после выдачи — не отвечаем «звёзды уже отправлены»
             else:
                 replied = False
             await self.notifier.notify("INFO", "chat_message", f"💬 {msg.author_name} (заказ #{last['order_id']}): "
                                        f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
-            if replied or not S(last["status"]).is_final:
+            if replied or not st.is_final:
                 return
             # старый заказ закрыт, а покупатель снова пишет «привет / есть звёзды?» — отвечаем как новому
         text_in = msg.text or ""
@@ -672,7 +684,7 @@ class Engine:
                 self.db.log_message(chat_id, None, "in", msg.text)
                 await self.notifier.notify("INFO", "presale_question", f"💬 Вопрос о Premium от {msg.author_name}: "
                                            f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
-            if not self.cfg.funpay.presale_replies or self.paused or self.db.presale_recent(chat_id, 6 * 3600):
+            if not self.cfg.funpay.presale_replies or self.paused or self.presale_done(chat_id, last):
                 return
             self.db.mark_presale(chat_id)
             terms = ", ".join(str(l["months"]) for l in self.premium.lots if l.get("offer_id")) or "3, 6, 12"
@@ -681,21 +693,61 @@ class Engine:
                                                    premium_terms=terms + (" мес." if lang == "ru" else " mo.")))
             return
         hello = not about_stars and self.presale_hello(text_in)
-        if not about_stars and not hello:
+        # новый человек пишет что угодно без заказа — один раз отвечаем шаблоном (кроме вопросов о чужих товарах)
+        anything = last is None and not about_stars and not hello and self.presale_any(text_in)
+        if not about_stars and not hello and not anything:
             return                               # не про звёзды и не «вы тут?» — не наш покупатель, молчим
         if last is None:
             self.db.log_message(chat_id, None, "in", msg.text)
-            await self.notifier.notify("INFO", "presale_question", f"💬 Вопрос о звёздах от {msg.author_name}: "
+            await self.notifier.notify("INFO", "presale_question", f"💬 Сообщение без заказа от {msg.author_name}: "
                                        f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
-        if not self.cfg.funpay.presale_replies or self.paused or self.db.presale_recent(chat_id, 6 * 3600):
-            return
+        if not self.cfg.funpay.presale_replies or self.paused or self.presale_done(chat_id, last):
+            return                               # шаблон в этом чате уже был — дальше отвечает продавец
         if not self.coord.claim_presale(chat_id):
             return                               # на этот вопрос уже отвечает другой бот аккаунта
         self.db.mark_presale(chat_id)
         lang = M.detect_lang(msg.text, self.cfg.general.language)
         await self.send_chat(chat_id, self.presale_text(lang, about_stars, msg.text))
 
+    async def reply_after_delivery(self, o, text: str, faq: str | None) -> None:
+        """Вопрос после выдачи: отвечаем один раз на заказ, дальше молчим и зовём продавца, если это жалоба."""
+        oid = o["order_id"]
+        complaint = faq in ("faq_not_arrived", "faq_refund")
+        if complaint and not o["confirm_reminded"]:
+            self.db.update_order(oid, confirm_reminded=1)   # недовольному покупателю не напоминаем «подтвердите»
+        key = f"after_delivery_reply:{oid}"
+        if self.db.kv_get(key, 0):
+            if complaint:
+                await self.notifier.notify("WARNING", f"buyer_{faq[4:]}", f"#{oid}: покупатель {o['buyer_username']} "
+                                           f"снова пишет после выдачи (автоответ уже был, ответьте сами): "
+                                           f"{text[:300]}", order_id=oid)
+            return
+        self.db.kv_set(key, time.time())
+        if faq:
+            await self.answer_faq(o, text)
+        else:
+            await self.say(o, "after_delivery")
+
+    def presale_done(self, chat_id: str, last=None) -> bool:
+        """Шаблон без заказа отправляем один раз на чат; вернувшемуся покупателю — снова, но после нового заказа."""
+        ts = float(self.db.scalar("SELECT presale_at FROM chat_state WHERE chat_id=?", (chat_id,), 0) or 0)
+        if not ts:
+            return False
+        return last is None or ts > float(last["created_at"] or 0)
+
     # пресейл: о чём вопрос и что ответить (бот TG Gift переопределяет под подарки)
+    def presale_any(self, text: str) -> bool:
+        """Сообщение не о звёздах и без приветствия: отвечаем шаблоном, если это не вопрос о чужом товаре
+        (Steam — MannBot, подарки — TG Gift)."""
+        t = text or ""
+        if M.OTHER_GOODS_RE.search(t):
+            return False
+        try:
+            from starsbot.giftshop.engine import GIFT_TOPIC_RE
+        except Exception:  # noqa: BLE001
+            return True
+        return not GIFT_TOPIC_RE.search(t)
+
     def presale_topic(self, text: str) -> bool:
         return bool(M.STARS_TOPIC_RE.search(text or ""))
 
@@ -1222,6 +1274,25 @@ class Engine:
                                            throttle_key=f"lot:{lot['offer_id']}")
 
     # ================================================================== таймеры / SLA
+    async def confirm_reminders(self, now: float | None = None) -> int:
+        """Одно напоминание подтвердить заказ через deal.confirm_reminder_minutes после выдачи, если покупатель
+        ещё не подтвердил. Старые выдачи (больше 6 ч) не трогаем — им напомнит автопилот, если он включён."""
+        mins = float(self.cfg.deal.get("confirm_reminder_minutes") or 0)
+        if mins <= 0 or self.paused:
+            return 0
+        now = now or time.time()
+        n = 0
+        for o in self.db.q("SELECT * FROM orders WHERE status=? AND fp_status='paid' AND COALESCE(confirm_reminded,0)=0 "
+                           "AND delivered_at<? AND delivered_at>? AND COALESCE(channel,'funpay')='funpay'",
+                           (S.DELIVERED.value, now - mins * 60, now - 6 * 3600)):
+            if not o["chat_id"]:
+                continue
+            self.db.update_order(o["order_id"], confirm_reminded=1)     # сначала отметка: второго не будет
+            self.db.add_event(o["order_id"], "confirm_reminder", after_minutes=mins)
+            await self.say(o, "confirm_reminder")
+            n += 1
+        return n
+
     async def timers(self) -> None:
         now = time.time()
         d = self.cfg.deal
@@ -1246,6 +1317,7 @@ class Engine:
                 await self.notifier.notify("WARNING", "sla_username", f"#{o['order_id']}: покупатель "
                                            f"{o['buyer_username']} не присылает username {int(idle)} мин.",
                                            order_id=o["order_id"])
+        await self.confirm_reminders(now)
         for o in self.db.orders_by_status(S.PENDING_APPROVAL, S.MANUAL):
             if (now - (o["updated_at"] or now)) > 900 and not o["admin_alerted"]:
                 self._set(o["order_id"], admin_alerted=1)
@@ -1457,7 +1529,7 @@ class Engine:
             return "заказ не найден"
         if M.contains_forbidden_link(text):
             return "в сообщении ссылка на сторонний ресурс — FunPay это запрещает (п. 1.12)"
-        await self.say_text(o, text)
+        await self.say_text(o, text, dedupe=False)
         self.db.add_event(oid, "admin_message", text=text)
         return "отправлено"
 
