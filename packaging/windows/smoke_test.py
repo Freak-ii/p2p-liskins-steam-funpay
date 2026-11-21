@@ -17,6 +17,12 @@ import time
 import urllib.request
 from pathlib import Path
 
+for _stream in (sys.stdout, sys.stderr):    # консоль раннера Windows — cp1252, а сообщения по-русски
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 
 def get(url: str, token: str = "", timeout: float = 3) -> dict:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {})
