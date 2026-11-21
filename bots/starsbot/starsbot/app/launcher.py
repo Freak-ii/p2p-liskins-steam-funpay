@@ -89,8 +89,12 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
     from starsbot.web.server import start_web
     from starsbot.ozon.fake import DEMO_PRODUCTS
     from starsbot.ggsel.fake import DEMO_PREMIUM_PRODUCTS, DEMO_PRODUCTS as GG_PRODUCTS
+    from starsbot.avito.fake import DEMO_PRODUCTS as AVITO_DEMO
     demo_over = {**DEMO_OVERRIDES, "ozon": {"enabled": True, "products": DEMO_PRODUCTS},
-                 "ggsel": {"enabled": True, "products": GG_PRODUCTS, "premium_products": DEMO_PREMIUM_PRODUCTS}}
+                 "ggsel": {"enabled": True, "products": GG_PRODUCTS, "premium_products": DEMO_PREMIUM_PRODUCTS},
+                 "avito": {"enabled": True, "products": AVITO_DEMO},
+                 "wb": {"enabled": True, "products": [{"stars": n, "nm_id": f"WB{n}", "price": p} for n, p in
+                                                      ((100, 189), (250, 459), (500, 899))]}}
     sup = Supervisor(home, demo=demo, overrides=demo_over if demo else None)
     token = sup.ensure_token()
     if demo:
@@ -107,8 +111,13 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         from starsbot.demo import run_premium_demo
         await run_premium_demo(sup.engine, sup.engine.fp, sup.engine.wallet)
         from starsbot.treasury.fake import run_treasury_demo
+        from starsbot.avito.fake import run_avito_demo
+        await run_avito_demo(sup.engine, sup.engine.wallet)
+        from starsbot.wb.channel import run_wb_demo
+        await run_wb_demo(sup.engine, sup.engine.wallet)
+        from starsbot.treasury.fake import run_treasury_demo
         await run_treasury_demo(sup)
-        log.info("Демо-сценарий выполнен: заказы FunPay, Ozon и GGSEL в CRM")
+        log.info("Демо-сценарий выполнен: заказы FunPay, Ozon, GGSEL, Авито и Wildberries в CRM")
     runner = await start_web(sup, host, port, mem)
     shown_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     url = f"http://{shown_host}:{port}/login?token={token}"

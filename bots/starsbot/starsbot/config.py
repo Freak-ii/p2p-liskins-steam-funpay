@@ -255,6 +255,51 @@ DEFAULTS: dict[str, Any] = {
         "activation_bot": {"enabled": True, "bot_token": ""},   # отдельный Telegram-бот для покупателей
         "activation_web": {"enabled": False, "host": "0.0.0.0", "port": 8084, "public_url": ""},
         "messages": {},                  # свои тексты для покупателей Ozon (ключи как в starsbot/ozon/texts.py)
+        "min_margin_pct": 3.0,           # пол маржи: панель подсветит цену ниже, рекомендованная цена — не ниже
+    },
+    # Третий канал: Avito (безопасная сделка для цифровых товаров, с 30.04.2026). Покупатель нажимает «Купить»,
+    # платит Авито, бот видит оплату в чате объявления, просит @username и покупает звёзды на Fragment.
+    # Нужен доступ к API Авито (Профиль → Для профессионалов → API) с правом на мессенджер.
+    "avito": {
+        "enabled": False,
+        "client_id": "", "client_secret": "",    # avito.ru/professionals/api
+        "user_id": 0,                    # номер профиля; 0 — узнать автоматически (/core/v1/accounts/self)
+        "api_base": "https://api.avito.ru",
+        "poll_interval": 20,             # опрос чатов, сек (вебхук не нужен — работает с домашнего ПК)
+        # Объявления: id объявления → номинал. price — ваша цена, ₽ (не опустится ниже пола маржи)
+        "products": [{"stars": n, "item_id": 0, "price": 0} for n in DENOMINATIONS],
+        # Признаки оплаты в системных сообщениях чата (регулярные выражения, без учёта регистра)
+        "paid_patterns": ["оплатил", "оплачен", "заказ оформлен", "новый заказ"],
+        "done_patterns": ["подтвердил получение", "заказ завершён", "заказ завершен"],
+        "cancel_patterns": ["отменил заказ", "заказ отменён", "заказ отменен", "возврат"],
+        "presale_replies": True,         # отвечать на вопросы до оплаты (цена, как купить)
+        "presale_cooldown_minutes": 60,  # не чаще раза в N минут в одном чате
+        "auto_complete_hours": 48,       # «выдан» → «завершён», если Авито не прислал подтверждение покупателя
+        "commission_pct": 10.0,          # комиссия Авито за безопасную сделку, % (уточните в кабинете)
+        "withdraw_fee_pct": 0.0,
+        "min_margin_pct": 3.0,           # маржа не ниже, % от цены
+        "price_mode": "fixed",           # fixed — ваша цена (но не ниже пола), margin — по целевой марже
+        "target_margin_pct": 8.0,
+        "price_round": 1,                # шаг цены, ₽ (округление вверх)
+        "price_sync": True,              # бот сам меняет цену объявлений через API
+        "price_interval": 900,           # как часто пересчитывать цены, сек
+        "messages": {},                  # свои тексты (ключи как в starsbot/avito/texts.py)
+    },
+    # Четвёртый канал: Wildberries, категория «Цифровые товары» (ключи активации). Площадку WB Digital закрыли
+    # 01.12.2025; на основной витрине категория пока в пилоте для части продавцов, открытого API выдачи нет.
+    # Поэтому бот выпускает пул кодов активации, вы загружаете их в кабинет WB файлом, а покупатель вводит код
+    # и @username в боте активации — как на Ozon.
+    "wb": {
+        "enabled": False,
+        "products": [{"stars": n, "nm_id": "", "price": 0} for n in DENOMINATIONS],   # nm_id — артикул WB
+        "code_prefix": "TGW",            # коды вида TGW-ABCD-EFGH-JKMN (не путаются с кодами Ozon)
+        "pool_warn_low": 2,              # предупредить, когда невыданных кодов номинала осталось меньше
+        "commission_pct": 5.0,           # комиссия WB для ключей активации, % (уточните в кабинете)
+        "withdraw_fee_pct": 0.0,
+        "min_margin_pct": 3.0,
+        "price_mode": "fixed", "target_margin_pct": 8.0, "price_round": 1,
+        "activation_bot": {"enabled": True, "bot_token": ""},   # отдельный бот для покупателей WB
+        "messages": {},
     },
     # Третий канал продаж: маркетплейс GGSEL (ggsel.net, Seller API). Покупатель указывает @username в поле
     # заказа при оформлении (или пишет его в чат заказа), дальше — тот же путь, что у FunPay: Fragment → TON.
@@ -366,6 +411,8 @@ def validate_config(cfg: Section) -> list[str]:
     problems += validate_premium(cfg)
     problems += validate_ozon(cfg)
     problems += validate_ggsel(cfg)
+    problems += validate_avito(cfg)
+    problems += validate_wb(cfg)
     return problems
 
 
@@ -396,6 +443,33 @@ def validate_ggsel(cfg: Section) -> list[str]:
         out.append("ggsel.price_mode: manual или margin")
     if float(gg.get("min_margin_pct") or 0) > float(gg.get("margin_pct") or 0) and gg.get("price_mode") == "margin":
         out.append("ggsel.margin_pct должна быть не меньше min_margin_pct")
+    return out
+
+
+def validate_avito(cfg: Section) -> list[str]:
+    av = cfg.get("avito") or {}
+    if not av.get("enabled"):
+        return []
+    out = []
+    if not str(av.get("client_id") or "").strip() or not str(av.get("client_secret") or "").strip():
+        out.append("avito: укажите client_id и client_secret (Авито → Для профессионалов → API)")
+    if not any(p.get("item_id") and p.get("stars") for p in (av.get("products") or [])):
+        out.append("avito.products: укажите id хотя бы одного объявления со звёздами")
+    return out
+
+
+def validate_wb(cfg: Section) -> list[str]:
+    wb = cfg.get("wb") or {}
+    if not wb.get("enabled"):
+        return []
+    out = []
+    bot = wb.get("activation_bot") or {}
+    if not (bot.get("enabled") and bot.get("bot_token")):
+        out.append("wb: укажите токен бота активации (@BotFather) — без него покупатель не введёт код")
+    tokens = {str(cfg.notifications.telegram.bot_token or ""),
+              str(((cfg.get("ozon") or {}).get("activation_bot") or {}).get("bot_token") or "")} - {""}
+    if bot.get("bot_token") and str(bot.get("bot_token")) in tokens:
+        out.append("wb.activation_bot: нужен отдельный бот (не уведомлений и не бот активации Ozon)")
     return out
 
 

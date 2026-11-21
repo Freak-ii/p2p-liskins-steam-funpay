@@ -51,9 +51,10 @@ Seller API). После оплаты бот передаёт Ozon однораз
 
 {% if calc %}<div class="card tw"><h2>Экономика номиналов на Ozon</h2>
 <div class="help" style="margin-bottom:8px">Комиссия Ozon {{oz.commission_pct}}%, вывод {{oz.withdraw_fee_pct}}%. Цена — из последнего заказа Ozon; подробный калькулятор — на странице «Деньги».</div>
-<table><tr><th>Номинал</th><th>Цена, ₽</th><th>− Ozon</th><th>= чистыми</th><th>Себестоимость</th><th>Прибыль</th><th>Безубыток</th></tr>
+<table><tr><th>Номинал</th><th>Цена, ₽</th><th>− Ozon</th><th>= чистыми</th><th>Себестоимость</th><th>Прибыль</th><th>Безубыток</th><th>Цена с маржой {{ oz.min_margin_pct }}%</th></tr>
 {% for f in calc %}<tr><td>{{f.stars}}⭐</td><td>{{f.price|money}}</td><td>{{f.funpay_fee|money}}</td><td>{{f.net_rub|money}}</td><td>{{f.cost_rub|money}}</td>
-<td class="{{ 'c-green' if (f.profit or 0) >= 0 else 'c-red' }}">{{f.profit|money}}</td><td>{{f.breakeven_price|money}}</td></tr>{% endfor %}</table></div>{% endif %}
+<td class="{{ 'c-green' if (f.profit or 0) >= 0 else 'c-red' }}">{{f.profit|money}}</td><td>{{f.breakeven_price|money}}</td>
+<td class="{{ 'c-red' if floors.get(f.stars) and f.price and f.price < floors.get(f.stars) else '' }}">{{ floors.get(f.stars)|money if floors.get(f.stars) else '—' }}</td></tr>{% endfor %}</table></div>{% endif %}
 
 <div class="card tw"><h2>Коды активации</h2><table>
 <tr><th>Код</th><th>Заказ</th><th>⭐</th><th>Код в Ozon</th><th>Активирован</th><th>Получатель</th><th>Статус заказа</th></tr>

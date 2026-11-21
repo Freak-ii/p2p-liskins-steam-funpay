@@ -171,6 +171,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("is_admin", role == "admin")
         ctx.setdefault("ozon_on", "ozon" in sup.engine.channels)
         ctx.setdefault("ggsel_on", "ggsel" in sup.engine.channels)
+        ctx.setdefault("avito_on", "avito" in sup.engine.channels)
+        ctx.setdefault("wb_on", "wb" in sup.engine.channels)
         ctx.setdefault("market_on", bool({"ozon", "ggsel"} & set(sup.engine.channels)))
         return web.Response(text=env.get_template(name).render(**ctx), content_type="text/html")
 
@@ -486,7 +488,7 @@ def make_app(sup, log_handler=None) -> web.Application:
     async def api_calc(request: web.Request):
         data = await request.json()
         prices = {int(k): float(v) for k, v in (data.get("prices") or {}).items() if _num(v, None)}
-        channel = data.get("channel") if data.get("channel") in ("ozon", "ggsel") else "funpay"
+        channel = data.get("channel") if data.get("channel") in ("ozon", "ggsel", "avito", "wb") else "funpay"
         return web.json_response({"rows": [f.as_dict() for f in sup.econ.calculator(prices, channel=channel)]})
 
     # ------------------------------------------------------------------ Ozon
@@ -498,8 +500,10 @@ def make_app(sup, log_handler=None) -> web.Application:
         codes = db.q("SELECT c.*, o.status, o.tg_username, o.price FROM ozon_codes c LEFT JOIN orders o ON "
                      "o.order_id=c.order_id ORDER BY c.created_at DESC LIMIT 100")
         attention = db.q("SELECT * FROM ozon_postings WHERE codes_state IN ('pending','failed') ORDER BY first_seen")
+        calc = sup.econ.calculator(channel="ozon")
+        floors = {f.stars: sup.econ.min_price(f.stars, "ozon") for f in calc}
         return render("ozon.html", request, ch=ch, oz=sup.cfg.ozon, s=ch.summary(), codes=codes, attention=attention,
-                      calc=sup.econ.calculator(channel="ozon"))
+                      calc=calc, floors=floors)
 
     @friendly("/ozon")
     async def ozon_action(request: web.Request):
@@ -696,6 +700,129 @@ def make_app(sup, log_handler=None) -> web.Application:
             msg = "?"
         audit(request, f"premium.{act}", "", msg)
         raise web.HTTPFound(URL("/premium").with_query(msg=msg))
+    # ------------------------------------------------------------------ Авито и Wildberries
+    def _market_products(f, section: str, id_field: str, cast) -> list[dict]:
+        cur = (sup.cfg.get(section) or {}).get("products") or []
+        out = []
+        for d in sorted({int(x) for x in DENOMINATIONS} | {int(p.get("stars") or 0) for p in cur if p.get("stars")}):
+            ident = str(f.get(f"id_{d}", "")).strip()
+            price = _num(f.get(f"price_{d}", ""), 0) or 0
+            if not ident and not price and d not in {int(p.get("stars") or 0) for p in cur}:
+                continue
+            out.append({"stars": d, id_field: cast(ident) if ident else (0 if cast is int else ""),
+                        "price": round(float(price), 2)})
+        extra = str(f.get("extra_stars", "")).strip()
+        if extra.isdigit() and int(extra) >= 50 and int(extra) not in {p["stars"] for p in out}:
+            ident = str(f.get("extra_id", "")).strip()
+            out.append({"stars": int(extra), id_field: cast(ident) if ident else (0 if cast is int else ""),
+                        "price": round(float(_num(f.get("extra_price", ""), 0) or 0), 2)})
+        return out
+
+    async def avito_page(request: web.Request):
+        ch = sup.engine.channels.get("avito")
+        av = sup.cfg.get("avito") or {}
+        if ch is None:
+            return render("avito.html", request, ch=None, av=av)
+        orders = sup.db.q("SELECT * FROM orders WHERE channel='avito' ORDER BY created_at DESC LIMIT 50")
+        chats = sup.db.q("SELECT * FROM avito_chats ORDER BY updated_at DESC LIMIT 30")
+        summ = ch.summary()
+        prices = {int(p["stars"]): float(p.get("live") or p.get("target") or 0) for p in summ["prices"]}
+        return render("avito.html", request, ch=ch, av=av, s=summ, orders=orders, chats=chats,
+                      calc=sup.econ.calculator({k: v for k, v in prices.items() if v}, channel="avito"))
+
+    @friendly("/avito")
+    async def avito_action(request: web.Request):
+        need(request, "admin")
+        ch = sup.engine.channels.get("avito")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        if act == "products":
+            def to_int(x: str) -> int:
+                digits = "".join(c for c in x if c.isdigit())   # можно вставить ссылку на объявление
+                return int(digits[-12:]) if digits else 0
+            sup.save({"avito": {"products": _market_products(f, "avito", "item_id", to_int)}})
+            msg = "Объявления Авито сохранены"
+        elif act == "pricing":
+            mode = "margin" if f.get("price_mode") == "margin" else "fixed"
+            sup.save({"avito": {"price_mode": mode,
+                                "min_margin_pct": max(0.0, float(_num(f.get("min_margin_pct"), 3) or 3)),
+                                "target_margin_pct": max(0.0, float(_num(f.get("target_margin_pct"), 8) or 8)),
+                                "price_sync": bool(f.get("price_sync"))}})
+            msg = "Правила цен Авито сохранены"
+        elif ch is None:
+            msg = "Сначала включите Авито в настройках"
+        elif act == "poll":
+            try:
+                await ch.poll()
+                msg = "Чаты Авито проверены" + (f": {ch.last_error}" if ch.last_error else "")
+            except Exception as e:  # noqa: BLE001
+                msg = f"Авито: {e}"
+        elif act == "prices":
+            try:
+                await ch.price_sync()
+                msg = "Цены объявлений пересчитаны"
+            except Exception as e:  # noqa: BLE001
+                msg = f"Авито: {e}"
+        elif act == "test":
+            try:
+                me = await ch.client.me()
+                chats = await ch.client.list_chats(limit=5)
+                msg = f"API Авито отвечает: профиль {me}, чатов в выборке — {len(chats)}"
+            except Exception as e:  # noqa: BLE001
+                msg = f"API Авито: {e}"
+        else:
+            msg = "?"
+        if act in ("products", "pricing") and sup.restart_required:
+            msg += ". Перезапустите бота, чтобы применить"
+        audit(request, f"avito.{act}", "", msg)
+        raise web.HTTPFound(URL("/avito").with_query(msg=msg))
+
+    async def wb_page(request: web.Request):
+        ch = sup.engine.channels.get("wb")
+        wb = sup.cfg.get("wb") or {}
+        if ch is None:
+            return render("wb.html", request, ch=None, wb=wb)
+        codes = sup.db.q("SELECT c.*, o.status, o.tg_username FROM wb_codes c LEFT JOIN orders o ON "
+                         "o.order_id=c.order_id WHERE c.state<>'pool' ORDER BY c.updated_at DESC LIMIT 50")
+        summ = ch.summary()
+        return render("wb.html", request, ch=ch, wb=wb, s=summ, codes=codes)
+
+    @friendly("/wb")
+    async def wb_action(request: web.Request):
+        need(request, "admin")
+        ch = sup.engine.channels.get("wb")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        if act == "products":
+            sup.save({"wb": {"products": _market_products(f, "wb", "nm_id", str)}})
+            msg = "Товары Wildberries сохранены"
+        elif ch is None:
+            msg = "Сначала включите Wildberries в настройках"
+        elif act == "issue":
+            stars, count = int(_num(f.get("stars"), 0) or 0), int(_num(f.get("count"), 0) or 0)
+            if stars < 50 or count < 1:
+                msg = "Укажите номинал и количество кодов"
+            else:
+                batch, codes = ch.issue(stars, count)
+                msg = f"Выпущено {len(codes)} кодов на {stars} ⭐ (пачка {batch}). Скачайте CSV и загрузите в кабинет WB"
+        elif act == "void":
+            n = ch.void(batch=str(f.get("batch", "")), code=str(f.get("code", "")))
+            msg = f"Аннулировано кодов: {n}"
+        else:
+            msg = "?"
+        audit(request, f"wb.{act}", str(f.get("batch", "")), msg)
+        raise web.HTTPFound(URL("/wb").with_query(msg=msg))
+
+    async def wb_export(request: web.Request):
+        need(request, "admin")
+        ch = sup.engine.channels.get("wb")
+        if ch is None:
+            raise web.HTTPFound("/wb")
+        batch = request.query.get("batch", "")
+        audit(request, "wb.export", batch, "")
+        name = f"wb-codes-{batch or 'all'}.csv"
+        return web.Response(body=("\ufeff" + ch.export_csv(batch)).encode("utf-8"), content_type="text/csv",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     async def analytics_page(request: web.Request):
         a = sup.analytics
@@ -1333,6 +1460,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.post("/api/preview", preview_message), web.get("/logs", logs), web.get("/api/logs", api_logs),
         web.get("/ozon", ozon_page), web.post("/ozon", ozon_action),
         web.get("/ggsel", ggsel_page), web.post("/ggsel", ggsel_action),
+        web.get("/avito", avito_page), web.post("/avito", avito_action),
+        web.get("/wb", wb_page), web.post("/wb", wb_action), web.get("/wb/codes.csv", wb_export),
         web.get("/gifts", gifts_page), web.post("/gifts", gifts_action),
         web.get("/premium", premium_page), web.post("/premium", premium_action),
         web.get("/funpay", funpay_page), web.post("/funpay", funpay_action),
