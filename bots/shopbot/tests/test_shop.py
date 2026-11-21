@@ -106,3 +106,28 @@ def test_pricing_undercuts_funpay_but_keeps_min_margin(tmp_path):
     assert price <= 155 * 0.95 + 0.01 and price >= 125.6 * 1.04
     price2, why2 = shop_price(cfg, "stars", 150, 100)       # дорогой TON — держим минимальную маржу
     assert price2 >= 150 * 1.04 and "минимальная" in why2
+
+
+def test_steam_keys_bad_trade_link_asks_again_without_refund(tmp_path):
+    from shopbot.demo import TRADE, buy, settle
+    shop, bot = make(tmp_path)
+
+    async def go():
+        await shop.rtba.tick()
+        await bot.on_text(EVE, "eve_e", "Eve", "/start")
+        shop.db.credit(EVE, "rub", 2000, "topup", "t1", "тест")
+        bad = TRADE.replace("AbCd1234", "Expired1")
+        oid = await buy(bot, EVE, ["buy:steam_keys", "kq:2"], "pay:balance", texts=[bad])
+        o = shop.db.order(oid)
+        assert o["status"] == "need_recipient" and o["fail_reason"] == "invalid_token", dict(o)
+        assert any("ссылка на обмен устарела" in m["text"] for m in bot.outbox if m["chat"] == EVE)
+        assert shop.db.scalar("SELECT COUNT(*) FROM ledger WHERE user_id=? AND kind='refund'", (EVE,)) == 0
+        assert shop.rtba.recent_fails("steam_keys") == 0          # ошибка покупателя — не сбой поставщика
+        await bot.on_text(EVE, "eve_e", "Eve", "не та ссылка")       # не ссылка — переспрашиваем
+        assert shop.db.order(oid)["status"] == "need_recipient"
+        await bot.on_text(EVE, "eve_e", "Eve", TRADE)
+        await settle(shop)
+        o = shop.db.order(oid)
+        assert o["status"] == "delivered" and o["recipient"] == TRADE
+        assert shop.db.user(EVE)["trade_url"] == TRADE
+    asyncio.run(go())

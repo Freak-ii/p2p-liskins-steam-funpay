@@ -21,6 +21,7 @@ from mannbot.notify.notifier import Notifier
 from mannbot.steam.client import SteamAuthError, SteamError
 from mannbot.steam.shared import CenterShare, ShareUnavailable
 from mannbot.steam.tradelink import TradeLinkError, find_trade_url, looks_like_wrong_link, parse_trade_url
+from mannbot.supply_api import is_shop
 
 log = logging.getLogger("engine")
 
@@ -76,6 +77,9 @@ class Engine:
                                         **{**self._order_vars(o), **extra}))
 
     async def say_text(self, o, text: str) -> None:
+        if is_shop(o):                     # заказ Telegram-магазина: покупателю пишет ShopBot, чата FunPay нет
+            self.db.add_event(o["order_id"], "shop_text_skipped", text=text[:200])
+            return
         chat_id = o["chat_id"]
         if not chat_id:
             await self.notifier.notify("WARNING", "no_chat", f"У заказа #{o['order_id']} не найден чат",
@@ -184,6 +188,11 @@ class Engine:
         self._set(so.order_id, S.AWAITING_LINK, "greeting_sent")
 
     async def out_of_stock(self, o, available: int | None) -> None:
+        if is_shop(o):
+            await self.shop_fail(o, "out_of_stock", f"доступно {available}")
+            await self.notifier.notify("WARNING", "out_of_stock", f"Магазин: нет ключей для #{o['order_id']} "
+                                       f"(нужно {o['keys_qty']}, доступно {available})", order_id=o["order_id"])
+            return
         self._set(o["order_id"], S.MANUAL, "out_of_stock", fail_reason="out_of_stock")
         await self.say(o, "out_of_stock")
         await self.notifier.notify("CRITICAL", "out_of_stock",
@@ -365,8 +374,18 @@ class Engine:
         return res.sent or res.drafted
 
     # ================================================================== ссылка на обмен
+    async def shop_fail(self, o, code: str, detail: str = "") -> None:
+        """Заказ магазина не выдан по вине данных покупателя: закрываем его (ключи свободны), ShopBot попросит
+        новую ссылку и пришлёт новый заказ."""
+        oid = o["order_id"]
+        self.db.release_assets(oid)
+        self._set(oid, S.REFUNDED, "shop_failed", fail_reason=code, notes=(detail or "")[:200])
+
     async def bad_data(self, o, code: str, detail: str = "") -> None:
         oid = o["order_id"]
+        if is_shop(o):
+            await self.shop_fail(o, code, detail)
+            return
         attempts = int(o["link_attempts"] or 0) + 1
         max_att = int(self.cfg.deal.max_link_attempts)
         why = M.reason(o["lang"], code, detail)
@@ -398,7 +417,8 @@ class Engine:
         except SteamError as e:
             await self.notifier.notify("WARNING", "steam_check_failed", f"Проверка ссылки #{oid}: {e}", order_id=oid)
             await self.say(o, "link_received", partner=link.steam_id64)
-            self._set(oid, event="link_check_failed", trade_url=link.canonical, steam_id64=link.steam_id64)
+            self._set(oid, S.MANUAL if is_shop(o) else None, "link_check_failed", trade_url=link.canonical,
+                      steam_id64=link.steam_id64)
             return
         if not check.ok:
             if check.reason_code == "network":
@@ -428,6 +448,9 @@ class Engine:
             policy = self.cfg.deal.trade_hold_policy
             key = {"require_fix": "trade_hold_fix", "warn_and_send": "trade_hold_send"}.get(policy, "trade_hold_manual")
             await self.say(o, "trade_hold", days=days, policy_text=M.render(o["lang"], key))
+            if policy == "require_fix" and is_shop(o):
+                await self.shop_fail(o, "trade_hold", f"задержка обмена {days} дн.")
+                return
             if policy == "require_fix":
                 return
             if policy == "manual":
@@ -657,6 +680,12 @@ class Engine:
             if S(o["status"]) != S.ESCROW:
                 o = self._set(oid, S.ESCROW, "escrow")
                 await self.say(o, "escrow")
+        elif is_shop(o) and state in (T.DECLINED, T.EXPIRED, T.COUNTERED, T.CANCELED):
+            off = self.db.get_offer(o["offer_id"]) if state == T.CANCELED else None
+            code = "api_scam_suspect" if state == T.CANCELED and not (off and off["canceled_by_bot"]) else \
+                f"offer_{state.name.lower()}"
+            await self.shop_fail(o, code)
+            await self.notifier.notify("INFO", "offer_declined", f"#{oid} (магазин): трейд {state.name}", order_id=oid)
         elif state in (T.DECLINED, T.EXPIRED, T.COUNTERED):
             self.db.release_assets(oid)
             what = {T.DECLINED: "отклонён", T.EXPIRED: "отменён по истечении срока",
@@ -980,6 +1009,9 @@ class Engine:
             return "заказ не найден"
         if S(o["status"]) in (S.DELIVERED, S.COMPLETED, S.ESCROW):
             return "ключи уже выданы — возврат через бота запрещён"
+        if is_shop(o):                     # деньги у ShopBot: он вернёт их покупателю на баланс магазина
+            await self.shop_fail(o, "refund", reason)
+            return f"#{oid}: заказ магазина закрыт, ShopBot вернёт деньги покупателю"
         try:
             await self.fp.refund(oid)
         except FunPayError as e:

@@ -3,8 +3,8 @@
 
   stars, premium → StarsBot   (http://127.0.0.1:8803, /api/supply/*, X-Supply-Token)
   gifts          → TG Gift    (профиль giftshop StarsBot, http://127.0.0.1:8805, тот же контракт)
-  steam_keys     → MannBot    (пока kind=manual: оператор отдаёт ключи обменом и отмечает выдачу в панели;
-                               когда у MannBot появится /api/supply — kind=http, контракт тот же)
+  steam_keys     → MannBot    (http://127.0.0.1:8801, тот же контракт; получатель — ссылка на обмен Steam;
+                               kind=manual — оператор отдаёт ключи сам и отмечает выдачу в панели)
 """
 from __future__ import annotations
 
@@ -129,8 +129,10 @@ class DemoSupplier:
                     gift: dict | None = None) -> dict:
         await self.ping()
         if ref not in self.orders:
-            st = "failed" if recipient.lstrip("@").lower() in self.fail_usernames else "queued"
-            self.orders[ref] = {"status": st, "ticks": 0, "detail": "not_found" if st == "failed" else "",
+            expired = "token=Expired1" in recipient                  # как у MannBot: ссылка на обмен устарела
+            st = "failed" if expired or recipient.lstrip("@").lower() in self.fail_usernames else "queued"
+            detail = "invalid_token" if expired else "not_found" if st == "failed" else ""
+            self.orders[ref] = {"status": st, "ticks": 0, "detail": detail,
                                 "product": product, "gift": (gift or {}).get("emoji", ""), "ts": time.time()}
         return {"ok": True, "order_id": ref, **self.orders[ref]}
 

@@ -201,6 +201,16 @@ class ShopTelegram:
             else:
                 await self.sell_stars_quote(uid, n)
             return
+        if state == "fix_recipient" and (self.shop.db.order(data.get("order", "")) or {"product": ""})["product"] \
+                == "steam_keys":
+            url = parse_trade_url(text)
+            if not url:
+                await self.send(uid, "Это не похоже на ссылку обмена Steam. " + T.ASK_TRADE)
+                return
+            self.db.set_session(uid, "")
+            self.db.exec("UPDATE users SET trade_url=? WHERE id=?", (url, uid))
+            await self.shop.set_recipient(data["order"], url)
+            return
         if state in ("recipient", "fix_recipient"):
             name = parse_username(text)
             if not name:
@@ -406,7 +416,8 @@ class ShopTelegram:
         except (ValueError, SupplierError) as e:
             await self.send(uid, f"⚠️ {e}", [("◀️ В меню", "menu")])
             return
-        self.db.set_session(uid, "")
+        if self.db.session(uid)[0] == "pay":     # оплата с баланса уже могла попросить исправить получателя
+            self.db.set_session(uid, "")
         lines = "\n".join(f"{a}: <b>{b}</b>" for a, b in json.loads(o["breakdown"]))
         head = f"🧾 <b>Заказ #{o['id']}</b>\n{lines}\n\n"
         if method == "balance":

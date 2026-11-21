@@ -13,6 +13,7 @@ import jinja2
 from aiohttp import web
 from yarl import URL
 
+from mannbot.supply_api import PUBLIC_PREFIX, install as install_supply
 from mannbot.ai import guard
 from mannbot.ai.agent import STATUS_TEXT as AI_STATUS, TOPIC_TEXT as AI_TOPICS
 from mannbot.analytics.analytics import fmt_dur
@@ -77,7 +78,7 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     @web.middleware
     async def auth(request: web.Request, handler):
-        if request.path in ("/login", "/api/ping"):
+        if request.path in ("/login", "/api/ping") or request.path.startswith(PUBLIC_PREFIX):   # свой токен
             return await handler(request)
         if not token() or not hmac.compare_digest(request.cookies.get("mb_token", ""), token()):
             raise web.HTTPFound("/login")
@@ -561,6 +562,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.post("/api/preview", preview_message), web.get("/ai", ai_page), web.post("/ai/{rid}", ai_action),
         web.get("/api/ai", api_ai), web.get("/logs", logs), web.get("/api/logs", api_logs),
     ])
+    install_supply(app, sup)          # /api/supply/* для Telegram-магазина ShopBot (ключи обменом Steam)
     return app
 
 

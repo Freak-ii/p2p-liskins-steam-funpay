@@ -93,8 +93,8 @@ DEFAULTS: dict[str, Any] = {
         "stars": {"kind": "http", "url": "http://127.0.0.1:8803", "token": ""},     # StarsBot /api/supply
         "premium": {"kind": "http", "url": "http://127.0.0.1:8803", "token": ""},   # StarsBot (starsbot.premium)
         "gifts": {"kind": "http", "url": "http://127.0.0.1:8805", "token": ""},     # TG Gift (профиль giftshop)
-        "steam_keys": {"kind": "manual", "url": "http://127.0.0.1:8801", "token": "",  # MannBot: пока вручную
-                       "cost_rub": 165},
+        # MannBot /api/supply: ключи TF2 обменом Steam (kind: manual — выдача вручную по cost_rub)
+        "steam_keys": {"kind": "http", "url": "http://127.0.0.1:8801", "token": "", "cost_rub": 165},
     },
     # ---------------------------------------------------------------- RTBA: контроль каждого пункта
     "rtba": {

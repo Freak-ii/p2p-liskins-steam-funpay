@@ -1,4 +1,4 @@
-"""Стык ShopBot → TG Gift по HTTP-контракту /api/supply/*: магазин заказывает конкретный подарок."""
+"""Стыки ShopBot → TG Gift и ShopBot → MannBot по HTTP-контракту /api/supply/*."""
 import asyncio
 import sys
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 from aiohttp.test_utils import TestServer
 
 ROOT = Path(__file__).resolve().parents[1]
-for p in (ROOT / "bots" / "starsbot", ROOT / "bots" / "shopbot"):
+for p in (ROOT / "bots" / "starsbot", ROOT / "bots" / "shopbot", ROOT / "bots" / "mannbot"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
@@ -48,4 +48,37 @@ def test_shopbot_http_supplier_orders_exact_gift_from_tggift(tmp_path):
         finally:
             await server.close()
             await sup.stop()
+    asyncio.run(go())
+
+
+def test_shopbot_http_supplier_buys_steam_keys_from_mannbot(tmp_path):
+    from mannbot.app.launcher import DEMO_OVERRIDES
+    from mannbot.app.supervisor import Supervisor
+    from mannbot.demo import trade_url
+    from mannbot.web.server import make_app
+    from shopbot.suppliers import HttpSupplier
+
+    async def go():
+        sup = Supervisor(tmp_path / "mannbot", demo=True, overrides=DEMO_OVERRIDES)
+        sup.save({"supply": {"token": TOKEN}, "rtba": {"cost_per_key": 150}}, rebuild=False)
+        sup.cfg.supply.token = TOKEN
+        sup.engine.cfg.rtba["cost_per_key"] = 150
+        sup.state = "running"
+        server = TestServer(make_app(sup))
+        await server.start_server()
+        try:
+            shop = HttpSupplier("steam_keys", str(server.make_url("/")).rstrip("/"), TOKEN)
+            assert (await shop.ping())["app"] == "mannbot"
+            q = await shop.quote("steam_keys", 2)
+            assert q["available"] and q["cost_rub"] == 300
+            r = await shop.order("B1234", "steam_keys", trade_url(424242), 2)
+            assert r["ok"] and r["status"] == "queued", r
+            await sup.engine.deliver(r["order_id"])
+            sup.engine.steam.tick()
+            await sup.engine.watch_offers()
+            assert (await shop.status("B1234"))["status"] == "delivered"
+            bad = await shop.order("B1235", "steam_keys", trade_url(424243, "Expired1"), 1)
+            assert bad["status"] == "failed" and bad["detail"] == "invalid_token"
+        finally:
+            await server.close()
     asyncio.run(go())

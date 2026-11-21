@@ -64,6 +64,15 @@ python packaging/build_windows_portable.py        # → dist/MannBot-Windows-x64
 pyinstaller packaging/mannbot.spec                # → dist/MannBot(.exe) для текущей ОС
 ```
 
+## Поставка ключей Telegram-магазину (ShopBot)
+
+MannBot отдаёт ключи и магазину экосистемы по контракту `/api/supply/*` (как StarsBot): заказ `SHOP-<ref>` идёт
+тем же путём, что и заказ FunPay (склад, резерв assetid, Steam Guard, реестр обменов с LisBot, защита от двойной
+выдачи), но без чата FunPay — покупателю пишет ShopBot. Включение: `supply.token` (≥16 символов) в config.yaml
+MannBot и тот же токен в `suppliers.steam_keys.token` ShopBot; себестоимость для котировки — `rtba.cost_per_key`.
+Ошибка данных покупателя или отклонённый трейд закрывают заказ (ключи возвращаются на склад), ShopBot просит новую
+ссылку и присылает новый заказ.
+
 ## Установка из исходников
 
 ```bash

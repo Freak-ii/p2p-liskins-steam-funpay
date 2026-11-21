@@ -37,6 +37,25 @@ def parse_username(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+# Ошибки данных покупателя у MannBot: ключи не ушли, нужна другая (или та же, но рабочая) ссылка на обмен
+TRADE_FIX = {
+    "invalid_token": "ссылка на обмен устарела — скопируйте новую",
+    "bad_token": "в ссылке неверный token — скопируйте ссылку целиком",
+    "no_token": "в ссылке нет token — скопируйте ссылку целиком",
+    "bad_format": "это не ссылка на обмен Steam",
+    "cannot_trade": "аккаунт сейчас не может обмениваться",
+    "trade_banned": "у аккаунта бан обменов",
+    "inventory_full": "инвентарь TF2 переполнен — освободите место",
+    "inventory_private": "инвентарь скрыт — откройте его в настройках приватности Steam",
+    "self": "это ссылка нашего же аккаунта",
+    "trade_hold": "у аккаунта задержка обменов: включите мобильный Steam Guard (7 дней) и пришлите ссылку снова",
+    "offer_declined": "обмен отклонён",
+    "offer_expired": "обмен не приняли вовремя",
+    "offer_countered": "обмен изменён (контрпредложения не принимаем)",
+    "api_scam_suspect": "обмен отменён не нами — проверьте, не утёк ли ваш API-ключ Steam, и смените его",
+}
+
+
 def parse_trade_url(text: str) -> str | None:
     m = TRADE_RE.search(text or "")
     return f"https://steamcommunity.com/tradeoffer/new/?partner={m.group(1)}&token={m.group(2)}" if m else None
@@ -234,7 +253,13 @@ class Shop:
             await self.on_delivered(oid)
         elif s == "failed":
             detail = str(st.get("detail") or "")
-            if detail in ("not_found", "cannot_receive", "bad_format", "blacklisted") and o["product"] != "steam_keys":
+            if o["product"] == "steam_keys" and detail in TRADE_FIX:
+                self.db.update_order(oid, status="need_recipient", fail_reason=detail)
+                self.db.set_session(o["user_id"], "fix_recipient", {"order": oid})
+                await self.tell(o["user_id"], f"⚠️ По заказу <b>#{oid}</b> ключи не отправлены: "
+                                f"{TRADE_FIX[detail]}.\nПришлите ссылку на обмен Steam ещё раз — отправлю сразу, "
+                                f"деньги уже оплачены.")
+            elif detail in ("not_found", "cannot_receive", "bad_format", "blacklisted") and o["product"] != "steam_keys":
                 self.db.update_order(oid, status="need_recipient", fail_reason=detail)
                 self.db.set_session(o["user_id"], "fix_recipient", {"order": oid})
                 await self.tell(o["user_id"], f"⚠️ По заказу <b>#{oid}</b> получатель <b>@{o['recipient']}</b> не "
