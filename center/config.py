@@ -192,6 +192,7 @@ DEMO_DEFAULTS: dict = {
         "lisbot": {"autostart": True, "port": 18802},
         "starsbot": {"autostart": True, "port": 18803},
         "shopbot": {"autostart": True, "port": 18806},
+        "tggift": {"autostart": True, "port": 18805},
     },
 }
 
