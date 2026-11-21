@@ -78,7 +78,8 @@ def shop_routes(sup, *, render, friendly, need, audit, num_in):
             msg = "Сохранено" + (". Перезапустите бота, чтобы применить" if sup.restart_required else "")
         elif act == "save_lot":
             i = num_in(f.get("i"), -1)
-            msg = lm.update(i, offer_id=num_in(f.get("offer_id"), 0), position=num_in(f.get("position"), 0),
+            msg = lm.update(i, str(f.get("list") or "shop"), offer_id=num_in(f.get("offer_id"), 0),
+                            position=num_in(f.get("position"), 0),
                             price=num_in(f.get("price"), 0, float), sell=f.get("sell") == "on")
         elif act == "add_lot":
             emoji, name = str(f.get("emoji", "")).strip(), str(f.get("name", "")).strip()
@@ -95,6 +96,31 @@ def shop_routes(sup, *, render, friendly, need, audit, num_in):
             sup.engine.reset_lot_amounts()
             await g.watch()
             msg = "Наличие лотов пересчитано по балансу звёзд"
+        elif act == "add_nft" and g.nft is not None:
+            name = str(f.get("collection", "")).strip()
+            if not name:
+                msg = "укажите коллекцию (как на fragment.com/gifts)"
+            else:
+                coll = g.nft.collection(name)
+                msg = lm.add_nft(coll, position=max(1, num_in(f.get("position"), 3)))
+                await g.nft.quote(coll, fresh=True)
+                msg += "; " + "; ".join(await lm.create_missing(kinds=["shop"]))
+        elif act == "assort_scan" and g.assortment is not None:
+            msg = await g.assortment.scan(force=True)
+        elif act == "assort_save" and g.assortment is not None:
+            a = dict(sup.cfg.giftshop.get("assortment") or {})
+            a.update(enabled=f.get("enabled") == "on", max_lots=max(0, num_in(f.get("max_lots"), 8)),
+                     max_cost_rub=num_in(f.get("max_cost_rub"), 5000, float),
+                     min_margin_pct=num_in(f.get("min_margin_pct"), 8, float))
+            sup.save({"giftshop": {"assortment": a}})
+            msg = "Сохранено"
+        elif act in ("assort_pin", "assort_ban") and g.assortment is not None:
+            msg = await g.assortment.command([act.split("_")[1], str(f.get("slug", ""))])
+        elif act == "assort_clear" and g.assortment is not None:
+            a = dict(sup.cfg.giftshop.get("assortment") or {})
+            a.update(pinned=[], banned=[])
+            sup.save({"giftshop": {"assortment": a}})
+            msg = "Закрепления и запреты сброшены"
         elif act == "supply":
             msg = await g.maybe_topup(need=max(1, num_in(f.get("amount"), 0)))
         else:

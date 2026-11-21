@@ -62,6 +62,7 @@ class Engine:
         self.econ = None                       # starsbot.economics.Economics (подключает Supervisor)
         self.channels: dict[str, Any] = {}     # другие площадки продаж, например «ozon» (starsbot.ozon.channel)
         self.gifts = None                      # starsbot.gifts.service.GiftService — выдача подарками Telegram
+        self.nft = None                        # starsbot.nft_supply.NftSupplyManager — NFT-подарки для TG Gift
         self.premium = None                    # starsbot.premium.service.PremiumService — продажа Telegram Premium
         self.treasury = None                   # starsbot.treasury.service.Treasury — балансы и пополнение кошелька
         self.risk = RiskEngine(cfg.risk, db)
@@ -773,6 +774,8 @@ class Engine:
             if self.gifts is not None:
                 await self.gifts.deliver(o)
             return
+        if self.engine_nft_wait(o):
+            return
         if self._in_flight():
             self.enqueue(oid, 5)                 # одна транзакция за раз: seqno кошелька идут по порядку
             return
@@ -792,7 +795,17 @@ class Engine:
                 await self.notifier.notify("CRITICAL", "purchase_retry_limit", f"#{oid}: покупка не прошла "
                                            f"{o['purchase_attempts']} раз. Требуется вмешательство.", order_id=oid)
                 return
+            if self.nft is not None and self.nft.owns(o):
+                await self.nft.step(o)
+                return
             await self._purchase_locked(o)
+
+    def engine_nft_wait(self, o) -> bool:
+        """Задание NFT при выключенном модуле не исполняем (оно останется в очереди у человека)."""
+        if str(o["order_id"]).startswith("NFT-") and self.nft is None:
+            self._set(o["order_id"], S.MANUAL, "nft_disabled", fail_reason="nft_disabled")
+            return True
+        return False
 
     async def _purchase_locked(self, o) -> None:
         oid, stars = o["order_id"], int(o["stars"])
@@ -866,14 +879,22 @@ class Engine:
         except (FragmentError, TonError) as e:
             await self._purchase_error(o, getattr(e, "code", "fragment"), str(e))
             return
+        await self.send_fragment_tx(o, req_id, tx, amount, stars=stars)
+
+    async def send_fragment_tx(self, o, req_id: str, tx, amount: float, *, stars: int,
+                               max_total_ton: float | None = None) -> bool:
+        """Проверка транзакции Fragment, запись попытки, подпись и отправка в сеть (одна транзакция за раз).
+        Возвращает True, если транзакция ушла (или её исход сверит наблюдатель за транзакциями)."""
+        oid = o["order_id"]
         total = sum(m.amount for m in tx.messages)
         own = self.wallet.raw_address.lower()
-        if total > to_nano(amount) * 1.03 + to_nano(0.05) or any(m.address.lower() == own for m in tx.messages):
+        limit = to_nano(max_total_ton) if max_total_ton else to_nano(amount) * 1.03 + to_nano(0.05)
+        if total > limit or any(m.address.lower() == own for m in tx.messages):
             self._set(oid, S.MANUAL, "tx_mismatch", fail_reason="tx_mismatch")
             await self.notifier.notify("CRITICAL", "tx_mismatch", f"#{oid}: транзакция Fragment не совпала с "
                                        f"котировкой ({from_nano(total):.4f} TON против {amount:.4f}). Оплата не "
                                        "выполнена, проверьте вручную.", order_id=oid)
-            return
+            return False
         dest = tx.messages[0].address
         ref = (re.search(r"Ref#\w+", tx.comment or "") or [None])[0] or ""
         pid = self.db.add_purchase(order_id=oid, req_id=req_id, stars=stars, recipient=o["tg_recipient"], dest=dest,
@@ -895,18 +916,19 @@ class Engine:
                 # подписали, но не знаем, дошло ли до сети — решит сверка по seqno и valid_until
                 self.db.update_purchase(pid, state="unknown", error=str(e))
                 self._set(oid, S.SENT, "send_unknown", sent_at=time.time(), fail_reason="send_unknown")
-                return
+                return True
             self.db.update_purchase(pid, state="failed", error=str(e))
             self._set(oid, S.READY, "purchase_not_sent", fail_reason=e.code)
             if e.code == "insufficient_funds":
                 await self.out_of_funds(self.db.get_order(oid), str(e))
-                return
+                return False
             await self._purchase_error(self.db.get_order(oid), e.code, str(e))
-            return
+            return False
         self.db.update_purchase(pid, state="sent", msg_hash=sent.msg_hash)
         self._set(oid, S.SENT, "tx_sent", sent_at=time.time(), tx_msg_hash=sent.msg_hash)
         self.wallet_info["ts"] = 0
         await self.fragment.confirm(tx, sent.boc)
+        return True
 
     def live_purchases(self) -> int:
         """Сколько реальных (не dry-run) оплат уже ушло в сеть."""
@@ -1083,6 +1105,9 @@ class Engine:
 
     async def on_delivered(self, o, tx: dict) -> None:
         oid = o["order_id"]
+        if self.nft is not None and self.nft.owns(o):       # этап покупки/отправки NFT-подарка для TG Gift
+            await self.nft.on_tx_confirmed(o, tx)
+            return
         fee = tx.get("fee")
         o = self._set(oid, S.DELIVERED, "delivered", delivered_at=time.time(), tx_hash=tx.get("hash", ""),
                       tx_fee_ton=from_nano(fee) if fee else None, fail_reason="")
@@ -1933,6 +1958,13 @@ class Engine:
             loops.append(self._loop("treasury", float(tr.t.get("interval_seconds") or 120), tr.tick))
         if getattr(self, "supply", None) is not None and self.supply.enabled:
             loops.append(self._loop("supply", 120, self.supply.tick))
+        if self.gifts is not None and getattr(self.gifts, "moved", False):
+            loops.append(self._loop("gift_handover", 300, self.gifts.handover_tick))
+        if self.nft is not None and self.coord.enabled:
+            loops.append(self._loop("nft", 60, self.nft.tick))
+        assort = getattr(self.gifts, "assortment", None) if self.gifts is not None else None
+        if assort is not None:
+            loops.append(self._loop("assortment", 600, assort.tick))
         for ch in self.channels.values():
             loops += ch.loops(self._loop)
         self._tasks = [asyncio.create_task(c) for c in loops]

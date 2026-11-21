@@ -349,6 +349,59 @@ class FakeFragment:
                           messages=[TonMessage(FRAGMENT_ADDR, to_nano(r["amount"]), "")], amount_ton=r["amount"],
                           comment=comment)
 
+    # --- коллекционные подарки (NFT) на fragment.com/gifts
+    def _nft_market(self) -> dict:
+        if not hasattr(self, "nft_market"):
+            self.nft_market = {"lolpop": [{"item": "lolpop-236254", "price": 5.0},
+                                          {"item": "lolpop-238099", "price": 5.2}],
+                               "toybear": [{"item": "toybear-1001", "price": 43.0}],
+                               "deskcalendar": [{"item": "deskcalendar-5", "price": 7.0}]}
+            self.nft_owned: set[str] = set()
+            self.nft_sent: list[tuple[str, str]] = []
+        return self.nft_market
+
+    async def gift_listings(self, collection: str, limit: int = 10):
+        return sorted(self._nft_market().get(collection, []), key=lambda x: x["price"])[:limit]
+
+    async def gift_item(self, item: str):
+        for rows in self._nft_market().values():
+            for x in rows:
+                if x["item"] == item:
+                    return {"type": 5, "item": item, "title": item, "for_sale": True, "price": x["price"],
+                            "owner": "", "ton_usd": 0.95}
+        return {"type": 5, "item": item, "title": item, "for_sale": False, "price": 0.0, "owner": "", "ton_usd": 0.95}
+
+    async def gift_buy_link(self, item: str, amount: float):
+        for rows in self._nft_market().values():
+            for x in list(rows):
+                if x["item"] == item:
+                    rows.remove(x)
+        self.nft_owned.add(item)
+        return FragmentTx(req_id=f"buy:{item}", valid_until=int(time.time()) + 600,
+                          messages=[TonMessage(FRAGMENT_ADDR, to_nano(amount), "")], amount_ton=amount,
+                          comment=f"Buy {item}")
+
+    async def gift_transfer_recipient(self, username: str):
+        u = username.lstrip("@")
+        if u.lower().endswith("bot") or u.lower().startswith("nobody"):
+            raise FragmentError("No Telegram users found.", "not_found")
+        return Recipient(username=u, recipient=f"nft_{u.lower()}", name=self.users.get(u, u.title()))
+
+    async def gift_transfer_init(self, recipient: str, item: str):
+        self._nft_market()
+        if item not in self.nft_owned:
+            raise FragmentError("This gift is not in your wallet", "fragment")
+        self.requests[f"tr:{item}"] = {"recipient": recipient, "item": item}
+        return f"tr:{item}"
+
+    async def gift_transfer_link(self, req_id: str, item: str):
+        r = self.requests[req_id]
+        self.nft_owned.discard(item)
+        self.nft_sent.append((item, r["recipient"]))
+        return FragmentTx(req_id=req_id, valid_until=int(time.time()) + 600,
+                          messages=[TonMessage(FRAGMENT_ADDR, to_nano(0.1), "")], amount_ton=0.1,
+                          comment=f"Transfer {item}")
+
     async def confirm(self, tx, boc):
         return None
 

@@ -24,7 +24,13 @@ DEFAULT_SHOP_LOTS = [
     {"emoji": "💎", "name": "Алмаз", "name_en": "Diamond", "stars": 100},
 ]
 for _l in DEFAULT_SHOP_LOTS:
-    _l.update(offer_id=0, position=3, price=0, sell=True)
+    _l.update(kind="gift", offer_id=0, position=3, price=0, sell=True)
+
+# «Звёзды → Подарком» (funpay.com/lots/2418/): номинал = звёзд у покупателя после конвертации подарков.
+# Все номиналы раздела — от 13 до 2500 (13 = 🧸15, 21 = 🌹25, 43 = 🎂50, 85 = 🏆100).
+TOPUP_DENOMINATIONS = (13, 21, 43, 50, 75, 85, 100, 150, 200, 250, 300, 350, 500, 1000, 2500)
+DEFAULT_TOPUP_LOTS = [{"stars": n, "offer_id": 0, "position": 3, "price": 0, "sell": True}
+                      for n in TOPUP_DENOMINATIONS]
 
 PROFILE_DEFAULTS: dict = {
     "general": {"profile": "giftshop"},
@@ -41,7 +47,16 @@ PROFILE_DEFAULTS: dict = {
         "low_stars_alert": 150,
         "topup": {"enabled": False},
     },
-    "giftshop": {"lots": DEFAULT_SHOP_LOTS},
+    "giftshop": {
+        "lots": DEFAULT_SHOP_LOTS,
+        "topup_lots": DEFAULT_TOPUP_LOTS,
+        # раздел «Звёзды → Подарком» (раньше вёл StarsBot): тот же аккаунт подарков, звёзды от StarsBot
+        "topup": {"enabled": True, "node_id": 2418, "method_filter": "подарк"},
+        # коллекционные (NFT) подарки: покупка на Fragment (кошелёк StarsBot) или на рынке Telegram — что дешевле
+        "nft": {"enabled": True},
+        # подбор NFT-лотов раздела «Подарки» по ликвидности, марже и сезону (ведёт RTBA)
+        "assortment": {"enabled": True},
+    },
     "rtba": {"enabled": True, "strategy": "topN", "target_position": 3, "min_margin_pct": 5.0,
              "method_filter": "giftshop", "undercut_abs": 0.3, "min_change": 0.2, "competitor_min_amount": 1},
     "safety": {"pilot_orders": 0},
@@ -91,6 +106,20 @@ def inherit_shared(cfg, home: Path) -> list[str]:
         tg.enabled = bool(tg_other.get("enabled", True))
         tg.commands = False
         taken.append("уведомления Telegram")
+    gl = cfg.get("giftshop")
+    old = [l for l in ((other.get("gifts") or {}).get("lots") or []) if l.get("offer_id")]
+    if gl is not None and old and not any(l.get("offer_id") for l in (gl.get("topup_lots") or [])):
+        # лоты «Подарком», которые раньше вёл StarsBot, — берём себе (те же offer_id, второй лот не выставляем)
+        by_stars = {int(l["stars"]): l for l in old if l.get("stars")}
+        lots = [dict(l) for l in (gl.get("topup_lots") or DEFAULT_TOPUP_LOTS)]
+        for l in lots:
+            src_lot = by_stars.pop(int(l["stars"]), None)
+            if src_lot:
+                l["offer_id"] = int(src_lot["offer_id"])
+        for n, src_lot in sorted(by_stars.items()):
+            lots.append({"stars": n, "offer_id": int(src_lot["offer_id"]), "position": 3, "price": 0, "sell": True})
+        gl["topup_lots"] = lots
+        taken.append("лоты «Подарком»")
     if taken:
         log.info("TG Gift: из настроек StarsBot взяты %s", ", ".join(taken))
     return taken

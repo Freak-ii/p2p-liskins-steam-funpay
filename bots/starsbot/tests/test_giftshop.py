@@ -5,7 +5,7 @@ import time
 from starsbot.app.supervisor import Supervisor
 from starsbot.coord import Coordinator
 from starsbot.core.models import FunPayOrder
-from starsbot.giftshop.profile import DEFAULT_SHOP_LOTS
+from starsbot.giftshop.profile import DEFAULT_SHOP_LOTS, TOPUP_DENOMINATIONS
 from starsbot.giftshop.service import match_lot
 
 BASE = {"general": {"demo": True, "dry_run": False, "database": ":memory:", "log_file": ""},
@@ -18,10 +18,10 @@ def shop_sup(tmp_path, coord_db=""):
     return Supervisor(tmp_path / "tggift", demo=True, overrides=over)
 
 
-def stars_sup(tmp_path, coord_db=""):
+def stars_sup(tmp_path, coord_db="", legacy=True):
     over = {**BASE, "funpay": {"coord_db": coord_db, "lots": [{"stars": n, "offer_id": i + 1} for i, n in
                                                              enumerate((50, 75, 100, 150, 250, 350, 500))]},
-            "gifts": {"enabled": True, "pause_between_gifts": 0,
+            "gifts": {"enabled": True, "pause_between_gifts": 0, "moved_to_tggift": not legacy,
                       "lots": [{"stars": 50, "offer_id": 150}]}}
     return Supervisor(tmp_path / "starsbot", demo=True, overrides=over)
 
@@ -43,15 +43,16 @@ def test_shop_demo_orders_delivered_and_stars_order_ignored(tmp_path):
         e = sup.engine
         assert type(e).__name__ == "GiftShopEngine" and sup.problems == []
         report = await e.lot_manager.create_missing()
-        assert all("выставлен" in r for r in report) and len(report) == len(DEFAULT_SHOP_LOTS)
+        assert all("выставлен" in r for r in report)
+        assert len(report) == len(DEFAULT_SHOP_LOTS) + len(TOPUP_DENOMINATIONS)     # + раздел «Звёзды → Подарком»
         from starsbot.giftshop.demo import run_shop_demo
-        a, b = await run_shop_demo(e, e.fp)
+        a, b, c, *nft = await run_shop_demo(e, e.fp)
         oa, ob = e.db.get_order(a), e.db.get_order(b)
         assert oa["status"] == "completed" and oa["tg_username"] == "kira_tg" and oa["stars"] == 15
         assert ob["status"] == "delivered" and ob["quantity"] == 2 and ob["gift_cost"] == 50
-        sends = e.db.q("SELECT * FROM gift_sends WHERE state='sent'")
+        sends = e.db.q("SELECT * FROM gift_sends WHERE state='sent' AND order_id IN (?,?)", (a, b))
         assert len(sends) == 3 and {s["stars"] for s in sends} == {15, 25}
-        assert e.db.scalar("SELECT COUNT(*) FROM orders") == 2          # заказ звёзд оставлен StarsBot
+        assert e.db.scalar("SELECT COUNT(*) FROM orders") == 3 + len(nft)   # заказ звёзд по username — StarsBot
         texts = [t for _, t in e.fp.outbox]
         assert any("🌹 Роза × 2" in t for t in texts)
         assert any("Подарки Telegram выдаются автоматически" in t for t in texts)   # пресейл о подарках
@@ -73,7 +74,7 @@ def test_stars_bot_skips_gift_section(tmp_path):
     shop = shop_sup(tmp_path).engine
     assert shop.accepts_sale(FunPayOrder("CCCC3333", "z", 3, "🎂 Торт — подарок Telegram", 90.0,
                                          subcategory="Telegram, Подарки"))
-    assert not shop.accepts_sale(stars_gift)
+    assert shop.accepts_sale(stars_gift)                   # «Подарком» теперь ведёт TG Gift
 
 
 def test_presale_claim_one_bot_answers(tmp_path):

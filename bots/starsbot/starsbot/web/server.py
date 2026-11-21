@@ -24,7 +24,7 @@ from yarl import URL
 
 from starsbot.analytics.analytics import fmt_dur
 from starsbot.app import schema
-from starsbot.config import DENOMINATIONS
+from starsbot.config import CUSTOM_DENOMINATIONS, DENOMINATIONS
 from starsbot.core import messages as M
 from starsbot.core.models import OrderStatus as S
 from starsbot.web import charts, mdlite
@@ -173,6 +173,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("can_op", bool(role) and ROLE_LEVEL[role] >= 1)
         ctx.setdefault("is_admin", role == "admin")
         ctx.setdefault("ozon_on", "ozon" in sup.engine.channels)
+        ctx.setdefault("gifts_moved", bool(getattr(sup.engine.gifts, "moved", False)))
         ctx.setdefault("ggsel_on", "ggsel" in sup.engine.channels)
         ctx.setdefault("avito_on", "avito" in sup.engine.channels)
         ctx.setdefault("wb_on", "wb" in sup.engine.channels)
@@ -952,9 +953,12 @@ def make_app(sup, log_handler=None) -> web.Application:
             f = await request.post()
             lots = []
             pos = {int(l.get("stars") or 0): int(l.get("position") or 0) for l in (cfg.funpay.lots or [])}
-            for d in DENOMINATIONS:
+            for d in DENOMINATIONS + CUSTOM_DENOMINATIONS:
                 oid = str(f.get(f"lot_{d}", "")).strip()
-                lots.append({"stars": d, "offer_id": int(oid) if oid.isdigit() else 0, "position": pos.get(d, 0)})
+                lot = {"stars": d, "offer_id": int(oid) if oid.isdigit() else 0, "position": pos.get(d, 0)}
+                if d in CUSTOM_DENOMINATIONS:
+                    lot["custom"] = True
+                lots.append(lot)
             chat_ids = [int(x) for x in str(f.get("tg_chat_ids", "")).replace(",", " ").split()
                         if x.lstrip("-").isdigit()]
             upd = {
@@ -976,7 +980,7 @@ def make_app(sup, log_handler=None) -> web.Application:
                 raise web.HTTPFound("/?msg=Настройки сохранены. Нажмите «Запустить бота»")
             raise web.HTTPFound(URL("/setup").with_query(msg="Сохранено. Осталось: " + "; ".join(sup.problems)))
         lots = {int(l.get("stars") or 0): l.get("offer_id") for l in (cfg.funpay.lots or [])}
-        return render("setup.html", request, cfg=cfg, lots=lots, denoms=DENOMINATIONS, problems=sup.problems,
+        return render("setup.html", request, cfg=cfg, lots=lots, denoms=DENOMINATIONS + CUSTOM_DENOMINATIONS, problems=sup.problems,
                       secret=lambda s, k: sup.secret_is_set(s, k))
 
     async def api_test(request: web.Request):

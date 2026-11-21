@@ -144,7 +144,22 @@ def build_lot_fields(base: dict[str, str], selects: dict[str, list[tuple[str, st
                 f[name] = v
                 method_set = True
     if not qty_set:
-        raise FunPayError(f"в форме лота нет варианта «{stars} звёзд» — создайте этот лот вручную")
+        # номинала нет в списке (750, 1500, 5000…): «Другое количество» + число звёзд в поле рядом
+        other = text_field = None
+        for name, opts in selects.items():
+            v = _pick(opts, lambda t: "друг" in t.lower() or "other" in t.lower())
+            if v is not None and any(stars_from_text(t) for _, t in opts):
+                other = (name, v)
+                break
+        if other is not None:
+            keys = [k for k in base if k != other[0] and re.search(r"quantity", k) and k not in selects]
+            text_field = next((k for k in keys if k.rstrip("]").endswith("2")), keys[0] if keys else None)
+        if other is None or text_field is None:
+            raise FunPayError(f"в форме лота нет варианта «{stars} звёзд» и поля «Другое количество» — создайте этот "
+                              "лот вручную")
+        f[other[0]] = other[1]
+        f[text_field] = str(int(stars))
+        qty_set = True
     if not method_set:
         raise FunPayError("в форме лота нет способа «" + ("По username" if kind == "username" else "Подарком") + "»")
     f["price"] = f"{price:.2f}"
@@ -171,7 +186,9 @@ class LotManager:
         """Все лоты бота для панели: способ, номинал, id, позиция, наличие из последней синхронизации."""
         db = self.engine.db
         out = []
-        for kind, lots in (("username", self.cfg.funpay.lots or []), ("gift", (self.cfg.get("gifts") or {}).get("lots") or [])):
+        moved = bool(getattr(self.engine.gifts, "moved", False))
+        gift_lots = [] if moved else ((self.cfg.get("gifts") or {}).get("lots") or [])
+        for kind, lots in (("username", self.cfg.funpay.lots or []), ("gift", gift_lots)):
             for l in lots:
                 oid = l.get("offer_id") or 0
                 key = ("gift_lot_amount:" if kind == "gift" else "lot_amount:") + str(oid)

@@ -9,7 +9,11 @@ from typing import Any
 
 import yaml
 
-DENOMINATIONS = (50, 75, 100, 150, 250, 350, 500, 1000)   # 750 и 1500 в разделе FunPay нет
+# Номиналы «По username», которые есть в списке «Количество» раздела FunPay (проверено 2026-11-21)
+DENOMINATIONS = (50, 75, 100, 150, 200, 250, 300, 350, 500, 1000, 2500)
+# Fragment продаёт любое количество от 50 звёзд; этих номиналов в списке FunPay нет — лот выставляется через
+# «Другое количество» с числом звёзд (так продают 750, 1500, 5000 и т. д. другие продавцы)
+CUSTOM_DENOMINATIONS = (750, 1500, 2000, 3000, 5000, 10000)
 PREMIUM_MONTHS = (3, 6, 12)                              # сроки, которые Fragment дарит (fragment.com/premium/gift)
 GIFT_DENOMINATIONS = (13, 21, 43, 85, 50, 100, 150, 250, 350, 500)
 
@@ -29,7 +33,8 @@ DEFAULTS: dict[str, Any] = {
         "game_id": 0,                    # id игры для поднятия лотов (0 — не поднимать)
         # Лоты: один лот на номинал. offer_id — id лота из ссылки funpay.com/lots/offer?id=…
         # position — желаемое место лота в списке раздела (1 — первый). 0 — как в настройках RTBA
-        "lots": [{"stars": n, "offer_id": 0, "position": 0} for n in DENOMINATIONS],
+        "lots": [{"stars": n, "offer_id": 0, "position": 0} for n in DENOMINATIONS] +
+                [{"stars": n, "offer_id": 0, "position": 0, "custom": True} for n in CUSTOM_DENOMINATIONS],
         "order_match_regex": r"(?i)(зв[её]зд|stars|⭐)",
         "order_exclude_regex": r"(?i)(подарк|gift|с заходом|вход на аккаунт)",
         "auto_raise": True, "raise_interval_minutes": 240,
@@ -53,6 +58,9 @@ DEFAULTS: dict[str, Any] = {
     # Выдача звёзд подарками Telegram (раздел FunPay «Звёзды → Подарком»)
     "gifts": {
         "enabled": False,
+        # раздел «Звёзды → Подарком» ведёт бот TG Gift (свой Telegram-аккаунт, звёзды от StarsBot): у StarsBot эта
+        # выдача выключена, его старые лоты подарками выключаются, пока TG Gift не возьмёт их себе
+        "moved_to_tggift": True,
         "api_id": 0, "api_hash": "",     # свои ключи приложения: my.telegram.org → API development tools
         "phone": "",
         "session_file": "data/telegram.session",
@@ -109,6 +117,17 @@ DEFAULTS: dict[str, Any] = {
         "max_per_day": 5000,             # и N ⭐ за сутки на один аккаунт (0 — без лимита)
         "cooldown_minutes": 20,          # пауза после поставки: звёзды от Fragment приходят за несколько минут
         "min_wallet_reserve_stars": 500, # не снабжать, если после поставки кошелька хватит меньше чем на N ⭐ своих заказов
+    },
+    # NFT-подарки для TG Gift: StarsBot покупает коллекционный подарок на fragment.com/gifts своим кошельком TON и
+    # отправляет его покупателю в Telegram по заданию TG Gift (см. starsbot/nft_supply.py)
+    "nft_supply": {
+        "enabled": True,
+        "max_ton_per_item": 60.0,        # дороже N TON за подарок не покупать, что бы ни просил TG Gift
+        "max_ton_per_day": 200.0,        # всего на NFT-подарки за сутки, TON
+        "transfer_max_ton": 0.6,         # перевод подарка в Telegram (газ и сбор Fragment) не дороже N TON
+        "expected_transfer_ton": 0.15,   # оценка стоимости перевода для цен TG Gift
+        "wallet_reserve_ton": 2.0,       # после покупки на кошельке остаётся N TON на заказы звёзд
+        "transfer_wait_minutes": 30,     # ждать появления купленного подарка на кошельке до перевода
     },
     # Бот TG Gift (профиль giftshop): продажа подарков Telegram в разделе FunPay «Подарки»
     "giftshop": {

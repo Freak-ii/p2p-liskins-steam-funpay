@@ -20,6 +20,8 @@ class Gift:
     sold_out: bool = False
     require_premium: bool = False
     emoji: str = ""
+    resale: int = 0             # сколько улучшенных (NFT) экземпляров этого подарка выставлено на рынке Telegram
+    resell_min: int = 0         # самая низкая цена на рынке Telegram, ⭐ (0 — не продаётся)
 
     @property
     def usable(self) -> bool:

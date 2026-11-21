@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS supply_requests (account TEXT PRIMARY KEY, bot TEXT, 
     committed INTEGER, need INTEGER, min_stars INTEGER, note TEXT, updated_at REAL);
 CREATE TABLE IF NOT EXISTS supply_log (id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT, username TEXT, stars INTEGER,
     order_id TEXT, state TEXT, cost_rub REAL, ton REAL, supplier TEXT, note TEXT, created_at REAL, updated_at REAL);
+CREATE TABLE IF NOT EXISTS nft_jobs (ref TEXT PRIMARY KEY, bot TEXT, collection TEXT, title TEXT, username TEXT,
+    max_ton REAL, state TEXT, item TEXT, price_ton REAL, cost_ton REAL, cost_rub REAL, supplier TEXT, supplier_ref TEXT,
+    note TEXT, created_at REAL, updated_at REAL);
+CREATE TABLE IF NOT EXISTS bot_info (name TEXT PRIMARY KEY, data TEXT, updated_at REAL);
 """
 
 
@@ -173,6 +177,88 @@ class Coordinator:
             else:
                 rows = c.execute("SELECT * FROM supply_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ NFT-подарки через Fragment
+    # TG Gift продаёт коллекционные подарки; купить их на Fragment за TON и отправить покупателю в Telegram может
+    # только StarsBot (кошелёк и сессия Fragment у него, транзакции кошелька должны идти по одной). Поэтому TG Gift
+    # пишет задание (ref = номер заказа), StarsBot его выполняет и пишет состояние: pending → buying → bought →
+    # sending → done | failed (покупки не было, можно другим путём) | manual (исход неясен, нужен человек).
+    NFT_FINAL = ("done", "failed", "manual", "cancelled")
+
+    def nft_job_add(self, ref: str, *, collection: str, title: str, username: str, max_ton: float,
+                    note: str = "") -> bool:
+        """Новое задание. False — задание с таким ref уже есть (повторно не создаём: покупка необратима)."""
+        if not self.enabled:
+            return False
+        now = time.time()
+        with self._conn() as c:
+            cur = c.execute("INSERT OR IGNORE INTO nft_jobs(ref,bot,collection,title,username,max_ton,state,note,"
+                            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                            (str(ref), self.bot, collection, title, username.lstrip("@"), float(max_ton), "pending",
+                             note, now, now))
+            return cur.rowcount > 0
+
+    def nft_job(self, ref: str) -> dict | None:
+        if not self.enabled:
+            return None
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            r = c.execute("SELECT * FROM nft_jobs WHERE ref=?", (str(ref),)).fetchone()
+        return dict(r) if r else None
+
+    def nft_jobs(self, states: tuple[str, ...] | None = None, limit: int = 50) -> list[dict]:
+        if not self.enabled:
+            return []
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            if states:
+                q = ",".join("?" * len(states))
+                rows = c.execute(f"SELECT * FROM nft_jobs WHERE state IN ({q}) ORDER BY created_at LIMIT ?",
+                                 (*states, limit)).fetchall()
+            else:
+                rows = c.execute("SELECT * FROM nft_jobs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def nft_job_update(self, ref: str, state: str | None = None, **fields) -> None:
+        if not self.enabled:
+            return
+        allowed = {"item", "price_ton", "cost_ton", "cost_rub", "supplier", "supplier_ref", "note", "max_ton"}
+        sets, vals = ["updated_at=?"], [time.time()]
+        if state:
+            sets.append("state=?")
+            vals.append(state)
+        for k, v in fields.items():
+            if k in allowed:
+                sets.append(f"{k}=?")
+                vals.append(v)
+        with self._conn() as c:
+            c.execute(f"UPDATE nft_jobs SET {', '.join(sets)} WHERE ref=?", (*vals, str(ref)))
+
+    # ------------------------------------------------------------------ сведения ботов друг о друге
+    def set_info(self, name: str, data: dict) -> None:
+        if not self.enabled:
+            return
+        import json
+        with self._conn() as c:
+            c.execute("INSERT INTO bot_info(name,data,updated_at) VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET "
+                      "data=excluded.data, updated_at=excluded.updated_at",
+                      (name, json.dumps(data, ensure_ascii=False), time.time()))
+
+    def get_info(self, name: str, max_age: float = 900) -> dict | None:
+        if not self.enabled:
+            return None
+        import json
+        try:
+            with self._conn() as c:
+                r = c.execute("SELECT data, updated_at FROM bot_info WHERE name=?", (name,)).fetchone()
+        except sqlite3.Error:
+            return None
+        if not r or time.time() - float(r[1] or 0) > max_age:
+            return None
+        try:
+            return json.loads(r[0])
+        except ValueError:
+            return None
 
     # ------------------------------------------------------------------ частота запросов
     def _reserve_slot(self, name: str) -> float:
