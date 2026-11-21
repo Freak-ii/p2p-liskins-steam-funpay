@@ -76,6 +76,10 @@ class Shop:
     def gift(self, gid: str) -> dict | None:
         return next((g for g in self.gifts() if g["id"] == gid), None)
 
+    def _order_gift(self, o) -> dict | None:
+        """Подарок заказа для поставщика: TG Gift выдаёт именно его (а не любой подарок той же цены)."""
+        return self.gift(o["item"]) if o["product"] == "gift" else None
+
     def product_title(self, product: str, item: str, amount: int) -> str:
         if product == "stars":
             return f"{amount} ⭐ Telegram Stars"
@@ -107,7 +111,8 @@ class Shop:
             if g is None:
                 raise ValueError("нет такого подарка")
             sup_amount = int(g["stars"])
-        q = await sup.quote("gift" if product == "gift" else product, sup_amount, months)
+        q = await sup.quote("gift" if product == "gift" else product, sup_amount, months,
+                            gift=self.gift(item) if product == "gift" else None)
         if not q.get("available"):
             raise SupplierError(q.get("reason") or "товар временно недоступен")
         cost = float(q["cost_rub"])
@@ -202,7 +207,7 @@ class Shop:
         months = int(o["item"]) if o["product"] == "premium" else 0
         try:
             res = await sup.order(oid, "gift" if o["product"] == "gift" else o["product"], o["recipient"],
-                                  int(o["amount"]), months)
+                                  int(o["amount"]), months, gift=self._order_gift(o))
         except SupplierError as e:
             self.rtba.supplier_failed(o["supplier"], str(e))
             first = not self.db.scalar("SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind='supplier_retry'",
@@ -255,7 +260,8 @@ class Shop:
         sup = self.suppliers[o["supplier"]]
         try:
             res = await sup.order(new_ref, "gift" if o["product"] == "gift" else o["product"], recipient,
-                                  int(o["amount"]), int(o["item"]) if o["product"] == "premium" else 0)
+                                  int(o["amount"]), int(o["item"]) if o["product"] == "premium" else 0,
+                                  gift=self._order_gift(o))
         except SupplierError as e:
             self.db.update_order(oid, event="supplier_retry", fail_reason=str(e))
             return

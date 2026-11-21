@@ -80,6 +80,10 @@ class ShopGiftService(GiftService):
         return None
 
     def lot_of_order(self, o) -> dict | None:
+        if (o["channel"] or "") == "shop":          # заказ Telegram-магазина: подарок выбран в ShopBot
+            saved = self.db.kv_get(f"shop_gift:{o['order_id']}")
+            if saved:
+                return self.lot_by_offer(saved.get("offer_id")) or saved
         lot = self.lot_by_offer(o["lot_offer_id"])
         if lot is None:
             found = self.lot_for(o["description"] or "")
@@ -92,6 +96,18 @@ class ShopGiftService(GiftService):
         if lot is None:
             return None
         return lot, int(lot["stars"])
+
+    def supply_lot(self, stars: int, emoji: str = "", title: str = "") -> dict | None:
+        """Подарок для заказа магазина (ShopBot): свой лот с той же ценой и эмодзи, иначе разовый подарок
+        из каталога Telegram. None — такого подарка в каталоге сейчас нет (или неоднозначно без эмодзи)."""
+        stars, emoji = int(stars or 0), str(emoji or "").strip()
+        if stars <= 0:
+            return None
+        same = [l for l in self.lots if int(l["stars"]) == stars]
+        pick = [l for l in same if emoji and l.get("emoji") == emoji] or ([] if emoji else same[:1])
+        lot = dict(pick[0]) if pick else {"stars": stars, "emoji": emoji, "name": str(title or "")[:40],
+                                          "offer_id": 0, "sell": True}
+        return lot if self.available(lot) else None
 
     def is_gift_order(self, description: str) -> bool:
         return self.enabled and self.lot_for(description) is not None

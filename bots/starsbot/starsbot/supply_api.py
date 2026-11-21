@@ -7,8 +7,9 @@ ShopBot продаёт в Telegram звёзды, подарки и Premium, а �
 Доступ: заголовок X-Supply-Token = supply.token из config.yaml (минимум 16 символов; пусто — API выключен).
   GET  /api/supply/ping                         → {app, ok, products}
   GET  /api/supply/quote?product=stars&amount=N → {available, cost_rub, cost_ton, reason}
-       product=gift&amount=<звёзд в подарке>, product=premium&months=3|6|12
-  POST /api/supply/orders {ref, product, username, amount|months} → {ok, order_id, status}
+       product=gift&amount=<звёзд в подарке>[&gift=<эмодзи>&gift_title=<название>], product=premium&months=3|6|12
+       (TG Gift выдаёт именно этот подарок; у StarsBot подарок — звёзды набором подарков)
+  POST /api/supply/orders {ref, product, username, amount|months[, gift, gift_title]} → {ok, order_id, status}
   GET  /api/supply/orders/{ref}                 → {status: queued|delivering|delivered|failed|manual, order_id, detail}
 ref идемпотентен: повторный POST с тем же ref возвращает уже созданный заказ.
 """
@@ -74,7 +75,21 @@ def order_status(o) -> dict:
             "tx_hash": o["tx_hash"] or "", "stars": o["stars"]}
 
 
-def quote(engine, product: str, amount: int = 0, months: int = 0) -> dict:
+def _shop_gift(engine, amount: int, gift: str = "", title: str = "") -> tuple[dict | None, str]:
+    """Для TG Gift (профиль giftshop): конкретный подарок заказа магазина. У StarsBot подарки — это звёзды,
+    отправленные набором подарков, поэтому там (None, "")."""
+    g = engine.gifts
+    if g is None or not hasattr(g, "supply_lot"):
+        return None, ""
+    lot = g.supply_lot(amount, gift, title)
+    if lot is None:
+        what = f"{gift} " if gift else ""
+        return None, f"подарка {what}за {amount} ⭐ сейчас нет в каталоге Telegram" + \
+            ("" if gift else " (или их несколько — передайте эмодзи подарка)")
+    return lot, ""
+
+
+def quote(engine, product: str, amount: int = 0, months: int = 0, gift: str = "", title: str = "") -> dict:
     if engine.paused:
         return {"available": False, "reason": "StarsBot на паузе"}
     if product == "premium":
@@ -85,17 +100,27 @@ def quote(engine, product: str, amount: int = 0, months: int = 0) -> dict:
     if amount < 50 and product == "stars":
         return {"available": False, "reason": "минимум 50 звёзд"}
     per_rub, per_ton = engine.cost_per_star_rub(), engine.cost_per_star_ton()
-    if not per_rub or not per_ton:
-        return {"available": False, "reason": "нет курса звезды (ещё не было покупок и котировок)"}
     if product == "gift":
         g = engine.gifts
         if g is None or not g.enabled:
             return {"available": False, "reason": "подарки выключены"}
+        shop = hasattr(g, "supply_lot")    # TG Gift: звёзды на аккаунт подарков поставляет StarsBot
+        if shop:
+            lot, why = _shop_gift(engine, amount, gift, title)
+            if lot is None:
+                return {"available": False, "reason": why}
+        if not per_rub or (not per_ton and not shop):
+            return {"available": False, "reason": "нет курса звезды (ещё не было покупок и котировок)"}
         need = g.cost_for(amount)          # звёзд аккаунта на этот подарок
         free = g.capacity(g.balance)
-        ok = free >= need or bool(g.topup_on and engine.fragment_ok)
-        return {"available": ok, "reason": "" if ok else f"на аккаунте {free} ⭐, нужно {need}",
-                "cost_rub": round(need * per_rub, 2), "cost_ton": round(need * per_ton, 6), "stars_needed": need}
+        ok = free >= need or bool(g.topup_on and (engine.fragment_ok or shop))
+        out = {"available": ok, "reason": "" if ok else f"на аккаунте {free} ⭐, нужно {need}",
+               "cost_rub": round(need * per_rub, 2), "cost_ton": round(need * (per_ton or 0), 6), "stars_needed": need}
+        if shop:
+            out["gift"] = {"emoji": lot.get("emoji") or "", "name": lot.get("name") or "", "stars": int(lot["stars"])}
+        return out
+    if not per_rub or not per_ton:
+        return {"available": False, "reason": "нет курса звезды (ещё не было покупок и котировок)"}
     if product != "stars":
         return {"available": False, "reason": f"неизвестный товар {product}"}
     w = engine.wallet_info or {}
@@ -106,7 +131,8 @@ def quote(engine, product: str, amount: int = 0, months: int = 0) -> dict:
             "cost_ton": round(amount * per_ton, 6)}
 
 
-async def create(engine, ref: str, product: str, username: str, amount: int = 0, months: int = 0) -> dict:
+async def create(engine, ref: str, product: str, username: str, amount: int = 0, months: int = 0,
+                 gift: str = "", title: str = "") -> dict:
     if product == "premium":
         prem = getattr(engine, "premium", None)
         if prem is None:
@@ -116,16 +142,24 @@ async def create(engine, ref: str, product: str, username: str, amount: int = 0,
     existing = engine.db.get_order(oid)
     if existing is not None:
         return {"ok": True, **order_status(existing)}
-    q = quote(engine, product, amount)
+    q = quote(engine, product, amount, gift=gift, title=title)
     if not q.get("available"):
         return {"ok": False, "error": q.get("reason") or "недоступно"}
-    gift = product == "gift"
+    is_gift = product == "gift"
+    lot = _shop_gift(engine, amount, gift, title)[0] if is_gift else None
+    if lot is not None:                     # TG Gift: один конкретный подарок, как лот FunPay
+        from starsbot.giftshop.service import lot_title
+        engine.db.kv_set(f"shop_gift:{oid}", lot)
+        description = f"{lot_title(lot)} · магазин"
+    else:
+        description = f"{amount} звёзд, {'Подарком' if is_gift else 'По username'} · магазин"
     engine.db.create_order(order_id=oid, buyer_username="(магазин)", buyer_id=0, chat_id=None,
-                           description=f"{amount} звёзд, {'Подарком' if gift else 'По username'} · магазин",
+                           description=description, lot_offer_id=str(lot.get("offer_id") or "") if lot else None,
                            quantity=1, stars_per_unit=amount, stars=amount, price=0, currency="₽",
-                           fp_status="shop", channel="shop", delivery="gift" if gift else "fragment",
+                           fp_status="shop", channel="shop", delivery="gift" if is_gift else "fragment",
                            approved=1, lang="ru", notes=f"ShopBot ref {ref}")   # антифрод — в ShopBot (RTBA)
-    engine.db.add_event(oid, "created", stars=amount, shop_ref=ref, product=product)
+    engine.db.add_event(oid, "created", stars=amount, shop_ref=ref, product=product,
+                        **({"gift": description} if lot is not None else {}))
     await engine.accept_username(engine.db.get_order(oid), username, source="shop")
     return {"ok": True, **order_status(engine.db.get_order(oid))}
 
@@ -159,7 +193,8 @@ def install(app: web.Application, sup) -> None:
         e = engine()
         products = ["stars"] + (["gift"] if e.gifts is not None and e.gifts.enabled else []) + \
             (["premium"] if getattr(e, "premium", None) is not None else [])
-        return web.json_response({"app": "starsbot", "ok": True, "products": products, "paused": e.paused})
+        app_name = "tggift" if getattr(e, "profile", "") == "giftshop" or hasattr(e.gifts, "supply_lot") else "starsbot"
+        return web.json_response({"app": app_name, "ok": True, "products": products, "paused": e.paused})
 
     async def get_quote(request):
         check(request)
@@ -168,7 +203,8 @@ def install(app: web.Application, sup) -> None:
             amount, months = int(q.get("amount") or 0), int(q.get("months") or 0)
         except ValueError:
             raise web.HTTPBadRequest(text="amount/months")
-        return web.json_response(quote(engine(), q.get("product", "stars"), amount, months))
+        return web.json_response(quote(engine(), q.get("product", "stars"), amount, months,
+                                       gift=str(q.get("gift") or "")[:8], title=str(q.get("gift_title") or "")[:40]))
 
     async def post_order(request):
         check(request)
@@ -178,7 +214,8 @@ def install(app: web.Application, sup) -> None:
         if not REF_RE.match(ref) or not USER_RE.match(username):
             raise web.HTTPBadRequest(text="bad ref or username")
         try:
-            res = await create(engine(), ref, product, username, int(d.get("amount") or 0), int(d.get("months") or 0))
+            res = await create(engine(), ref, product, username, int(d.get("amount") or 0), int(d.get("months") or 0),
+                               gift=str(d.get("gift") or "")[:8], title=str(d.get("gift_title") or "")[:40])
         except (TypeError, ValueError) as e:
             raise web.HTTPBadRequest(text=str(e))
         sup.db.audit("supply", "shop_order", ref, str(res)[:300])

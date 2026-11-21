@@ -140,3 +140,51 @@ def test_shop_web_pages(tmp_path):
             assert r.status == 302
             assert sup.cfg.giftshop.lots[0]["offer_id"] == 123 and sup.cfg.giftshop.lots[0]["position"] == 2
     asyncio.run(go())
+
+
+def test_shopbot_gift_supply_via_tggift(tmp_path):
+    """ShopBot → TG Gift: заказ магазина «🌹 Роза» выдаётся именно этим подарком, а не набором на 25 ⭐."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from starsbot.web.server import make_app
+    token = "supply-token-1234567890"
+
+    async def go():
+        sup = shop_sup(tmp_path)
+        sup.save({"dashboard": {"token": "admin-token-12345"}, "supply": {"token": token}}, rebuild=False)
+        e = sup.engine
+        await e.lot_manager.create_missing()
+        await e.gifts.watch()
+        c = TestClient(TestServer(make_app(sup)))
+        await c.start_server()
+        h = {"X-Supply-Token": token}
+        try:
+            ping = await (await c.get("/api/supply/ping", headers=h)).json()
+            assert ping["app"] == "tggift" and "gift" in ping["products"]
+            q = await (await c.get("/api/supply/quote", params={"product": "gift", "amount": 25, "gift": "🌹",
+                                                                 "gift_title": "Роза"}, headers=h)).json()
+            assert q["available"] and q["cost_rub"] > 0 and q["gift"]["name"] == "Роза", q
+            # 15 ⭐ без эмодзи — Мишка или Сердце: без уточнения берётся свой лот, но не что попало
+            q15 = await (await c.get("/api/supply/quote?product=gift&amount=15", headers=h)).json()
+            assert q15["available"] and q15["gift"]["stars"] == 15
+            none = await (await c.get("/api/supply/quote", params={"product": "gift", "amount": 15, "gift": "🐸"},
+                                      headers=h)).json()
+            assert not none["available"] and "каталоге" in none["reason"]
+            body = {"ref": "G0001", "product": "gift", "username": "rose_fan", "amount": 25, "gift": "🌹",
+                    "gift_title": "Роза"}
+            r = await (await c.post("/api/supply/orders", json=body, headers=h)).json()
+            assert r["ok"] and r["order_id"] == "SHOP-G0001", r
+            o = e.db.get_order("SHOP-G0001")
+            assert o["delivery"] == "gift" and "Роза" in o["description"] and o["lot_offer_id"]
+            await e.purchase("SHOP-G0001")
+            st = await (await c.get("/api/supply/orders/G0001", headers=h)).json()
+            assert st["status"] == "delivered", (st, e.db.get_order("SHOP-G0001")["fail_reason"])
+            sends = e.db.q("SELECT * FROM gift_sends WHERE order_id='SHOP-G0001' AND state='sent'")
+            assert len(sends) == 1 and sends[0]["stars"] == 25
+            raw = e.gifts.tg._catalog
+            gift_ids = {g.id: g.emoji for g in (raw[1] if isinstance(raw, tuple) else raw)}
+            assert gift_ids[int(sends[0]["gift_id"])] == "🌹"
+            assert not [t for _, t in e.fp.outbox if "G0001" in t]       # покупателю пишет ShopBot, не FunPay-чат
+        finally:
+            await c.close()
+            await sup.stop()
+    asyncio.run(go())
