@@ -15,7 +15,7 @@ from center.inventory import Inventory
 from center.readiness import Readiness
 from center.tgcontrol import TelegramControl
 from center.updates import Updates
-from center.bots import BotWorker, LisBotWorker, MannBotWorker, ShopBotWorker, StarsBotWorker
+from center.bots import BotWorker, LisBotWorker, MannBotWorker, ShopBotWorker, StarsBotWorker, TgGiftWorker
 from center.config import CenterConfig
 from center.crm import Crm
 from center.coordinator import Coordinator
@@ -51,6 +51,10 @@ class Center:
                                      restart=restart, executable=self.cfg.worker("shopbot").get("python") or "",
                                      demo=demo, vault=self.vault),
         }
+        wg = self.cfg.worker("tggift")
+        self.workers["tggift"] = TgGiftWorker(self.home / "tggift", self.events, port=wg.get("port", 8805),
+                                              restart=restart, executable=wg.get("python") or "", demo=demo,
+                                              vault=self.vault)
         for w in self.workers.values():             # адрес и токен реестра обменов (center/steamshare.py)
             w.extra_env = self.steamshare.bot_env
         if demo:                                    # история сделок LisBot за месяц; дальше он торгует на эмуляции LIS/Steam

@@ -21,6 +21,11 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS chat_claims (chat_id TEXT PRIMARY KEY, bot TEXT, order_id TEXT, until REAL);
 CREATE TABLE IF NOT EXISTS order_claims (order_id TEXT PRIMARY KEY, bot TEXT, ts REAL);
 CREATE TABLE IF NOT EXISTS gate (name TEXT PRIMARY KEY, next_ts REAL);
+CREATE TABLE IF NOT EXISTS presale_claims (chat_id TEXT PRIMARY KEY, bot TEXT, until REAL);
+CREATE TABLE IF NOT EXISTS supply_requests (account TEXT PRIMARY KEY, bot TEXT, username TEXT, balance INTEGER,
+    committed INTEGER, need INTEGER, min_stars INTEGER, note TEXT, updated_at REAL);
+CREATE TABLE IF NOT EXISTS supply_log (id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT, username TEXT, stars INTEGER,
+    order_id TEXT, state TEXT, cost_rub REAL, ton REAL, supplier TEXT, note TEXT, created_at REAL, updated_at REAL);
 """
 
 
@@ -96,6 +101,78 @@ class Coordinator:
         with self._conn() as c:
             row = c.execute("SELECT bot FROM order_claims WHERE order_id=?", (order_id,)).fetchone()
         return row[0] if row else None
+
+    def claim_presale(self, chat_id: str | None, hours: float = 6) -> bool:
+        """Ответ на вопрос в чате без заказа: отвечает один бот (кто первый взял чат), остальные молчат."""
+        if not (self.enabled and chat_id):
+            return True
+        now = time.time()
+        try:
+            with self._conn() as c:
+                c.execute("BEGIN IMMEDIATE")
+                row = c.execute("SELECT bot, until FROM presale_claims WHERE chat_id=?", (str(chat_id),)).fetchone()
+                if row and row[0] != self.bot and float(row[1] or 0) > now:
+                    c.execute("COMMIT")
+                    return False
+                c.execute("INSERT INTO presale_claims(chat_id,bot,until) VALUES(?,?,?) ON CONFLICT(chat_id) DO UPDATE "
+                          "SET bot=excluded.bot, until=excluded.until", (str(chat_id), self.bot, now + hours * 3600))
+                c.execute("COMMIT")
+        except sqlite3.Error:
+            return True
+        return True
+
+    # ------------------------------------------------------------------ снабжение звёздами
+    # Бот, которому нужны звёзды на Telegram-аккаунт (TG Gift), пишет заявку; StarsBot покупает звёзды на Fragment
+    # на @username этого аккаунта и ведёт журнал поставок. Файл общий, поэтому боты не знают портов друг друга.
+    def supply_request(self, account: str, *, username: str, balance: int, committed: int, need: int,
+                       min_stars: int, note: str = "") -> None:
+        if not self.enabled:
+            return
+        with self._conn() as c:
+            c.execute("INSERT INTO supply_requests(account,bot,username,balance,committed,need,min_stars,note,updated_at) "
+                      "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(account) DO UPDATE SET bot=excluded.bot, "
+                      "username=excluded.username, balance=excluded.balance, committed=excluded.committed, "
+                      "need=excluded.need, min_stars=excluded.min_stars, note=excluded.note, updated_at=excluded.updated_at",
+                      (str(account), self.bot, username, int(balance), int(committed), int(need), int(min_stars), note,
+                       time.time()))
+
+    def supply_requests(self, max_age: float = 900) -> list[dict]:
+        if not self.enabled:
+            return []
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute("SELECT * FROM supply_requests WHERE updated_at>=?", (time.time() - max_age,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def supply_log_add(self, account: str, username: str, stars: int, order_id: str, note: str = "") -> None:
+        if not self.enabled:
+            return
+        now = time.time()
+        with self._conn() as c:
+            c.execute("INSERT INTO supply_log(account,username,stars,order_id,state,supplier,note,created_at,updated_at) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)", (str(account), username, int(stars), order_id, "pending", self.bot,
+                                                    note, now, now))
+
+    def supply_log_update(self, order_id: str, state: str, *, cost_rub: float | None = None, ton: float | None = None,
+                          note: str | None = None) -> None:
+        if not self.enabled:
+            return
+        with self._conn() as c:
+            c.execute("UPDATE supply_log SET state=?, cost_rub=COALESCE(?,cost_rub), ton=COALESCE(?,ton), "
+                      "note=COALESCE(?,note), updated_at=? WHERE order_id=?",
+                      (state, cost_rub, ton, note, time.time(), order_id))
+
+    def supply_history(self, account: str | None = None, limit: int = 20) -> list[dict]:
+        if not self.enabled:
+            return []
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            if account:
+                rows = c.execute("SELECT * FROM supply_log WHERE account=? ORDER BY id DESC LIMIT ?",
+                                 (str(account), limit)).fetchall()
+            else:
+                rows = c.execute("SELECT * FROM supply_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------ частота запросов
     def _reserve_slot(self, name: str) -> float:

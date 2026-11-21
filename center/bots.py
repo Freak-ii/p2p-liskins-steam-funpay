@@ -644,6 +644,48 @@ class ShopBotWorker(BotWorker):
                 return r.status in (200, 302, 303)
 
 
+# ====================================================================== TG Gift
+class TgGiftWorker(StarsBotWorker):
+    """TG Gift: тот же код StarsBot в профиле giftshop — подарки Telegram в разделе FunPay «Подарки».
+    Своя папка, база и панель; тот же аккаунт FunPay (golden_key берётся у StarsBot) и общий файл координации,
+    через который StarsBot снабжает аккаунт подарков звёздами."""
+
+    name = "tggift"
+    title = "TG Gift · подарки Telegram"
+    cookie = "tg_token"
+    actions = {"bot_start": "Запустить торговлю", "bot_stop": "Остановить торговлю",
+               "pause": "Пауза", "resume": "Продолжить"}
+
+    def command(self) -> list[str]:
+        return super().command() + ["--profile", "giftshop"]
+
+    def env(self) -> dict[str, str]:
+        return {**super().env(), "STARSBOT_PROFILE": "giftshop"}
+
+    async def health(self) -> bool:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
+            async with s.get(f"{self.base_url}/api/ping") as r:
+                return r.status == 200 and "giftshop" in await r.text()
+
+    def _summary(self, d: dict) -> dict:
+        sm = d.get("summary") or {}
+        g = d.get("gifts") or {}
+        acc = g.get("account") or {}
+        sup = g.get("supply") or {}
+        req = sup.get("request") or {}
+        return {
+            "bot_state": d.get("state"), "paused": d.get("paused"), "dry_run": d.get("dry_run"),
+            "configured": d.get("configured"), "error": d.get("error"), "demo": d.get("demo"),
+            "kpi": {"Заказов за 24 ч": sm.get("orders"), "Выдано": sm.get("delivered"),
+                    "Выручка за 24 ч, ₽": sm.get("revenue"), "Прибыль за 24 ч, ₽": sm.get("profit"),
+                    "Активных заказов": sm.get("active"),
+                    "Аккаунт подарков": ("@" + acc["username"]) if acc.get("username") else "не подключён",
+                    "Звёзд на аккаунте": g.get("balance"), "Свободно звёзд": g.get("free"),
+                    "Лотов в продаже": g.get("lots_on_sale"),
+                    "Заявка StarsBot, ⭐": req.get("need") or 0},
+        }
+
+
 # ====================================================================== LisBot
 LIS_SECRET_KEYS = ["LIS_API_KEY", "STEAM_ACCOUNT_NAME", "STEAM_PASSWORD", "STEAM_SHARED_SECRET",
                    "STEAM_IDENTITY_SECRET", "STEAM_TRADE_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]

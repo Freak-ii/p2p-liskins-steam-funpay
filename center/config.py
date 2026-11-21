@@ -7,6 +7,7 @@
     lisbot/              — данные LisBot: config.json, secrets.env, data/
     mannbot/             — домашняя папка MannBot: config.yaml, data/
     starsbot/            — домашняя папка StarsBot: config.yaml, data/
+    tggift/              — домашняя папка TG Gift (StarsBot в профиле giftshop): config.yaml, data/
     shared/              — общий файл координации ботов одного аккаунта FunPay
 """
 from __future__ import annotations
@@ -40,6 +41,8 @@ DEFAULTS: dict = {
         "starsbot": {"enabled": True, "autostart": True, "port": 8803, "python": ""},
         # Telegram-магазин: пока выключен до настройки (токен бота, оплата, токены поставщиков)
         "shopbot": {"enabled": True, "autostart": False, "port": 8806, "python": ""},
+        # TG Gift (подарки Telegram на FunPay): выключен до настройки аккаунта подарков (api_id/api_hash, вход)
+        "tggift": {"enabled": True, "autostart": False, "port": 8805, "python": ""},
     },
     "restart": {
         "backoff_start": 2,          # первая пауза перед перезапуском, с

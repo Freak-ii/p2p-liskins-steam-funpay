@@ -2,7 +2,7 @@
 {% block body %}<div class="row" style="justify-content:space-between"><h1>Заказы</h1>
 {% if can_op %}<a class="chip" href="/export/orders.csv?days=30">⬇ CSV за 30 дн.</a>{% endif %}</div>
 <form class="card row" method="get"><input name="q" value="{{q}}" placeholder="ID заказа, ник FunPay, @username получателя" style="flex:1">
-{% if market_on %}<select name="channel"><option value="">все площадки</option>{% for c, t in [('funpay','FunPay'),('ozon','Ozon'),('ggsel','GGSEL')] %}<option value="{{c}}" {% if c==channel %}selected{% endif %}>{{t}}</option>{% endfor %}</select>{% endif %}
+{% if market_on %}<select name="channel"><option value="">все площадки</option>{% for c, t in [('funpay','FunPay'),('ozon','Ozon'),('ggsel','GGSEL'),('avito','Авито'),('wb','WB')] %}<option value="{{c}}" {% if c==channel %}selected{% endif %}>{{t}}</option>{% endfor %}</select>{% endif %}
 <select name="status"><option value="">все статусы</option>{% for s in statuses %}<option value="{{s}}" {% if s==st %}selected{% endif %}>{{s|st}}</option>{% endfor %}</select>
 <button>Найти</button></form>
 <div class="card tw"><table>

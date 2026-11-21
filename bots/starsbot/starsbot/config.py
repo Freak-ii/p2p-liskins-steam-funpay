@@ -18,6 +18,7 @@ DEFAULTS: dict[str, Any] = {
         "dry_run": True, "demo": False, "language": "ru",
         "database": "data/starsbot.sqlite3", "log_file": "data/starsbot.log", "log_level": "INFO",
         "autostart": False, "backup_keep_days": 14,
+        "profile": "stars",              # stars — StarsBot (звёзды через Fragment), giftshop — TG Gift (подарки)
     },
     "messages": {"ru": {}, "en": {}},
     "funpay": {
@@ -37,6 +38,8 @@ DEFAULTS: dict[str, Any] = {
         "deactivate_when_empty": True,
         "presale_replies": True,         # отвечать на вопросы о звёздах в чатах без заказа
         "coord_db": "",                  # общий файл координации с другими ботами (обычно задаёт Центр)
+        # заказы этих подразделов не наши, даже если в описании есть число звёзд: «Подарки» ведёт бот TG Gift
+        "foreign_subcategory_regex": r"(?i)подарки|\bgifts\b",
         # Автовыставление лотов: бот сам создаёт недостающие лоты по образцу вашего лота (копия полей формы)
         "auto_create_lots": False,
         "lot_price_per_star": 1.6,       # стартовая цена нового лота, ₽ за звезду (дальше её ведёт RTBA)
@@ -96,6 +99,35 @@ DEFAULTS: dict[str, Any] = {
         "quote_minutes": 30,
         "pilot_orders": 1,               # первые N боевых заказов Premium — после одобрения
         "lot_texts": {},                 # ручные тексты карточки: summary_ru, desc_ru, summary_en, desc_en ({months})
+    },
+    # Снабжение звёздами других ботов (TG Gift): они пишут заявку в общий файл координации, StarsBot покупает
+    # звёзды на Fragment на @username их Telegram-аккаунта тем же безопасным путём, что и обычные заказы
+    "supply": {
+        "enabled": True,
+        "token": "",                     # ключ API /api/supply/* для Telegram-магазина ShopBot (≥16 символов)
+        "max_per_topup": 2500,           # не больше N ⭐ за одну поставку
+        "max_per_day": 5000,             # и N ⭐ за сутки на один аккаунт (0 — без лимита)
+        "cooldown_minutes": 20,          # пауза после поставки: звёзды от Fragment приходят за несколько минут
+        "min_wallet_reserve_stars": 500, # не снабжать, если после поставки кошелька хватит меньше чем на N ⭐ своих заказов
+    },
+    # Бот TG Gift (профиль giftshop): продажа подарков Telegram в разделе FunPay «Подарки»
+    "giftshop": {
+        # Лоты: один лот на подарок. emoji/stars — подарок из каталога Telegram (цена в звёздах), name — название
+        # в карточке. offer_id — id лота FunPay (0 — бот выставит сам), position — место в списке (0 — как в RTBA),
+        # price — своя цена лота, ₽ (0 — ведёт RTBA), sell — продавать ли этот подарок
+        "lots": [],
+        "subcategory_regex": r"(?i)подарк|gift",
+        "rub_per_star": 1.35,            # себестоимость звезды, пока не было поставок от StarsBot (₽)
+        "min_margin_pct": 5.0,           # цена лота не ниже себестоимости подарка + N%
+        "start_markup_pct": 30.0,        # стартовая цена нового лота: себестоимость + N%
+        "auto_create_lots": True,        # выставлять лоты подарков с sell=true, у которых нет offer_id
+        "lot_texts": {},                 # свои тексты карточки: summary_ru, desc_ru, summary_en, desc_en ({gift}, {stars})
+        "share_from": "../starsbot/config.yaml",   # взять golden_key и Telegram-уведомления у StarsBot, если свои пусты
+        "supply": {
+            "enabled": True,             # просить у StarsBot звёзды на аккаунт подарков
+            "min_stars": 300,            # когда свободных звёзд меньше — заявка на пополнение
+            "amount": 1000,              # сколько просить за раз
+        },
     },
     # Автономный цикл: напоминания о подтверждении, файлы для поддержки, вывод с FunPay на кошелёк
     "autopilot": {
@@ -374,11 +406,25 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
+def profile_of(data: dict | None, overrides: dict | None = None) -> str:
+    """Профиль бота: из настроек, из переменной STARSBOT_PROFILE (её ставит запуск с --profile) или stars."""
+    for src in (overrides or {}, data or {}):
+        p = ((src.get("general") or {}) if isinstance(src, dict) else {}).get("profile")
+        if p:
+            return str(p)
+    return os.environ.get("STARSBOT_PROFILE") or "stars"
+
+
 def load_config(path: str | Path | None = None, overrides: dict | None = None) -> Section:
     data: dict = {}
     if path and Path(path).exists():
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    merged = _merge(DEFAULTS, _expand_env(data))
+    base = DEFAULTS
+    profile = profile_of(data, overrides)
+    if profile == "giftshop":
+        from starsbot.giftshop.profile import PROFILE_DEFAULTS
+        base = _merge(DEFAULTS, PROFILE_DEFAULTS)
+    merged = _merge(base, _expand_env(data))
     if overrides:
         merged = _merge(merged, overrides)
     return _wrap(merged)
@@ -389,6 +435,9 @@ def validate_config(cfg: Section) -> list[str]:
     problems: list[str] = []
     if cfg.general.demo:
         return problems
+    if cfg.general.get("profile") == "giftshop":
+        from starsbot.giftshop.profile import validate_giftshop
+        return validate_giftshop(cfg)
     if not cfg.funpay.golden_key:
         problems.append("funpay.golden_key не задан")
     # лоты без offer_id — не ошибка: бот выставит их сам при запуске или по кнопке «Лоты → Выставить недостающие»

@@ -44,6 +44,10 @@ class InternalChannel:
     async def on_delivered(self, o) -> None:
         db = self.service.engine.db
         db.update_order(o["order_id"], status=S.COMPLETED.value, completed_at=time.time())
+        supply = getattr(self.service.engine, "supply", None)
+        if supply is not None and supply.owns(o):
+            await supply.on_delivered(db.get_order(o["order_id"]))
+            return
         db.kv_set("topup_done_at", time.time())
         await self.service.engine.notifier.notify("INFO", "stars_topup_done", f"⭐ Аккаунт пополнен на {o['stars']} ⭐ "
                                                   "через Fragment — звёзды приходят за пару минут, подарки "
@@ -129,6 +133,15 @@ class GiftService:
                           max_gifts=int(g.get("max_gifts_per_order") or 40),
                           per_gift_penalty=float(g.get("per_gift_penalty", 3) or 0))
 
+    def plan_for_order(self, o, catalog: list[Gift] | None, done: list | None = None) -> GiftPlan:
+        """Набор подарков заказа. done — уже отправленные подарки (перезапуск посреди заказа): досылаем остаток."""
+        plan = self.plan_for(int(o["stars"]), catalog)
+        if done:
+            left = int(o["stars"]) - sum(int(r["convert_stars"] if plan.mode == "convert" else r["stars"])
+                                         for r in done)
+            plan = self.plan_for(left, catalog) if left > 0 else GiftPlan([], plan.mode)
+        return plan
+
     def cost_for(self, stars: int) -> int:
         cat = self.tg._catalog[1] if hasattr(self.tg, "_catalog") and isinstance(self.tg._catalog, tuple) else None
         try:
@@ -167,7 +180,7 @@ class GiftService:
             return
         cat = await self.catalog()
         try:
-            plan = self.plan_for(int(o["stars"]), cat or None)
+            plan = self.plan_for_order(o, cat or None)
         except PlanError as err:
             e._set(oid, S.MANUAL, "gift_plan_failed", fail_reason="gift_plan")
             await e.say(o, "delay")
@@ -223,15 +236,11 @@ class GiftService:
                 return
             done = [r for r in sent if r["state"] == "sent"]
             try:
-                plan = self.plan_for(int(o["stars"]), cat)
+                plan = self.plan_for_order(o, cat, done)
             except PlanError as err:
                 e._set(oid, S.MANUAL, "gift_plan_failed", fail_reason="gift_plan")
                 await e.notifier.notify("CRITICAL", "gift_plan", f"#{oid}: {err}", order_id=oid)
                 return
-            if done:   # часть подарков уже ушла (перезапуск посреди заказа): досылаем остаток по сумме
-                left = int(o["stars"]) - sum(int(r["convert_stars"] if plan.mode == "convert" else r["stars"])
-                                             for r in done)
-                plan = self.plan_for(left, cat) if left > 0 else GiftPlan([], plan.mode)
             cost = plan.cost
             balance = await self.refresh_balance()
             if balance is not None and balance < cost:
