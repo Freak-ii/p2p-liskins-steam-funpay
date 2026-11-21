@@ -85,7 +85,7 @@ onLive(ev=>{
   if(ev.type==='wallet'){if(ev.balance!=null)document.getElementById('w-balance').textContent=(+ev.balance).toFixed(4);
     document.getElementById('w-capacity').textContent=ev.capacity==null?'—':ev.capacity}
   if(ev.type==='fragment'){clearTimeout(reloadT);reloadT=setTimeout(()=>location.reload(),1500)}
-  if(ev.type==='order'){hint.textContent='· обновлено';clearTimeout(reloadT);reloadT=setTimeout(()=>{if(!document.querySelector('textarea:focus,input:focus'))location.reload()},4000)}
+  if(ev.type==='order'||ev.type==='resync'){hint.textContent='· обновлено';clearTimeout(reloadT);reloadT=setTimeout(()=>{if(!document.querySelector('textarea:focus,input:focus'))location.reload()},4000)}
 });
 </script>
 {% endblock %}

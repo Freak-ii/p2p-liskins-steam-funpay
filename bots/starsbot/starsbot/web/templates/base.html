@@ -93,16 +93,27 @@ async function postJSON(url, data){const r=await fetch(url,{method:'POST',header
 function showResult(el,res){el.textContent=res.text;el.className='result '+(res.ok?'ok':'bad')}
 {% if path != '/login' %}
 // realtime: события бота приходят по SSE; страницы подписываются через window.onLive(fn)
+// Поток держит одно соединение браузера; на один адрес браузер даёт всего 6. Поэтому поток открыт только
+// во вкладке, которую видно, и закрывается при уходе со страницы — иначе 6 открытых вкладок панели
+// «вешают» переход между разделами (новой странице не достаётся соединения).
 (function(){if(!window.EventSource)return;const live=document.getElementById('live');
- const es=new EventSource('/api/stream'+(window.wantLogs?'?logs=1':''));
- es.onopen=()=>{if(live){live.textContent='● live';live.className='chip c-green'}};
- es.onerror=()=>{if(live){live.textContent='○ offline';live.className='chip c-gray'}};
  const st=document.getElementById('botstate'),names={{ state_text|tojson|safe }};
- es.addEventListener('status',e=>{const d=JSON.parse(e.data);if(st&&names[d.state]){st.textContent='● '+names[d.state][0];st.className='chip c-'+names[d.state][1]}});
- es.addEventListener('log',e=>{for(const fn of window.liveHandlers)fn({type:'log',lines:JSON.parse(e.data)})});
- es.onmessage=e=>{const ev=JSON.parse(e.data);for(const fn of window.liveHandlers)fn(ev);
-  if(ev.type==='alert'&&ev.level!=='INFO'){const t=document.createElement('div');t.className='toast '+ev.level;t.textContent=ev.text;document.body.appendChild(t);setTimeout(()=>t.remove(),9000)}};
- window.liveSource=es})();
+ let es=null,hideTimer=null,wasClosed=false;
+ function open(){if(es)return;es=new EventSource('/api/stream'+(window.wantLogs?'?logs=1':''));window.liveSource=es;
+  es.onopen=()=>{if(live){live.textContent='● live';live.className='chip c-green'}};
+  es.onerror=()=>{if(live){live.textContent='○ offline';live.className='chip c-gray'}};
+  es.addEventListener('status',e=>{const d=JSON.parse(e.data);if(st&&names[d.state]){st.textContent='● '+names[d.state][0];st.className='chip c-'+names[d.state][1]}});
+  es.addEventListener('log',e=>{for(const fn of window.liveHandlers)fn({type:'log',lines:JSON.parse(e.data)})});
+  es.onmessage=e=>{const ev=JSON.parse(e.data);for(const fn of window.liveHandlers)fn(ev);
+   if(ev.type==='alert'&&ev.level!=='INFO'){const t=document.createElement('div');t.className='toast '+ev.level;t.textContent=ev.text;document.body.appendChild(t);setTimeout(()=>t.remove(),9000)}};
+  if(wasClosed){wasClosed=false;for(const fn of window.liveHandlers)fn({type:'resync'})}}
+ function close(){clearTimeout(hideTimer);if(!es)return;es.close();es=null;window.liveSource=null;wasClosed=true;
+  if(live){live.textContent='○ пауза';live.className='chip c-gray'}}
+ document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(hideTimer);hideTimer=setTimeout(close,5000)}
+  else{clearTimeout(hideTimer);open()}});
+ window.addEventListener('pagehide',close);window.addEventListener('beforeunload',close);
+ window.addEventListener('pageshow',e=>{if(e.persisted&&!document.hidden)open()});
+ if(!document.hidden)open()})();
 {% endif %}
 </script>
 </body>

@@ -128,6 +128,10 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         await run_treasury_demo(sup)
         log.info("Демо-сценарий выполнен: заказы FunPay, Ozon, GGSEL, Авито и Wildberries в CRM")
     runner = await start_web(sup, host, port, mem)
+    from starsbot.app.watchdog import LoopWatchdog
+    loop_ = asyncio.get_running_loop()
+    _quiet_windows_resets(loop_)
+    sup.watchdog = LoopWatchdog(loop_).start()
     shown_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     url = f"http://{shown_host}:{port}/login?token={token}"
     log.info("Интерфейс запущен: http://%s:%s/", shown_host, port)   # токен в журнал не пишем
@@ -158,6 +162,21 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         log.info("Завершение работы…")
         await sup.shutdown()
         await runner.cleanup()
+
+
+def _quiet_windows_resets(loop: asyncio.AbstractEventLoop) -> None:
+    """Windows: браузер закрыл вкладку с живым потоком — asyncio печатает ConnectionResetError (WinError 10054)
+    с трассировкой. Это не ошибка бота, только шум в журнале; остальные исключения пишем как раньше."""
+    default = loop.get_exception_handler()
+
+    def handler(lp, ctx):
+        if isinstance(ctx.get("exception"), ConnectionResetError) and "_call_connection_lost" in str(ctx.get("handle", "")):
+            return
+        if default is None:
+            lp.default_exception_handler(ctx)
+        else:
+            default(lp, ctx)
+    loop.set_exception_handler(handler)
 
 
 def main(argv: list[str] | None = None) -> None:

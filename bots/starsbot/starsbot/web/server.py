@@ -896,7 +896,9 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     async def api_health(request: web.Request):
         h = sup.engine.health() if sup.state == "running" else {"ok": sup.state != "error", "checks": []}
-        return web.json_response({**h, "state": sup.state}, status=200 if h["ok"] else 503)
+        wd = getattr(sup, "watchdog", None)
+        return web.json_response({**h, "state": sup.state, "loop": wd.status() if wd else None},
+                                 status=200 if h["ok"] else 503)
 
     async def stream(request: web.Request):
         """SSE: события БД (заказы, алерты, кошелёк, Fragment) + новые строки журнала."""

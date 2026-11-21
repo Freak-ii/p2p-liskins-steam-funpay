@@ -37,6 +37,10 @@ class Coordinator:
         if self.path:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             with self._conn() as c:
+                try:            # WAL: чтение у одного бота не ждёт запись у другого (и наоборот)
+                    c.execute("PRAGMA journal_mode=WAL")
+                except sqlite3.Error:
+                    pass
                 c.executescript(SCHEMA)
 
     @classmethod

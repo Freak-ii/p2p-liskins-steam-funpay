@@ -12,4 +12,4 @@
 <td>{{o.price|money}} {{o.currency}}</td><td>{{o.ton_amount|ton}}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{% if o.channel == 'ozon' %}<span class="chip c-blue">Ozon</span>{% elif o.channel == 'ggsel' %}<span class="chip c-amber">GGSEL</span> · {{o.fp_status}}{% else %}FunPay · {{o.fp_status}}{% endif %}</td>
 <td>{{o.risk_score or 0}}</td><td>{{o.paid_at|ts}}</td><td>{{o.delivered_at|ts}}</td></tr>
 {% else %}<tr><td colspan="11" class="muted">Ничего не найдено</td></tr>{% endfor %}</table></div>
-<script>onLive(ev=>{if(ev.type==='order'&&!document.querySelector('input:focus'))setTimeout(()=>location.reload(),1500)})</script>{% endblock %}
+<script>onLive(ev=>{if((ev.type==='order'||ev.type==='resync')&&!document.querySelector('input:focus'))setTimeout(()=>location.reload(),1500)})</script>{% endblock %}

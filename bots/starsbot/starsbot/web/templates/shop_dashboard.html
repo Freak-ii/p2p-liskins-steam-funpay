@@ -48,5 +48,5 @@
   <div class="card"><h2>Лента событий</h2><div style="max-height:330px;overflow:auto;font-size:13px">
   {% for e in feed %}<div><span class="muted">{{e.ts|ts}}</span> <a href="/orders/{{e.order_id}}">#{{e.order_id}}</a> {{e.kind}}</div>{% endfor %}</div></div>
 </div>
-<script>window.onLive(ev=>{if(ev.type==='order'){clearTimeout(window._rt);window._rt=setTimeout(()=>location.reload(),2000)}})</script>
+<script>window.onLive(ev=>{if(ev.type==='order'||ev.type==='resync'){clearTimeout(window._rt);window._rt=setTimeout(()=>location.reload(),2000)}})</script>
 {% endblock %}
