@@ -18,6 +18,9 @@ from tests.test_engine import boot, drain, make
 from tests.test_wallet_fragment import FakeApi, wallet_data
 
 W12 = ("abandon " * 11 + "about").split()
+# старый режим: «Подарком» выдаёт сам StarsBot (теперь по умолчанию этим занимается TG Gift)
+from starsbot.app.launcher import DEMO_OVERRIDES  # noqa: E402
+LEGACY_GIFTS = {**DEMO_OVERRIDES["gifts"], "moved_to_tggift": False}
 
 
 # ---------------------------------------------------------------- сид-фраза 12 слов
@@ -102,7 +105,7 @@ def test_gift_plans_match_funpay_denominations():
 
 # ---------------------------------------------------------------- заказ подарками целиком
 def test_gift_order_end_to_end(tmp_path):
-    sup, e, fp, wallet = make(tmp_path)
+    sup, e, fp, wallet = make(tmp_path, gifts=LEGACY_GIFTS)
     tg = e.gifts.tg
     start = tg.balance
 
@@ -131,7 +134,7 @@ def test_gift_order_end_to_end(tmp_path):
 
 
 def test_gift_unknown_outcome_goes_to_seller_and_resend_after_approve(tmp_path):
-    sup, e, fp, wallet = make(tmp_path)
+    sup, e, fp, wallet = make(tmp_path, gifts=LEGACY_GIFTS)
     tg = e.gifts.tg
 
     async def go():
@@ -153,7 +156,7 @@ def test_gift_unknown_outcome_goes_to_seller_and_resend_after_approve(tmp_path):
 
 
 def test_out_of_stars_triggers_fragment_topup_and_closes_lots(tmp_path):
-    sup, e, fp, wallet = make(tmp_path, gifts={"enabled": True, "pilot_orders": 0, "pause_between_gifts": 0,
+    sup, e, fp, wallet = make(tmp_path, gifts={"enabled": True, "moved_to_tggift": False, "pilot_orders": 0, "pause_between_gifts": 0,
                                                "lots": [{"stars": 43, "offer_id": 150}],
                                                "topup": {"enabled": True, "min_stars": 100, "amount": 500}})
     tg = e.gifts.tg

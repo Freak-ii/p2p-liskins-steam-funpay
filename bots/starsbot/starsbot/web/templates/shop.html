@@ -41,20 +41,22 @@
 {% endif %}
 
 <div class="card">
-  <h2>2 · Лоты подарков</h2>
-  <div class="help">Цена ведётся автоматически: место в списке раздела по этому подарку (по умолчанию 3-е), но не ниже минимума — себестоимость подарка (звёзды × {{ supply.rub_per_star }} ₽) + {{ sc.min_margin_pct }}% и комиссии. «Своя цена» > 0 — фиксированная цена вместо автоцены. Наличие = сколько таких подарков хватит звёзд аккаунта; без звёзд лоты выключаются сами.</div>
-  {% for r in rows %}<form id="lot{{ r.i }}" method="post"><input type="hidden" name="i" value="{{ r.i }}"></form>{% endfor %}
+  <h2>2 · Лоты: подарки, NFT и «Звёзды → Подарком»</h2>
+  <div class="help">Цена ведётся автоматически: место в списке раздела по этому подарку (по умолчанию 3-е), но не ниже минимума — себестоимость подарка (звёзды × {{ supply.rub_per_star }} ₽) + {{ sc.min_margin_pct }}% и комиссии. «Своя цена» > 0 — фиксированная цена вместо автоцены. Наличие = сколько таких подарков хватит звёзд аккаунта; без звёзд лоты выключаются сами.<br>💎 NFT — коллекционный подарок: бот сравнивает Fragment (покупает StarsBot своим кошельком TON) и рынок Telegram (за звёзды аккаунта) и выдаёт дешёвым путём; минимум цены — себестоимость дешёвого пути + маржа. 🎁 «N ⭐ подарками» — раздел «Звёзды», способ «Подарком»: номинал набором подарков.</div>
+  {% for r in rows %}<form id="lot{{ r.list }}{{ r.i }}" method="post"><input type="hidden" name="i" value="{{ r.i }}"><input type="hidden" name="list" value="{{ r.list }}"></form>{% endfor %}
   <div class="tw"><table>
   <tr><th>Подарок</th><th>⭐</th><th>Лот FunPay</th><th>Место</th><th>Своя цена</th><th>Продавать</th><th>Наличие</th><th>Цена сейчас</th><th>Минимум</th><th>Место / лидер</th><th></th></tr>
-  {% for r in rows %}<tr>
-    <td>{{ r.title }}{% if not r.available %}<div class="c-red" style="font-size:12px">нет в каталоге Telegram</div>{% endif %}</td><td>{{ r.stars }}</td>
-    <td><input form="lot{{ r.i }}" type="number" name="offer_id" value="{{ r.offer_id or '' }}" style="width:110px" {{ 'disabled' if not is_admin }}></td>
-    <td><input form="lot{{ r.i }}" type="number" name="position" value="{{ r.position }}" min="0" style="width:60px" {{ 'disabled' if not is_admin }}></td>
-    <td><input form="lot{{ r.i }}" type="number" step="0.01" name="price" value="{{ r.fixed_price or '' }}" style="width:80px" {{ 'disabled' if not is_admin }}></td>
-    <td><input form="lot{{ r.i }}" type="checkbox" name="sell" {{ 'checked' if r.sell }} {{ 'disabled' if not is_admin }}></td>
+  {% for r in rows %}{% if loop.first or r.kind != loop.previtem.kind %}<tr><th colspan="11" style="text-align:left">{{ {'shop': '🎁 Обычные подарки · раздел «Подарки»', 'nft': '💎 NFT-подарки · раздел «Подарки»', 'topup': '⭐ Звёзды → Подарком · раздел «Звёзды»'}[r.kind] }}</th></tr>{% endif %}<tr>
+    <td>{{ r.title }}{% if r.auto %} <span class="muted" title="добавлен автоподбором">авто</span>{% endif %}
+      {% if r.kind == 'nft' %}{% set q = r.quote %}<div class="muted" style="font-size:12px">{% if q %}Fragment: {{ q.fragment.ton ~ ' TON ≈ ' ~ q.fragment.rub ~ ' ₽' if q.fragment else '—' }}{% if q.fragment and not q.fragment.ready %} (StarsBot не готов){% endif %} · Telegram: {{ q.telegram.stars ~ ' ⭐ ≈ ' ~ q.telegram.rub ~ ' ₽' if q.telegram else '—' }} · путь: {{ q.best or 'нет' }}{% else %}цен ещё нет{% endif %}</div>{% if r.blocked %}<div class="c-red" style="font-size:12px">выключен: {{ r.blocked }}</div>{% endif %}
+      {% elif not r.available %}<div class="c-red" style="font-size:12px">нет в каталоге Telegram</div>{% endif %}</td><td>{{ r.stars or '—' }}</td>
+    <td><input form="lot{{ r.list }}{{ r.i }}" type="number" name="offer_id" value="{{ r.offer_id or '' }}" style="width:110px" {{ 'disabled' if not is_admin }}></td>
+    <td><input form="lot{{ r.list }}{{ r.i }}" type="number" name="position" value="{{ r.position }}" min="0" style="width:60px" {{ 'disabled' if not is_admin }}></td>
+    <td><input form="lot{{ r.list }}{{ r.i }}" type="number" step="0.01" name="price" value="{{ r.fixed_price or '' }}" style="width:80px" {{ 'disabled' if not is_admin }}></td>
+    <td><input form="lot{{ r.list }}{{ r.i }}" type="checkbox" name="sell" {{ 'checked' if r.sell }} {{ 'disabled' if not is_admin }}></td>
     <td>{{ r.amount if r.amount is not none else '—' }}</td><td>{{ r.price|money }}</td><td>{{ r.floor|money }}</td>
     <td>{{ r.rank or '—' }}{% if r.best %} / {{ r.best|money }}{% endif %}{% if r.competitors %} <span class="muted">({{ r.competitors }})</span>{% endif %}</td>
-    <td>{% if is_admin %}<button form="lot{{ r.i }}" name="action" value="save_lot">💾</button>{% endif %}</td></tr>{% endfor %}
+    <td>{% if is_admin %}<button form="lot{{ r.list }}{{ r.i }}" name="action" value="save_lot">💾</button>{% endif %}</td></tr>{% endfor %}
   </table></div>
   {% if is_admin %}<form method="post" class="row" style="margin-top:10px">
     <button class="primary" name="action" value="create">Выставить недостающие лоты</button>
@@ -68,6 +70,30 @@
     <input type="number" name="stars" placeholder="цена ⭐" style="width:90px"><input type="number" name="gift_id" placeholder="id (необязательно)" style="width:150px">
     <button name="action" value="add_lot">Добавить</button></form>{% endif %}
 </div>
+
+{% if svc.assortment %}{% set ac = svc.assortment.c %}
+<div class="card">
+  <h2>💎 Подбор NFT по рынку</h2>
+  <div class="help">Раз в {{ ac.rescan_hours }} ч бот смотрит раздел «Подарки»: какие коллекционные подарки продают (продажа, не аренда), сколько продавцов с отзывами (≥ {{ ac.min_reviews }}), почём лидер — и считает маржу, если встать на {{ ac.undercut_pct }}% ниже него, при себестоимости дешёвого пути. Рейтинг = маржа × ликвидность × сезон (×{{ ac.season_boost }} в сезон). Держит не больше {{ ac.max_lots }} NFT-лотов, дороже {{ ac.max_cost_rub|money }} — только вручную. Лоты, которые вы включили/выключили сами, автоподбор не трогает.</div>
+  <div class="tw"><table><tr><th>Коллекция</th><th>Продавцов</th><th>Лидер</th><th>Себестоимость</th><th>Путь</th><th>Маржа</th><th>Рейтинг</th><th>Решение</th>{% if is_admin %}<th></th>{% endif %}</tr>
+  {% for m in svc.assortment.table() %}<tr><td>{{ '✅ ' if m.chosen }}{{ m.title }}{% if m.season %} 🎄{% endif %}</td><td>{{ m.sellers }} <span class="muted">/ {{ m.offers }}</span></td><td>{{ m.min_price|money }}</td><td>{{ m.cost_rub|money }}</td><td>{{ m.route or '—' }}</td><td>{{ m.margin_pct if m.margin_pct is not none else '—' }}{{ '%' if m.margin_pct is not none }}</td><td>{{ m.score }}</td><td class="muted">{{ m.why }}</td>
+    {% if is_admin %}<td><form method="post" class="row"><input type="hidden" name="slug" value="{{ m.slug }}"><button name="action" value="assort_pin" title="держать всегда">📌</button><button name="action" value="assort_ban" title="никогда не брать">🚫</button></form></td>{% endif %}</tr>
+  {% else %}<tr><td colspan="9" class="muted">Ещё не подбиралось — нажмите «Подобрать сейчас»</td></tr>{% endfor %}</table></div>
+  {% if is_admin %}<form method="post" class="row" style="margin-top:10px">
+    <label>Автоподбор <input type="checkbox" name="enabled" {{ 'checked' if ac.enabled }}></label>
+    <label>Лотов не больше <input type="number" name="max_lots" value="{{ ac.max_lots }}" min="0" style="width:60px"></label>
+    <label>Дороже — только вручную, ₽ <input type="number" name="max_cost_rub" value="{{ ac.max_cost_rub }}" style="width:90px"></label>
+    <label>Маржа от, % <input type="number" step="0.5" name="min_margin_pct" value="{{ ac.min_margin_pct }}" style="width:60px"></label>
+    <button name="action" value="assort_save">💾</button>
+    <button class="primary" name="action" value="assort_scan">Подобрать сейчас</button></form>
+  <div class="help">Закреплено: {{ (ac.pinned or [])|join(', ') or 'нет' }} · в запрете: {{ (ac.banned or [])|join(', ') or 'нет' }}{% if ac.pinned or ac.banned %} <form method="post" style="display:inline"><button name="action" value="assort_clear">сбросить</button></form>{% endif %}</div>
+  <form method="post" class="row" style="margin-top:10px"><b>Добавить NFT вручную</b> (в том числе дорогие):
+    <input type="text" name="collection" placeholder="Plush Pepe или plushpepe" list="nftcolls" style="max-width:220px">
+    <datalist id="nftcolls">{% for c in svc.nft.known_collections().values() %}<option value="{{ c.slug }}">{{ c.title }}</option>{% endfor %}</datalist>
+    <input type="number" name="position" placeholder="место (3)" style="width:90px">
+    <button name="action" value="add_nft">Добавить</button></form>{% endif %}
+</div>
+{% endif %}
 
 {% if is_admin %}
 <form method="post"><div class="card">

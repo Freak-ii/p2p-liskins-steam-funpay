@@ -39,6 +39,9 @@ class PriceDecision:
 
 
 def lot_stars(lot: CompetitorLot) -> int | None:
+    q2 = str(lot.fields.get("quantity2") or "").strip()      # «Другое количество» + число
+    if q2.isdigit() and "друг" in str(lot.fields.get("quantity", "")).lower():
+        return int(q2)
     return stars_from_text(lot.fields.get("quantity", "")) or stars_from_text(lot.description)
 
 

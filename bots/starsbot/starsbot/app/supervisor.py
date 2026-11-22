@@ -62,6 +62,7 @@ class Supervisor:
         self.raw: dict = self._read_raw()
         self.cfg: Section = self._load()
         self._apply_patch_file()
+        self._add_new_denominations()
         db_path = self.cfg.general.database
         if db_path != ":memory:" and not Path(db_path).is_absolute():
             db_path = str(self.home / db_path)
@@ -80,6 +81,27 @@ class Supervisor:
         self._build()
 
     # ------------------------------------------------------------------ config
+    def _add_new_denominations(self) -> None:
+        """StarsBot: в своём списке лотов «По username» дописать номиналы, которых раньше не было (200, 300, 2500,
+        750, 1500, …) — без id лота, чтобы они появились в «Лотах» с кнопкой «выставить». Один раз на номинал."""
+        if self.profile != "stars" or not self.config_path.exists():
+            return
+        raw_lots = (self.raw.get("funpay") or {}).get("lots")
+        if not isinstance(raw_lots, list) or not raw_lots:
+            return
+        from starsbot.config import CUSTOM_DENOMINATIONS, DENOMINATIONS
+        have = {int(l.get("stars") or 0) for l in raw_lots if isinstance(l, dict)}
+        done = set((self.raw.get("funpay") or {}).get("denominations_added") or [])
+        new = [d for d in DENOMINATIONS + CUSTOM_DENOMINATIONS if d not in have and d not in done]
+        if not new:
+            return
+        lots = [dict(l) for l in raw_lots] + [
+            {"stars": d, "offer_id": 0, "position": 0, **({"custom": True} if d in CUSTOM_DENOMINATIONS else {})}
+            for d in new]
+        lots.sort(key=lambda l: int(l.get("stars") or 0))
+        self.save({"funpay": {"lots": lots, "denominations_added": sorted(done | set(new))}}, rebuild=False)
+        log.warning("в лоты добавлены новые номиналы (без id, выставляются кнопкой): %s", ", ".join(map(str, new)))
+
     def _apply_patch_file(self) -> None:
         """config.patch.yaml рядом с config.yaml — разовая правка настроек (без секретов): сливается в config.yaml
         при запуске и переименовывается в config.patch.applied.yaml. Так поддержка может поправить настройки,
@@ -251,6 +273,15 @@ class Supervisor:
             from starsbot.giftshop.service import ShopGiftService
             self.engine.gifts = ShopGiftService(cfg, self.engine, tg)
             self.engine.lot_manager = ShopLotManager(self.engine, save_config=self.save)
+            from starsbot.giftshop.market import Assortment
+            from starsbot.giftshop.nft import NftDesk, PublicFragment
+            if cfg.general.demo or self.demo:
+                from starsbot.giftshop.demo import demo_nft
+                public = demo_nft(tg)
+            else:
+                public = PublicFragment(user_agent=str(cfg.funpay.get("user_agent") or "Mozilla/5.0"))
+            self.engine.gifts.nft = NftDesk(self.engine.gifts, public)      # NFT: Fragment или рынок Telegram
+            self.engine.gifts.assortment = Assortment(self.engine.gifts)    # подбор NFT-лотов по рынку
         else:
             self.engine.gifts = GiftService(cfg, self.engine, tg)
             self.engine.channels["internal"] = InternalChannel(self.engine.gifts)
@@ -263,6 +294,8 @@ class Supervisor:
             self.engine.lot_manager = LotManager(self.engine, save_config=self.save)
             from starsbot.supply import SupplyManager
             self.engine.supply = SupplyManager(cfg, self.engine)
+            from starsbot.nft_supply import NftSupplyManager
+            self.engine.nft = NftSupplyManager(cfg, self.engine)       # NFT-подарки с Fragment для TG Gift
         from starsbot.autopilot import Autopilot
         self.engine.autopilot = Autopilot(cfg, self.engine, self.home)
         self.engine.treasury = self._treasury(cfg)

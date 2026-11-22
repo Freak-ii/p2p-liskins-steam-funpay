@@ -99,6 +99,7 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
     if shop:
         demo_over = {k: v for k, v in DEMO_OVERRIDES.items() if k in ("general", "notifications")}
         demo_over["gifts"] = {"pause_between_gifts": 0}
+        demo_over["giftshop"] = {"nft": {"rub_per_ton": 80.0}}      # курс TON в демо (≈ $0.95 × 84 ₽)
     sup = Supervisor(home, demo=demo, overrides=demo_over if demo else None)
     token = sup.ensure_token()
     if demo and shop:
