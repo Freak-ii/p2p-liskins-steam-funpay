@@ -44,6 +44,13 @@ class InternalChannel:
     async def on_delivered(self, o) -> None:
         db = self.service.engine.db
         db.update_order(o["order_id"], status=S.COMPLETED.value, completed_at=time.time())
+        nft = getattr(self.service.engine, "nft", None)
+        if nft is not None and nft.owns(o):      # этапы NFT ведёт NftSupplyManager (Engine.on_delivered)
+            return
+        supply = getattr(self.service.engine, "supply", None)
+        if supply is not None and supply.owns(o):
+            await supply.on_delivered(db.get_order(o["order_id"]))
+            return
         db.kv_set("topup_done_at", time.time())
         await self.service.engine.notifier.notify("INFO", "stars_topup_done", f"⭐ Аккаунт пополнен на {o['stars']} ⭐ "
                                                   "через Fragment — звёзды приходят за пару минут, подарки "
@@ -85,8 +92,45 @@ class GiftService:
         return self.cfg.get("gifts") or {}
 
     @property
+    def moved(self) -> bool:
+        """«Звёзды → Подарком» передан боту TG Gift: у StarsBot эта выдача выключена (gifts.moved_to_tggift)."""
+        return self.cfg.general.get("profile", "stars") != "giftshop" and bool(self.gcfg.get("moved_to_tggift", True))
+
+    @property
     def enabled(self) -> bool:
-        return bool(self.gcfg.get("enabled"))
+        return bool(self.gcfg.get("enabled")) and not self.moved
+
+    async def handover_tick(self) -> None:
+        """StarsBot: свои старые лоты «Подарком» без хозяина не оставляем. Если TG Gift запущен и ведёт их (сообщает
+        в общем файле координации), ничего не делаем; если нет — один раз выключаем эти лоты на FunPay."""
+        if not self.moved:
+            return
+        lots = [l for l in (self.gcfg.get("lots") or []) if l.get("offer_id")]
+        if not lots:
+            return
+        info = self.engine.coord.get_info("tggift", max_age=900) or {}
+        served = {str(x) for x in info.get("topup_lots") or []}
+        if served and all(str(l["offer_id"]) in served for l in lots):
+            self.db.kv_set("gift_handover_closed", False)
+            return
+        if self.db.kv_get("gift_handover_closed") or self.engine.paused:
+            return
+        closed = 0
+        for l in lots:
+            if str(l["offer_id"]) in served:
+                continue
+            try:
+                await self.engine.fp.update_lot(int(l["offer_id"]), int(self.cfg.funpay.node_id), active=False)
+                self.db.kv_set(f"gift_lot_amount:{l['offer_id']}", 0)
+                closed += 1
+            except Exception as err:  # noqa: BLE001
+                log.warning("лот подарков %s: %s", l["offer_id"], err)
+        self.db.kv_set("gift_handover_closed", True)
+        if closed:
+            await self.engine.notifier.notify("WARNING", "gift_handover", f"«Звёзды → Подарком» теперь ведёт TG Gift. "
+                                              f"Выключил {closed} старых лотов подарками StarsBot, пока TG Gift не "
+                                              "запущен — включите TG Gift в Центре, он возьмёт эти лоты себе.",
+                                              throttle_key="gift_handover")
 
     # ------------------------------------------------------------------ заказы
     @property
@@ -129,6 +173,15 @@ class GiftService:
                           max_gifts=int(g.get("max_gifts_per_order") or 40),
                           per_gift_penalty=float(g.get("per_gift_penalty", 3) or 0))
 
+    def plan_for_order(self, o, catalog: list[Gift] | None, done: list | None = None) -> GiftPlan:
+        """Набор подарков заказа. done — уже отправленные подарки (перезапуск посреди заказа): досылаем остаток."""
+        plan = self.plan_for(int(o["stars"]), catalog)
+        if done:
+            left = int(o["stars"]) - sum(int(r["convert_stars"] if plan.mode == "convert" else r["stars"])
+                                         for r in done)
+            plan = self.plan_for(left, catalog) if left > 0 else GiftPlan([], plan.mode)
+        return plan
+
     def cost_for(self, stars: int) -> int:
         cat = self.tg._catalog[1] if hasattr(self.tg, "_catalog") and isinstance(self.tg._catalog, tuple) else None
         try:
@@ -167,7 +220,7 @@ class GiftService:
             return
         cat = await self.catalog()
         try:
-            plan = self.plan_for(int(o["stars"]), cat or None)
+            plan = self.plan_for_order(o, cat or None)
         except PlanError as err:
             e._set(oid, S.MANUAL, "gift_plan_failed", fail_reason="gift_plan")
             await e.say(o, "delay")
@@ -223,15 +276,11 @@ class GiftService:
                 return
             done = [r for r in sent if r["state"] == "sent"]
             try:
-                plan = self.plan_for(int(o["stars"]), cat)
+                plan = self.plan_for_order(o, cat, done)
             except PlanError as err:
                 e._set(oid, S.MANUAL, "gift_plan_failed", fail_reason="gift_plan")
                 await e.notifier.notify("CRITICAL", "gift_plan", f"#{oid}: {err}", order_id=oid)
                 return
-            if done:   # часть подарков уже ушла (перезапуск посреди заказа): досылаем остаток по сумме
-                left = int(o["stars"]) - sum(int(r["convert_stars"] if plan.mode == "convert" else r["stars"])
-                                             for r in done)
-                plan = self.plan_for(left, cat) if left > 0 else GiftPlan([], plan.mode)
             cost = plan.cost
             balance = await self.refresh_balance()
             if balance is not None and balance < cost:

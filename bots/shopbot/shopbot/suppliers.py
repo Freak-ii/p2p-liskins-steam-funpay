@@ -3,8 +3,8 @@
 
   stars, premium → StarsBot   (http://127.0.0.1:8803, /api/supply/*, X-Supply-Token)
   gifts          → TG Gift    (профиль giftshop StarsBot, http://127.0.0.1:8805, тот же контракт)
-  steam_keys     → MannBot    (пока kind=manual: оператор отдаёт ключи обменом и отмечает выдачу в панели;
-                               когда у MannBot появится /api/supply — kind=http, контракт тот же)
+  steam_keys     → MannBot    (http://127.0.0.1:8801, тот же контракт; получатель — ссылка на обмен Steam;
+                               kind=manual — оператор отдаёт ключи сам и отмечает выдачу в панели)
 """
 from __future__ import annotations
 
@@ -46,14 +46,22 @@ class HttpSupplier:
     async def ping(self) -> dict:
         return await self._call("GET", "/api/supply/ping")
 
-    async def quote(self, product: str, amount: int = 0, months: int = 0) -> dict:
-        return await self._call("GET", "/api/supply/quote", params={"product": product, "amount": amount,
-                                                                   "months": months})
+    @staticmethod
+    def _gift(gift: dict | None) -> dict:
+        """Какой именно подарок выдать (TG Gift): эмодзи и название из каталога магазина."""
+        if not gift:
+            return {}
+        return {"gift": str(gift.get("emoji") or ""), "gift_title": str(gift.get("title") or "")}
 
-    async def order(self, ref: str, product: str, recipient: str, amount: int = 0, months: int = 0) -> dict:
+    async def quote(self, product: str, amount: int = 0, months: int = 0, gift: dict | None = None) -> dict:
+        return await self._call("GET", "/api/supply/quote", params={"product": product, "amount": amount,
+                                                                   "months": months, **self._gift(gift)})
+
+    async def order(self, ref: str, product: str, recipient: str, amount: int = 0, months: int = 0,
+                    gift: dict | None = None) -> dict:
         return await self._call("POST", "/api/supply/orders", json={"ref": ref, "product": product,
                                                                    "username": recipient, "amount": amount,
-                                                                   "months": months})
+                                                                   "months": months, **self._gift(gift)})
 
     async def status(self, ref: str) -> dict:
         return await self._call("GET", f"/api/supply/orders/{ref}")
@@ -71,12 +79,13 @@ class ManualSupplier:
     async def ping(self) -> dict:
         return {"ok": True, "manual": True}
 
-    async def quote(self, product: str, amount: int = 0, months: int = 0) -> dict:
+    async def quote(self, product: str, amount: int = 0, months: int = 0, gift: dict | None = None) -> dict:
         if self.cost_rub <= 0:
             return {"available": False, "reason": "не задана себестоимость (suppliers.*.cost_rub)"}
         return {"available": True, "cost_rub": round(self.cost_rub * max(1, amount), 2), "manual": True}
 
-    async def order(self, ref: str, product: str, recipient: str, amount: int = 0, months: int = 0) -> dict:
+    async def order(self, ref: str, product: str, recipient: str, amount: int = 0, months: int = 0,
+                    gift: dict | None = None) -> dict:
         return {"ok": True, "status": "manual", "order_id": ref, "detail": "ждёт ручной выдачи"}
 
     async def status(self, ref: str) -> dict:
@@ -104,7 +113,7 @@ class DemoSupplier:
             raise SupplierError(f"{self.name}: недоступен (демо)")
         return {"ok": True, "demo": True}
 
-    async def quote(self, product: str, amount: int = 0, months: int = 0) -> dict:
+    async def quote(self, product: str, amount: int = 0, months: int = 0, gift: dict | None = None) -> dict:
         await self.ping()
         if product in ("stars", "gift"):
             cost = amount * self.COST["stars"] * (1.12 if product == "gift" else 1.0)
@@ -116,12 +125,15 @@ class DemoSupplier:
             cost = self.COST["steam_keys"] * max(1, amount)
         return {"available": True, "cost_rub": round(cost * self.cost_mult, 2)}
 
-    async def order(self, ref: str, product: str, recipient: str, amount: int = 0, months: int = 0) -> dict:
+    async def order(self, ref: str, product: str, recipient: str, amount: int = 0, months: int = 0,
+                    gift: dict | None = None) -> dict:
         await self.ping()
         if ref not in self.orders:
-            st = "failed" if recipient.lstrip("@").lower() in self.fail_usernames else "queued"
-            self.orders[ref] = {"status": st, "ticks": 0, "detail": "not_found" if st == "failed" else "",
-                                "product": product, "ts": time.time()}
+            expired = "token=Expired1" in recipient                  # как у MannBot: ссылка на обмен устарела
+            st = "failed" if expired or recipient.lstrip("@").lower() in self.fail_usernames else "queued"
+            detail = "invalid_token" if expired else "not_found" if st == "failed" else ""
+            self.orders[ref] = {"status": st, "ticks": 0, "detail": detail,
+                                "product": product, "gift": (gift or {}).get("emoji", ""), "ts": time.time()}
         return {"ok": True, "order_id": ref, **self.orders[ref]}
 
     async def status(self, ref: str) -> dict:

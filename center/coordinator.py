@@ -62,6 +62,7 @@ AUTO_ALLOWED = {"pause_buying", "pause_bot"}                  # что вооб�
 LOCKED = {"change_limits": "confirm", "set_live_mode": "confirm", "withdraw": "manual"}
 ORDER = ("auto", "propose", "confirm", "manual")          # от мягкого к строгому
 BOTS = ("lisbot", "mannbot")
+ACK_BOTS = BOTS + ("starsbot", "tggift", "shopbot")      # тревоги умеют подтверждать все боты центра
 
 # Ключи настроек LisBot, которые считаются лимитами (деньги и риск) — их меняет только change_limits
 LIMIT_KEYS = {"strategy.maxSpendPerHourUsd", "strategy.maxSpendPerDayUsd", "strategy.maxOpenExposureUsd",
@@ -113,7 +114,8 @@ TOOLS: dict[str, tuple[str, str, object]] = {
     "pause_bot": ("Пауза торговли бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
     "resume_bot": ("Снять паузу торговли бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
     "restart_bot": ("Перезапустить процесс бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
-    "ack_alerts": ("Подтвердить все тревоги бота (bot: lisbot | mannbot)", "propose", lambda a: {"bot": _bot(a)}),
+    "ack_alerts": ("Подтвердить все тревоги бота (bot: " + " | ".join(ACK_BOTS) + ")", "propose",
+                   lambda a: {"bot": _bot(a, ACK_BOTS)}),
     "disable_item": ("Перестать закупать предмет LisBot (name): выключить его в списке закупок, продажи не трогает",
                      "propose", lambda a: {"name": _item_name(a)}),
     "change_strategy": ("Изменить настройки стратегии LisBot (changes: {ключ: значение}; ключи: "
@@ -583,7 +585,8 @@ class Coordinator:
         raise ToolError("этот инструмент центр не выполняет — только вручную")
 
     def describe(self, tool: str, args: dict) -> str:
-        bot = {"lisbot": "LisBot", "mannbot": "MannBot"}.get(args.get("bot", ""), "")
+        bot = {"lisbot": "LisBot", "mannbot": "MannBot", "starsbot": "StarsBot", "tggift": "TG Gift",
+               "shopbot": "ShopBot"}.get(args.get("bot", ""), "")
         if tool in ("change_strategy", "change_limits"):
             return f"{TOOLS[tool][0].split(' (')[0]}: " + ", ".join(f"{k} = {v}" for k, v in args["changes"].items())
         if tool == "disable_item":

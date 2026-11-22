@@ -18,6 +18,12 @@ log = logging.getLogger("funpay")
 BASE = "https://funpay.com"
 
 
+async def _off(fn, *args):
+    """Разбор HTML FunPay в фоне: страница лотов — до мегабайтов и секунды работы lxml/BeautifulSoup.
+    Прямо в цикле событий это замораживало бы панель и чаты на всё время разбора."""
+    return await asyncio.to_thread(fn, *args)
+
+
 class FunPayError(Exception):
     pass
 
@@ -136,7 +142,7 @@ class FunPayClient:
     async def get_bookmarks_page(self) -> list:
         """Список диалогов со страницы /chat/ — запасной путь, если runner не присылает chat_bookmarks."""
         _, page = await self._request("GET", "/chat/")
-        return P.parse_chat_bookmarks(page)
+        return await _off(P.parse_chat_bookmarks, page)
 
     async def get_chat_history(self, chat_id: str, last_message: int = 0) -> list[ChatMessage]:
         """Последние сообщения чата новее last_message. FunPay /chat/history отдаёт страницу сообщений ДО
@@ -174,11 +180,11 @@ class FunPayClient:
     async def get_sales(self, state: str | None = None) -> list[FunPayOrder]:
         path = "/orders/trade" + (f"?state={state}" if state else "")
         _, page = await self._request("GET", path)
-        return P.parse_orders_list(page)
+        return await _off(P.parse_orders_list, page)
 
     async def get_order(self, order_id: str) -> P.OrderPage:
         _, page = await self._request("GET", f"/orders/{order_id}/")
-        return P.parse_order_page(page, order_id)
+        return await _off(P.parse_order_page, page, order_id)
 
     async def refund(self, order_id: str) -> bool:
         if self.dry_run:
@@ -207,7 +213,7 @@ class FunPayClient:
     # ------------------------------------------------------------------ lots
     async def get_lot_fields(self, offer_id: int, node_id: int) -> dict[str, str]:
         _, page = await self._request("GET", f"/lots/offerEdit?node={node_id}&offer={offer_id}")
-        fields = P.parse_offer_edit_form(page)
+        fields = await _off(P.parse_offer_edit_form, page)
         if not fields:
             raise FunPayError(f"не удалось открыть редактор лота {offer_id}")
         return fields
@@ -251,10 +257,10 @@ class FunPayClient:
         """Поля и выпадающие списки формы лота. offer_id=0 — пустая форма нового лота."""
         path = f"/lots/offerEdit?node={node_id}" + (f"&offer={offer_id}" if offer_id else "")
         _, page = await self._request("GET", path)
-        fields = P.parse_offer_edit_form(page)
+        fields = await _off(P.parse_offer_edit_form, page)
         if not fields:
             raise FunPayError("не удалось открыть форму лота")
-        return fields, P.parse_offer_selects(page)
+        return fields, await _off(P.parse_offer_selects, page)
 
     async def create_lot(self, fields: dict[str, str], force: bool = False) -> str:
         """Создаёт лот (offer_id=0). Возвращает id нового лота, если FunPay его сообщил.
@@ -278,11 +284,11 @@ class FunPayClient:
 
     async def get_own_lots(self, node_id: int) -> list[P.OwnLot]:
         _, page = await self._request("GET", f"/lots/{node_id}/trade")
-        return P.parse_own_lots(page)
+        return await _off(P.parse_own_lots, page)
 
     async def get_balance(self) -> P.BalanceInfo:
         _, page = await self._request("GET", "/account/balance")
-        return P.parse_balance_page(page)
+        return await _off(P.parse_balance_page, page)
 
     async def withdraw(self, info: P.BalanceInfo, method: str, wallet: str, amount: float) -> str:
         """Заявка на вывод с баланса FunPay по форме со страницы баланса."""
@@ -308,4 +314,4 @@ class FunPayClient:
 
     async def get_public_lots(self, node_id: int, filter_regex: str | None = None) -> list[CompetitorLot]:
         _, page = await self._request("GET", f"/lots/{node_id}/")
-        return P.parse_lots_page(page, filter_regex)
+        return await _off(P.parse_lots_page, page, filter_regex)

@@ -24,7 +24,7 @@ from mannbot.notify.notifier import Notifier
 
 log = logging.getLogger("app")
 
-SECRET_FIELDS = {("funpay", "golden_key"), ("steam", "password"), ("steam", "shared_secret"),
+SECRET_FIELDS = {("supply", "token"), ("funpay", "golden_key"), ("steam", "password"), ("steam", "shared_secret"),
                  ("steam", "identity_secret"), ("steam", "login_secure_cookie"), ("steam", "api_key"),
                  ("notifications.telegram", "bot_token"), ("dashboard", "token"),
                  ("ai", "api_key")}

@@ -1,0 +1,138 @@
+{% extends "base.html" %}{% block title %}Подарки и лоты{% endblock %}
+{% block body %}
+<h1>Подарки и лоты</h1>
+<p class="muted">Раздел FunPay «Telegram → Подарки» (node {{ funpay.node_id }}). Один лот — один подарок Telegram, количество в заказе — сколько подарков отправить. Покупатель присылает @username, бот находит аккаунт и отправляет подарок со звёзд аккаунта подарков. Заказы звёзд ведёт StarsBot — TG Gift их не трогает.</p>
+{% if problems and not app.demo %}<div class="card" style="border-left:4px solid var(--amber)"><b>Осталось настроить:</b><ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}
+
+<div class="grid">
+  <div class="card kpi"><div class="v">{% if account.username or account.name %}@{{ account.username or account.name }}{% else %}—{% endif %}</div><div class="l">аккаунт подарков{% if svc.status.error %} · <span class="c-red">{{ svc.status.error }}</span>{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ stars.balance if stars.balance is not none else '—' }} ⭐</div><div class="l">звёзд{% if stars.ts %} · {{ stars.ts|ts }}{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ committed }} ⭐</div><div class="l">обещано активным заказам</div></div>
+  <div class="card kpi"><div class="v">{{ supply.rub_per_star }} ₽</div><div class="l">себестоимость звезды{% if supply.history %} (по поставкам){% endif %}</div></div>
+</div>
+
+{% if is_admin %}
+<div class="cols">
+<div class="card">
+  <h2>1 · Вход в Telegram-аккаунт подарков</h2>
+  <div class="help">Отдельный аккаунт магазина. У него должен быть <b>@username</b> (Настройки → Имя пользователя) — на него StarsBot покупает звёзды. Ключи <b>api_id</b> и <b>api_hash</b>: my.telegram.org → API development tools (впишите их ниже и сохраните, потом войдите по номеру).</div>
+  {% if has_session and account.user_id %}<p class="c-green">✔ Подключён: {{ account.name }} @{{ account.username or '—' }} (id {{ account.user_id }})</p>{% endif %}
+  <form method="post" action="/gifts" class="row" style="margin-top:6px">
+    <input type="text" name="phone" value="{{ g.phone }}" placeholder="+7…" style="max-width:180px">
+    <button name="action" value="send_code">Получить код</button>
+    <button name="action" value="refresh">Проверить</button>
+    {% if has_session %}<button name="action" value="logout" class="danger" onclick="return confirm('Удалить сессию Telegram с этого компьютера?')">Выйти</button>{% endif %}
+  </form>
+  {% if login %}<form method="post" action="/gifts" class="row" style="margin-top:8px">
+    <input type="text" name="code" placeholder="код из Telegram" style="max-width:160px" autocomplete="one-time-code">
+    <input type="password" name="password" placeholder="облачный пароль (если включён)" style="max-width:240px">
+    <button class="primary" name="action" value="sign_in">Войти</button>
+  </form><div class="help">Код приходит в Telegram от «Telegram» на ваших устройствах. Никому его не сообщайте.</div>{% endif %}
+</div>
+<div class="card">
+  <h2>Снабжение звёздами</h2>
+  <div class="help">StarsBot покупает звёзды на Fragment на @{{ account.username or 'username аккаунта' }} по заявке TG Gift: когда свободных звёзд меньше {{ (sc.supply or {}).min_stars }}, просим {{ (sc.supply or {}).amount }} ⭐. Лимиты поставок — в настройках StarsBot (раздел supply).</div>
+  {% if not supply.coord %}<p class="c-amber">Нет общего файла координации — запустите TG Gift из Центра.</p>{% endif %}
+  <form method="post" class="row" style="margin-top:6px"><input type="number" name="amount" value="{{ (sc.supply or {}).amount or 1000 }}" min="50" style="max-width:140px"><button name="action" value="supply">Попросить звёзды сейчас</button></form>
+  <table style="margin-top:8px"><tr><th>Поставка</th><th>⭐</th><th>Статус</th><th>₽</th></tr>
+  {% for r in supply.history %}<tr><td>{{ r.order_id }}</td><td>{{ r.stars }}</td><td>{{ {'pending': 'покупается', 'done': 'получено', 'manual': 'у продавца', 'cancelled': 'отменена'}.get(r.state, r.state) }}</td><td>{{ r.cost_rub|money }}</td></tr>{% else %}<tr><td colspan="4" class="muted">Поставок ещё не было</td></tr>{% endfor %}</table>
+</div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>2 · Лоты: подарки, NFT и «Звёзды → Подарком»</h2>
+  <div class="help">Цена ведётся автоматически: место в списке раздела по этому подарку (по умолчанию 3-е), но не ниже минимума — себестоимость подарка (звёзды × {{ supply.rub_per_star }} ₽) + {{ sc.min_margin_pct }}% и комиссии. «Своя цена» > 0 — фиксированная цена вместо автоцены. Наличие = сколько таких подарков хватит звёзд аккаунта; без звёзд лоты выключаются сами.<br>💎 NFT — коллекционный подарок: бот сравнивает Fragment (покупает StarsBot своим кошельком TON) и рынок Telegram (за звёзды аккаунта) и выдаёт дешёвым путём; минимум цены — себестоимость дешёвого пути + маржа. 🎁 «N ⭐ подарками» — раздел «Звёзды», способ «Подарком»: номинал набором подарков.</div>
+  {% for r in rows %}<form id="lot{{ r.list }}{{ r.i }}" method="post"><input type="hidden" name="i" value="{{ r.i }}"><input type="hidden" name="list" value="{{ r.list }}"></form>{% endfor %}
+  <div class="tw"><table>
+  <tr><th>Подарок</th><th>⭐</th><th>Лот FunPay</th><th>Место</th><th>Своя цена</th><th>Продавать</th><th>Наличие</th><th>Цена сейчас</th><th>Минимум</th><th>Место / лидер</th><th></th></tr>
+  {% for r in rows %}{% if loop.first or r.kind != loop.previtem.kind %}<tr><th colspan="11" style="text-align:left">{{ {'shop': '🎁 Обычные подарки · раздел «Подарки»', 'nft': '💎 NFT-подарки · раздел «Подарки»', 'topup': '⭐ Звёзды → Подарком · раздел «Звёзды»'}[r.kind] }}</th></tr>{% endif %}<tr>
+    <td>{{ r.title }}{% if r.auto %} <span class="muted" title="добавлен автоподбором">авто</span>{% endif %}
+      {% if r.kind == 'nft' %}{% set q = r.quote %}<div class="muted" style="font-size:12px">{% if q %}Fragment: {{ q.fragment.ton ~ ' TON ≈ ' ~ q.fragment.rub ~ ' ₽' if q.fragment else '—' }}{% if q.fragment and not q.fragment.ready %} (StarsBot не готов){% endif %} · Telegram: {{ q.telegram.stars ~ ' ⭐ ≈ ' ~ q.telegram.rub ~ ' ₽' if q.telegram else '—' }} · путь: {{ q.best or 'нет' }}{% else %}цен ещё нет{% endif %}</div>{% if r.blocked %}<div class="c-red" style="font-size:12px">выключен: {{ r.blocked }}</div>{% endif %}
+      {% elif not r.available %}<div class="c-red" style="font-size:12px">нет в каталоге Telegram</div>{% endif %}</td><td>{{ r.stars or '—' }}</td>
+    <td><input form="lot{{ r.list }}{{ r.i }}" type="number" name="offer_id" value="{{ r.offer_id or '' }}" style="width:110px" {{ 'disabled' if not is_admin }}></td>
+    <td><input form="lot{{ r.list }}{{ r.i }}" type="number" name="position" value="{{ r.position }}" min="0" style="width:60px" {{ 'disabled' if not is_admin }}></td>
+    <td><input form="lot{{ r.list }}{{ r.i }}" type="number" step="0.01" name="price" value="{{ r.fixed_price or '' }}" style="width:80px" {{ 'disabled' if not is_admin }}></td>
+    <td><input form="lot{{ r.list }}{{ r.i }}" type="checkbox" name="sell" {{ 'checked' if r.sell }} {{ 'disabled' if not is_admin }}></td>
+    <td>{{ r.amount if r.amount is not none else '—' }}</td><td>{{ r.price|money }}</td><td>{{ r.floor|money }}</td>
+    <td>{{ r.rank or '—' }}{% if r.best %} / {{ r.best|money }}{% endif %}{% if r.competitors %} <span class="muted">({{ r.competitors }})</span>{% endif %}</td>
+    <td>{% if is_admin %}<button form="lot{{ r.list }}{{ r.i }}" name="action" value="save_lot">💾</button>{% endif %}</td></tr>{% endfor %}
+  </table></div>
+  {% if is_admin %}<form method="post" class="row" style="margin-top:10px">
+    <button class="primary" name="action" value="create">Выставить недостающие лоты</button>
+    <button name="action" value="stock">Пересчитать наличие</button>
+    <button name="action" value="texts">Обновить описания лотов</button>
+    <button name="action" value="close_all" class="danger" onclick="return confirm('Выключить все лоты подарков?')">Выключить все лоты</button>
+  </form>
+  <div class="help">Новый лот создаётся выключенным и включается, когда на аккаунте есть звёзды. Проверьте первый созданный лот на FunPay глазами: форма раздела «Подарки» подбирается по тексту вариантов.</div>
+  <form method="post" class="row" style="margin-top:10px"><b>Добавить подарок:</b>
+    <input type="text" name="emoji" placeholder="🧸" style="width:60px"><input type="text" name="name" placeholder="название" style="max-width:160px">
+    <input type="number" name="stars" placeholder="цена ⭐" style="width:90px"><input type="number" name="gift_id" placeholder="id (необязательно)" style="width:150px">
+    <button name="action" value="add_lot">Добавить</button></form>{% endif %}
+</div>
+
+{% if svc.assortment %}{% set ac = svc.assortment.c %}
+<div class="card">
+  <h2>💎 Подбор NFT по рынку</h2>
+  <div class="help">Раз в {{ ac.rescan_hours }} ч бот смотрит раздел «Подарки»: какие коллекционные подарки продают (продажа, не аренда), сколько продавцов с отзывами (≥ {{ ac.min_reviews }}), почём лидер — и считает маржу, если встать на {{ ac.undercut_pct }}% ниже него, при себестоимости дешёвого пути. Рейтинг = маржа × ликвидность × сезон (×{{ ac.season_boost }} в сезон). Держит не больше {{ ac.max_lots }} NFT-лотов, дороже {{ ac.max_cost_rub|money }} — только вручную. Лоты, которые вы включили/выключили сами, автоподбор не трогает.</div>
+  <div class="tw"><table><tr><th>Коллекция</th><th>Продавцов</th><th>Лидер</th><th>Себестоимость</th><th>Путь</th><th>Маржа</th><th>Рейтинг</th><th>Решение</th>{% if is_admin %}<th></th>{% endif %}</tr>
+  {% for m in svc.assortment.table() %}<tr><td>{{ '✅ ' if m.chosen }}{{ m.title }}{% if m.season %} 🎄{% endif %}</td><td>{{ m.sellers }} <span class="muted">/ {{ m.offers }}</span></td><td>{{ m.min_price|money }}</td><td>{{ m.cost_rub|money }}</td><td>{{ m.route or '—' }}</td><td>{{ m.margin_pct if m.margin_pct is not none else '—' }}{{ '%' if m.margin_pct is not none }}</td><td>{{ m.score }}</td><td class="muted">{{ m.why }}</td>
+    {% if is_admin %}<td><form method="post" class="row"><input type="hidden" name="slug" value="{{ m.slug }}"><button name="action" value="assort_pin" title="держать всегда">📌</button><button name="action" value="assort_ban" title="никогда не брать">🚫</button></form></td>{% endif %}</tr>
+  {% else %}<tr><td colspan="9" class="muted">Ещё не подбиралось — нажмите «Подобрать сейчас»</td></tr>{% endfor %}</table></div>
+  {% if is_admin %}<form method="post" class="row" style="margin-top:10px">
+    <label>Автоподбор <input type="checkbox" name="enabled" {{ 'checked' if ac.enabled }}></label>
+    <label>Лотов не больше <input type="number" name="max_lots" value="{{ ac.max_lots }}" min="0" style="width:60px"></label>
+    <label>Дороже — только вручную, ₽ <input type="number" name="max_cost_rub" value="{{ ac.max_cost_rub }}" style="width:90px"></label>
+    <label>Маржа от, % <input type="number" step="0.5" name="min_margin_pct" value="{{ ac.min_margin_pct }}" style="width:60px"></label>
+    <button name="action" value="assort_save">💾</button>
+    <button class="primary" name="action" value="assort_scan">Подобрать сейчас</button></form>
+  <div class="help">Закреплено: {{ (ac.pinned or [])|join(', ') or 'нет' }} · в запрете: {{ (ac.banned or [])|join(', ') or 'нет' }}{% if ac.pinned or ac.banned %} <form method="post" style="display:inline"><button name="action" value="assort_clear">сбросить</button></form>{% endif %}</div>
+  <form method="post" class="row" style="margin-top:10px"><b>Добавить NFT вручную</b> (в том числе дорогие):
+    <input type="text" name="collection" placeholder="Plush Pepe или plushpepe" list="nftcolls" style="max-width:220px">
+    <datalist id="nftcolls">{% for c in svc.nft.known_collections().values() %}<option value="{{ c.slug }}">{{ c.title }}</option>{% endfor %}</datalist>
+    <input type="number" name="position" placeholder="место (3)" style="width:90px">
+    <button name="action" value="add_nft">Добавить</button></form>{% endif %}
+</div>
+{% endif %}
+
+{% if is_admin %}
+<form method="post"><div class="card">
+  <h2>3 · Настройки</h2>
+  <div class="cols">
+    <div><label class="f">api_id</label><input type="text" name="api_id" value="{{ g.api_id or '' }}"></div>
+    <div><label class="f">api_hash</label><input type="password" name="api_hash" placeholder="{{ '•••••••• (задан)' if secret('gifts','api_hash') else '' }}"></div>
+  </div>
+  <label class="f">golden_key FunPay</label><input type="password" name="golden_key" placeholder="{{ '•••••••• (взят у StarsBot)' if 'golden_key' in inherited else ('•••••••• (задан)' if secret('funpay','golden_key') else 'тот же аккаунт FunPay, что у StarsBot') }}">
+  <div class="help">Пусто — берётся у StarsBot (тот же аккаунт FunPay). Уведомления в Telegram — тоже от StarsBot, с пометкой «TG Gift».</div>
+  <div class="cols">
+    <div><label class="f">Подпись к подарку</label><input type="text" name="gift_message" value="{{ g.gift_message }}" maxlength="120"><div class="help">{order_id}, {buyer}. Без ссылок и контактов — правила FunPay.</div></div>
+    <div><label class="f">&nbsp;</label><label><input type="checkbox" name="hide" {{ 'checked' if g.hide_sender_name }}> Скрыть имя отправителя</label></div>
+  </div>
+  <div class="cols">
+    <div><label class="f">Мин. маржа, %</label><input type="number" step="0.5" name="min_margin_pct" value="{{ sc.min_margin_pct }}"></div>
+    <div><label class="f">Себестоимость звезды до первой поставки, ₽</label><input type="number" step="0.01" name="rub_per_star" value="{{ sc.rub_per_star }}"></div>
+  </div>
+  <div class="cols">
+    <div><label><input type="checkbox" name="rtba_on" {{ 'checked' if rtba.enabled }}> Автоцена</label> · место по умолчанию <input type="number" name="target_position" value="{{ rtba.target_position }}" min="1" style="width:60px"></div>
+    <div><label><input type="checkbox" name="auto_create" {{ 'checked' if sc.auto_create_lots }}> Выставлять недостающие лоты при запуске</label></div>
+  </div>
+  <div class="cols">
+    <div><label><input type="checkbox" name="supply_on" {{ 'checked' if (sc.supply or {}).enabled }}> Просить звёзды у StarsBot</label>
+      <div class="row">когда свободно меньше <input type="number" name="supply_min" value="{{ (sc.supply or {}).min_stars }}" style="width:90px"> ⭐, просить <input type="number" name="supply_amount" value="{{ (sc.supply or {}).amount }}" style="width:90px"> ⭐</div></div>
+    <div><label class="f">Предупреждать, когда звёзд меньше</label><input type="number" name="low_stars_alert" value="{{ g.low_stars_alert }}"></div>
+  </div>
+  <div class="cols">
+    <div><label class="f">Пилот: первые N заказов — после одобрения</label><input type="number" name="pilot_orders" value="{{ g.pilot_orders }}"></div>
+    <div><label class="f">Заказ дороже, ⭐ — с одобрения (0 — без лимита)</label><input type="number" name="max_order_stars" value="{{ g.max_order_stars }}"></div>
+  </div>
+  <button class="primary" name="action" value="save_settings" style="margin-top:10px">Сохранить</button>
+</div></form>
+{% endif %}
+
+<div class="cols">
+<div class="card"><h2>Каталог Telegram</h2><div class="help">Обычные подарки, которые можно отправить с аккаунта (обновляется раз в 2 минуты, пока бот запущен).</div>
+  <table><tr><th></th><th>id</th><th>⭐</th><th>Статус</th></tr>{% for c in cat %}<tr><td>{{ c.emoji or '🎁' }} {{ c.title }}</td><td>{{ c.id }}</td><td>{{ c.stars }}</td><td>{{ 'можно' if c.usable else ('распродан' if c.sold_out else 'лимитированный' if c.limited else 'нужен Premium') }}</td></tr>{% else %}<tr><td colspan="4" class="muted">Каталог ещё не загружен — войдите в аккаунт и запустите бота</td></tr>{% endfor %}</table></div>
+<div class="card"><h2>Последние отправки</h2><table><tr><th>Заказ</th><th>Кому</th><th>⭐</th><th>Статус</th></tr>
+  {% for s_ in sends %}<tr><td><a href="/orders/{{ s_.order_id }}">{{ s_.order_id }}</a></td><td>@{{ s_.tg_username or '?' }}</td><td>{{ s_.stars }}</td><td class="{{ 'c-green' if s_.state == 'sent' else 'c-red' }}">{{ s_.state }}</td></tr>{% else %}<tr><td colspan="4" class="muted">Пока пусто</td></tr>{% endfor %}</table></div>
+</div>
+{% endblock %}

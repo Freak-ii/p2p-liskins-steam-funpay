@@ -1,6 +1,7 @@
 {% extends "base.html" %}{% block title %}Подарки{% endblock %}
 {% block body %}
 <h1>Подарки</h1>
+{% if gifts_moved %}<div class="card" style="border-color:var(--blue)"><b>Раздел «Звёзды → Подарком» теперь ведёт TG Gift</b> (панель TG Gift → «Подарки и лоты»): у него свой Telegram-аккаунт со звёздами от StarsBot и подарки через Fragment. Здесь настройки старой выдачи подарками только для справки — StarsBot заказы «Подарком» больше не берёт. Вернуть как было: <code>gifts.moved_to_tggift: false</code> в config.yaml.</div>{% endif %}
 <p class="muted">Заказы раздела FunPay «Звёзды → <b>Подарком</b>»: покупатель оплачивает номинал и присылает @username, бот находит аккаунт через ваш Telegram-аккаунт, подбирает подарки и отправляет их со звёздного баланса аккаунта. Покупатель конвертирует подарки в звёзды (🧸15 → 13 ⭐, 🌹25 → 21, 🎂50 → 43, 🏆100 → 85). Заказы «По username» по-прежнему идут через Fragment.</p>
 
 <div class="grid">

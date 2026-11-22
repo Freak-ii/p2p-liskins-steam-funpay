@@ -328,3 +328,14 @@ def test_restock_and_key_bridge_recommendations():
         assert "«Мост ключей» и покупку ключей" in recs["Пополнить склад ключей MannBot"]["why"]
         assert "Проверить приём ключей MannBot" not in recs
     asyncio.run(go())
+
+
+def test_ack_alerts_accepts_every_center_bot():
+    """Сводка предлагает «Разобрать тревоги StarsBot» — проверка аргументов не должна это отклонять."""
+    from center.coordinator import TOOLS, ToolError
+    check = TOOLS["ack_alerts"][2]
+    for bot in ("lisbot", "mannbot", "starsbot", "tggift", "shopbot"):
+        assert check({"bot": bot}) == {"bot": bot}
+    import pytest
+    with pytest.raises(ToolError):
+        check({"bot": "nope"})

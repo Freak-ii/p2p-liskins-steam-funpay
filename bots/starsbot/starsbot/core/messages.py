@@ -245,6 +245,93 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "Здравствуйте! 👋 Telegram Premium ({premium_terms}) выдаётся автоматически подарком через Fragment, "
             "без входа в аккаунт: оплатите лот и пришлите username получателя — обычно 1–5 минут."
         ),
+        # ---- бот TG Gift: продажа подарков Telegram (раздел FunPay «Подарки»). {gift} — подарок, {qty} — сколько штук
+        "greeting_need_username_shop": (
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
+            "🎁 Товар: {gift} × {qty} — подарок Telegram\n"
+            "🤖 Выдача автоматическая: бот отправит подарок на ваш аккаунт, обычно за 1–5 минут.\n\n"
+            "👉 Пришлите в этот чат username получателя в Telegram, например: @username\n{last_hint}"
+            "Найти его: Telegram → Настройки → «Имя пользователя». Можно указать аккаунт друга.\n\n"
+            "ℹ️ Username нужен только для отправки подарка: мы не пишем вам в Telegram, всё общение — здесь, "
+            "в чате FunPay. Пожалуйста, подтверждайте заказ только после того, как подарок придёт."
+        ),
+        "greeting_with_username_shop": (
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
+            "🎁 {gift} × {qty} → @{username}{name_part}\n"
+            "🤖 Отправляю автоматически, обычно 1–5 минут. Если username с ошибкой — сразу напишите правильный.\n"
+            "Пожалуйста, подтверждайте заказ только после того, как подарок придёт."
+        ),
+        "username_ok_shop": "✅ Аккаунт найден: @{username}{name_part}. Отправляю {gift} × {qty}…",
+        "delivered_shop": (
+            "🎉 Готово! {gift} × {qty} отправлен на @{username} (заказ #{order_id}).\n"
+            "Подарок виден в профиле получателя → «Подарки». Его можно оставить в профиле или конвертировать в звёзды.\n\n"
+            "Огромное спасибо за покупку, {buyer} ❤️\n"
+            "Пожалуйста, подтвердите выполнение заказа кнопкой «Подтвердить выполнение заказа» на странице "
+            "заказа — и, если не сложно, оставьте отзыв. Это очень помогает нам!"
+        ),
+        "after_delivery_shop": (
+            "Подарок по заказу #{order_id} уже отправлен на @{username} ✅ Он в профиле → «Подарки». "
+            "Если что-то не так — напишите, продавец ответит здесь."
+        ),
+        "reminder_shop": (
+            "👋 {buyer}, напоминаю: чтобы получить {gift} по заказу #{order_id}, пришлите username получателя в "
+            "Telegram (например, @username)."
+        ),
+        "unknown_shop": (
+            "Не совсем понял сообщение 🙂 Чтобы отправить подарок по заказу #{order_id}, нужен username получателя "
+            "в Telegram (например, @username). Если есть вопрос — напишите «!продавец», и продавец ответит."
+        ),
+        "help_shop": (
+            "Команды: «!статус» — состояние заказа, «!продавец» — позвать продавца. Чтобы получить подарок, просто "
+            "пришлите username получателя в Telegram (например, @username)."
+        ),
+        "delay_shop": (
+            "⚠️ {buyer}, отправка подарка по заказу #{order_id} ненадолго задерживается по техническим причинам. "
+            "Продавец уже уведомлён и отправит подарок в ближайшее время — или оформит возврат, если вы предпочтёте."
+        ),
+        "awaiting_approval_shop": (
+            "🔎 Заказ #{order_id} проходит стандартную проверку — обычно это несколько минут. Подарок будет отправлен "
+            "сразу после неё."
+        ),
+        "change_username_late_shop": (
+            "Подарок по заказу #{order_id} уже отправлен на @{username} — изменить получателя после отправки нельзя. "
+            "Если это ошибка, напишите «!продавец»."
+        ),
+        "faq_gift_shop": (
+            "Это обычный подарок Telegram: он появится в профиле получателя → «Подарки». Его можно оставить в профиле, "
+            "скрыть или конвертировать в звёзды. Вход в аккаунт не нужен — только username."
+        ),
+        "faq_where_shop": "Подарок виден в Telegram: профиль получателя → вкладка «Подарки».",
+        "faq_safe_shop": (
+            "Это безопасно: подарок отправляется штатно, через Telegram, на ваш username. Никакие коды, пароли и вход "
+            "в аккаунт не нужны. Никому их не сообщайте!"
+        ),
+        "faq_time_shop": "Обычно подарок приходит за 1–5 минут после оплаты и получения username. {status_hint}",
+        "faq_premium_shop": "Здесь продаются подарки Telegram. Telegram Premium в этом лоте не продаётся.",
+        "faq_not_arrived_shop": (
+            "Понимаю, проверяю 🙏 {status_hint}\n"
+            "Подарок виден в профиле @{username} → «Подарки». Я уже сообщил продавцу — если подарка не будет, "
+            "он разберётся в этом чате."
+        ),
+        "faq_not_arrived_done_shop": (
+            "Подарок по заказу #{order_id} уже отправлен ✅ {delivered_at} — {gift} × {qty} на @{username}.\n"
+            "Проверьте профиль именно этого аккаунта → «Подарки» (если подарок скрыт — в настройках профиля). "
+            "Если его всё равно нет — напишите здесь, продавец уже видит ваше сообщение и проверит отправку."
+        ),
+        "faq_refund_shop": (
+            "Передал продавцу вашу просьбу по заказу #{order_id}, он ответит в этом чате. Если подарок ещё не "
+            "отправлен, возврат оформляется через FunPay. Пожалуйста, не подтверждайте заказ, пока вопрос не решён."
+        ),
+        "presale_shop": (
+            "Здравствуйте! 👋 Подарки Telegram выдаются автоматически: выберите лот с нужным подарком "
+            "({denominations}), оплатите и пришлите @username получателя — подарок придёт за 1–5 минут. "
+            "Если остались вопросы — напишите, продавец ответит здесь."
+        ),
+        "presale_hello_shop": (
+            "Здравствуйте! 👋 Я на связи, отвечаю сразу, 24/7. Подарки Telegram ({denominations}) выдаются "
+            "автоматически: оплатите лот и пришлите @username получателя — подарок придёт за 1–5 минут."
+        ),
+        "review_reply_shop": "Спасибо за отзыв, {buyer}! Рады, что подарок дошёл быстро. Будем рады видеть вас снова 🎁",
     },
     "en": {
         "greeting_need_username": (
@@ -367,6 +454,29 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "review_reply_premium": "Thank you for the review, {buyer}! Glad Premium arrived quickly. See you again 🙌",
         "presale_premium": ("Hi! 👋 Telegram Premium ({premium_terms}) is gifted automatically via Fragment, no login "
                             "needed: pay for the offer and send the recipient's username — usually 1–5 minutes."),
+        "greeting_need_username_shop": ("Hi {buyer}! {returning}Thanks for paying for order #{order_id} 🎉\n"
+                                        "🎁 {gift} × {qty} — a Telegram gift. Delivery is automatic, 1–5 minutes.\n"
+                                        "👉 Send the recipient's Telegram username here, e.g. @username\n{last_hint}"
+                                        "Please confirm the order only after the gift arrives."),
+        "greeting_with_username_shop": ("Hi {buyer}! {returning}Thanks for paying for order #{order_id} 🎉\n"
+                                        "🎁 {gift} × {qty} → @{username}{name_part}. Sending automatically.\n"
+                                        "Please confirm the order only after the gift arrives."),
+        "username_ok_shop": "✅ Account found: @{username}{name_part}. Sending {gift} × {qty}…",
+        "delivered_shop": ("🎉 Done! {gift} × {qty} was sent to @{username} (order #{order_id}).\n"
+                           "It is in the recipient's profile → Gifts.\nThank you, {buyer}! Please confirm the order "
+                           "on its page and leave a review if you can."),
+        "after_delivery_shop": "The gift for #{order_id} was sent to @{username} ✅ See profile → Gifts.",
+        "reminder_shop": "👋 {buyer}, to get {gift} for order #{order_id}, please send the recipient's Telegram username.",
+        "unknown_shop": ("To send the gift for order #{order_id} I need the recipient's Telegram username (e.g. "
+                         "@username). Questions — type «!seller»."),
+        "faq_gift_shop": "It's a regular Telegram gift: it appears in the recipient's profile → Gifts.",
+        "faq_not_arrived_done_shop": ("The gift for #{order_id} was sent ✅ {delivered_at} — {gift} × {qty} to "
+                                      "@{username}. Check that account's profile → Gifts."),
+        "presale_shop": ("Hi! 👋 Telegram gifts ({denominations}) are delivered automatically: pay for the offer and "
+                         "send the recipient's @username — the gift arrives in 1–5 minutes."),
+        "presale_hello_shop": ("Hi! 👋 I'm here 24/7. Telegram gifts ({denominations}) are delivered automatically "
+                               "by username in 1–5 minutes."),
+        "review_reply_shop": "Thank you for the review, {buyer}! Glad the gift arrived quickly 🎁",
     },
 }
 
@@ -414,7 +524,7 @@ TEMPLATE_VARS = {
     "reason": "аккаунт не найден", "attempt": 1, "max_attempts": 3, "status_text": "ждём username",
     "denominations": "50, 75, 100", "status_hint": "", "returning": "Рады видеть вас снова 🙌 ",
     "last_hint": "Прошлый заказ вы получали на @durov — если аккаунт тот же, просто пришлите его ещё раз.\n",
-    "gifts": "2×🏆100⭐", "value": 170, "delivered_at": "20.11 05:20", "ref_part": " (платёж Fragment Ref#AbC123)", "months": 3, "months_text": "3 месяца",
+    "gifts": "2×🏆100⭐", "value": 170, "gift": "🧸 Мишка", "qty": 1, "delivered_at": "20.11 05:20", "ref_part": " (платёж Fragment Ref#AbC123)", "months": 3, "months_text": "3 месяца",
     "premium_terms": "3, 6, 12 мес.",
 }
 

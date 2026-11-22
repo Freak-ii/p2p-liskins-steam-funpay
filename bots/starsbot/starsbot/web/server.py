@@ -24,7 +24,7 @@ from yarl import URL
 
 from starsbot.analytics.analytics import fmt_dur
 from starsbot.app import schema
-from starsbot.config import DENOMINATIONS
+from starsbot.config import CUSTOM_DENOMINATIONS, DENOMINATIONS
 from starsbot.core import messages as M
 from starsbot.core.models import OrderStatus as S
 from starsbot.web import charts, mdlite
@@ -41,7 +41,7 @@ ROLE_TITLES = {"admin": "администратор", "operator": "операт�
 ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 CASHFLOW_KINDS = {"topup": "Пополнение кошелька TON", "withdraw_funpay": "Вывод с FunPay",
                   "withdraw_ton": "Вывод TON с кошелька", "withdraw_ozon": "Выплата с Ozon", "withdraw_ggsel": "Вывод с GGSEL", "expense": "Расход (прочее)", "adjust": "Корректировка TON"}
-COOKIE = "sb_token"
+COOKIE_NAME = "sb_token"
 HEALTH_NAMES = {"funpay_poll": "FunPay", "ton_watch": "TON-транзакции", "wallet": "Баланс",
                 "fragment_session": "Fragment"}
 # сегменты мини-CRM: (код, название, цвет, SQL-условие по таблице customers)
@@ -96,6 +96,9 @@ def _deep_merge(a: dict, b: dict) -> dict:
 
 def make_app(sup, log_handler=None) -> web.Application:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(TPL_DIR), autoescape=True)
+    shop = getattr(sup, "profile", "stars") == "giftshop"
+    # у TG Gift своя cookie: оба бота на 127.0.0.1, а cookie браузер не различает по портам
+    COOKIE = "tg_token" if shop else COOKIE_NAME
     env.filters.update(ts=_ts, dur=fmt_dur, st=lambda s: M.status_text("ru", s),
                        jsonload=lambda s: json.loads(s or "{}"), tojson=lambda o: json.dumps(o, ensure_ascii=False))
     def _fnum(v):
@@ -170,8 +173,12 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("can_op", bool(role) and ROLE_LEVEL[role] >= 1)
         ctx.setdefault("is_admin", role == "admin")
         ctx.setdefault("ozon_on", "ozon" in sup.engine.channels)
+        ctx.setdefault("gifts_moved", bool(getattr(sup.engine.gifts, "moved", False)))
         ctx.setdefault("ggsel_on", "ggsel" in sup.engine.channels)
-        ctx.setdefault("market_on", bool({"ozon", "ggsel"} & set(sup.engine.channels)))
+        ctx.setdefault("avito_on", "avito" in sup.engine.channels)
+        ctx.setdefault("wb_on", "wb" in sup.engine.channels)
+        ctx.setdefault("market_on", bool({"ozon", "ggsel", "avito", "wb"} & set(sup.engine.channels)))
+        ctx.setdefault("shop", shop)
         return web.Response(text=env.get_template(name).render(**ctx), content_type="text/html")
 
     @web.middleware
@@ -201,7 +208,8 @@ def make_app(sup, log_handler=None) -> web.Application:
             role = role_for(given)
             if role:
                 sup.db.audit(role, "login", "", "ok")
-                target = "/setup" if role == "admin" and not sup.configured and not sup.status()["demo"] else "/"
+                target = ("/shop" if shop else "/setup") if role == "admin" and not sup.configured and \
+                    not sup.status()["demo"] else "/"
                 resp = web.HTTPFound(target)
                 resp.set_cookie(COOKIE, given, httponly=True, samesite="Strict", max_age=90 * 86400)
                 raise resp
@@ -214,7 +222,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         raise resp
 
     async def ping(request: web.Request):
-        return web.json_response({"app": "starsbot", "ok": True})
+        return web.json_response({"app": "starsbot", "profile": "giftshop" if shop else "stars", "ok": True})
 
     def back(request: web.Request, msg: str, default: str = "/") -> web.HTTPFound:
         ref = request.headers.get("Referer")
@@ -223,6 +231,8 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     # ------------------------------------------------------------------ дашборд и CRM
     async def dashboard(request: web.Request):
+        if shop:
+            return await shop_dashboard(request)
         if not sup.configured and not sup.status()["demo"] and not sup.db.scalar("SELECT COUNT(*) FROM orders") \
                 and request[ROLE] == "admin":
             raise web.HTTPFound("/setup")
@@ -486,7 +496,7 @@ def make_app(sup, log_handler=None) -> web.Application:
     async def api_calc(request: web.Request):
         data = await request.json()
         prices = {int(k): float(v) for k, v in (data.get("prices") or {}).items() if _num(v, None)}
-        channel = data.get("channel") if data.get("channel") in ("ozon", "ggsel") else "funpay"
+        channel = data.get("channel") if data.get("channel") in ("ozon", "ggsel", "avito", "wb") else "funpay"
         return web.json_response({"rows": [f.as_dict() for f in sup.econ.calculator(prices, channel=channel)]})
 
     # ------------------------------------------------------------------ Ozon
@@ -498,8 +508,10 @@ def make_app(sup, log_handler=None) -> web.Application:
         codes = db.q("SELECT c.*, o.status, o.tg_username, o.price FROM ozon_codes c LEFT JOIN orders o ON "
                      "o.order_id=c.order_id ORDER BY c.created_at DESC LIMIT 100")
         attention = db.q("SELECT * FROM ozon_postings WHERE codes_state IN ('pending','failed') ORDER BY first_seen")
+        calc = sup.econ.calculator(channel="ozon")
+        floors = {f.stars: sup.econ.min_price(f.stars, "ozon") for f in calc}
         return render("ozon.html", request, ch=ch, oz=sup.cfg.ozon, s=ch.summary(), codes=codes, attention=attention,
-                      calc=sup.econ.calculator(channel="ozon"))
+                      calc=calc, floors=floors)
 
     @friendly("/ozon")
     async def ozon_action(request: web.Request):
@@ -696,6 +708,129 @@ def make_app(sup, log_handler=None) -> web.Application:
             msg = "?"
         audit(request, f"premium.{act}", "", msg)
         raise web.HTTPFound(URL("/premium").with_query(msg=msg))
+    # ------------------------------------------------------------------ Авито и Wildberries
+    def _market_products(f, section: str, id_field: str, cast) -> list[dict]:
+        cur = (sup.cfg.get(section) or {}).get("products") or []
+        out = []
+        for d in sorted({int(x) for x in DENOMINATIONS} | {int(p.get("stars") or 0) for p in cur if p.get("stars")}):
+            ident = str(f.get(f"id_{d}", "")).strip()
+            price = _num(f.get(f"price_{d}", ""), 0) or 0
+            if not ident and not price and d not in {int(p.get("stars") or 0) for p in cur}:
+                continue
+            out.append({"stars": d, id_field: cast(ident) if ident else (0 if cast is int else ""),
+                        "price": round(float(price), 2)})
+        extra = str(f.get("extra_stars", "")).strip()
+        if extra.isdigit() and int(extra) >= 50 and int(extra) not in {p["stars"] for p in out}:
+            ident = str(f.get("extra_id", "")).strip()
+            out.append({"stars": int(extra), id_field: cast(ident) if ident else (0 if cast is int else ""),
+                        "price": round(float(_num(f.get("extra_price", ""), 0) or 0), 2)})
+        return out
+
+    async def avito_page(request: web.Request):
+        ch = sup.engine.channels.get("avito")
+        av = sup.cfg.get("avito") or {}
+        if ch is None:
+            return render("avito.html", request, ch=None, av=av)
+        orders = sup.db.q("SELECT * FROM orders WHERE channel='avito' ORDER BY created_at DESC LIMIT 50")
+        chats = sup.db.q("SELECT * FROM avito_chats ORDER BY updated_at DESC LIMIT 30")
+        summ = ch.summary()
+        prices = {int(p["stars"]): float(p.get("live") or p.get("target") or 0) for p in summ["prices"]}
+        return render("avito.html", request, ch=ch, av=av, s=summ, orders=orders, chats=chats,
+                      calc=sup.econ.calculator({k: v for k, v in prices.items() if v}, channel="avito"))
+
+    @friendly("/avito")
+    async def avito_action(request: web.Request):
+        need(request, "admin")
+        ch = sup.engine.channels.get("avito")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        if act == "products":
+            def to_int(x: str) -> int:
+                digits = "".join(c for c in x if c.isdigit())   # можно вставить ссылку на объявление
+                return int(digits[-12:]) if digits else 0
+            sup.save({"avito": {"products": _market_products(f, "avito", "item_id", to_int)}})
+            msg = "Объявления Авито сохранены"
+        elif act == "pricing":
+            mode = "margin" if f.get("price_mode") == "margin" else "fixed"
+            sup.save({"avito": {"price_mode": mode,
+                                "min_margin_pct": max(0.0, float(_num(f.get("min_margin_pct"), 3) or 3)),
+                                "target_margin_pct": max(0.0, float(_num(f.get("target_margin_pct"), 8) or 8)),
+                                "price_sync": bool(f.get("price_sync"))}})
+            msg = "Правила цен Авито сохранены"
+        elif ch is None:
+            msg = "Сначала включите Авито в настройках"
+        elif act == "poll":
+            try:
+                await ch.poll()
+                msg = "Чаты Авито проверены" + (f": {ch.last_error}" if ch.last_error else "")
+            except Exception as e:  # noqa: BLE001
+                msg = f"Авито: {e}"
+        elif act == "prices":
+            try:
+                await ch.price_sync()
+                msg = "Цены объявлений пересчитаны"
+            except Exception as e:  # noqa: BLE001
+                msg = f"Авито: {e}"
+        elif act == "test":
+            try:
+                me = await ch.client.me()
+                chats = await ch.client.list_chats(limit=5)
+                msg = f"API Авито отвечает: профиль {me}, чатов в выборке — {len(chats)}"
+            except Exception as e:  # noqa: BLE001
+                msg = f"API Авито: {e}"
+        else:
+            msg = "?"
+        if act in ("products", "pricing") and sup.restart_required:
+            msg += ". Перезапустите бота, чтобы применить"
+        audit(request, f"avito.{act}", "", msg)
+        raise web.HTTPFound(URL("/avito").with_query(msg=msg))
+
+    async def wb_page(request: web.Request):
+        ch = sup.engine.channels.get("wb")
+        wb = sup.cfg.get("wb") or {}
+        if ch is None:
+            return render("wb.html", request, ch=None, wb=wb)
+        codes = sup.db.q("SELECT c.*, o.status, o.tg_username FROM wb_codes c LEFT JOIN orders o ON "
+                         "o.order_id=c.order_id WHERE c.state<>'pool' ORDER BY c.updated_at DESC LIMIT 50")
+        summ = ch.summary()
+        return render("wb.html", request, ch=ch, wb=wb, s=summ, codes=codes)
+
+    @friendly("/wb")
+    async def wb_action(request: web.Request):
+        need(request, "admin")
+        ch = sup.engine.channels.get("wb")
+        f = await request.post()
+        act = str(f.get("action", ""))
+        if act == "products":
+            sup.save({"wb": {"products": _market_products(f, "wb", "nm_id", str)}})
+            msg = "Товары Wildberries сохранены"
+        elif ch is None:
+            msg = "Сначала включите Wildberries в настройках"
+        elif act == "issue":
+            stars, count = int(_num(f.get("stars"), 0) or 0), int(_num(f.get("count"), 0) or 0)
+            if stars < 50 or count < 1:
+                msg = "Укажите номинал и количество кодов"
+            else:
+                batch, codes = ch.issue(stars, count)
+                msg = f"Выпущено {len(codes)} кодов на {stars} ⭐ (пачка {batch}). Скачайте CSV и загрузите в кабинет WB"
+        elif act == "void":
+            n = ch.void(batch=str(f.get("batch", "")), code=str(f.get("code", "")))
+            msg = f"Аннулировано кодов: {n}"
+        else:
+            msg = "?"
+        audit(request, f"wb.{act}", str(f.get("batch", "")), msg)
+        raise web.HTTPFound(URL("/wb").with_query(msg=msg))
+
+    async def wb_export(request: web.Request):
+        need(request, "admin")
+        ch = sup.engine.channels.get("wb")
+        if ch is None:
+            raise web.HTTPFound("/wb")
+        batch = request.query.get("batch", "")
+        audit(request, "wb.export", batch, "")
+        name = f"wb-codes-{batch or 'all'}.csv"
+        return web.Response(body=("\ufeff" + ch.export_csv(batch)).encode("utf-8"), content_type="text/csv",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     async def analytics_page(request: web.Request):
         a = sup.analytics
@@ -749,12 +884,22 @@ def make_app(sup, log_handler=None) -> web.Application:
 
     async def api_status(request: web.Request):
         s = sup.analytics.summary(1)
+        if shop:
+            g = sup.engine.gifts
+            st = sup.db.kv_get("tg_stars") or {}
+            return web.json_response({**sup.status(), "summary": s, "role": request[ROLE], "profile": "giftshop",
+                                      "gifts": {"account": g.account, "balance": st.get("balance"),
+                                                "free": g.capacity(st.get("balance")), "supply": g.supply_status(),
+                                                "lots_on_sale": sum(1 for l in g.lots if l.get("offer_id") and
+                                                                    l.get("sell", True))}})
         return web.json_response({**sup.status(), "summary": s, "capacity": sup.econ.wallet_capacity(),
                                   "rate": sup.econ.effective_rate()[0], "role": request[ROLE]})
 
     async def api_health(request: web.Request):
         h = sup.engine.health() if sup.state == "running" else {"ok": sup.state != "error", "checks": []}
-        return web.json_response({**h, "state": sup.state}, status=200 if h["ok"] else 503)
+        wd = getattr(sup, "watchdog", None)
+        return web.json_response({**h, "state": sup.state, "loop": wd.status() if wd else None},
+                                 status=200 if h["ok"] else 503)
 
     async def stream(request: web.Request):
         """SSE: события БД (заказы, алерты, кошелёк, Fragment) + новые строки журнала."""
@@ -803,14 +948,19 @@ def make_app(sup, log_handler=None) -> web.Application:
     # ------------------------------------------------------------------ мастер настройки
     async def setup(request: web.Request):
         need(request, "admin")
+        if shop:
+            raise web.HTTPFound("/shop")
         cfg = sup.cfg
         if request.method == "POST":
             f = await request.post()
             lots = []
             pos = {int(l.get("stars") or 0): int(l.get("position") or 0) for l in (cfg.funpay.lots or [])}
-            for d in DENOMINATIONS:
+            for d in DENOMINATIONS + CUSTOM_DENOMINATIONS:
                 oid = str(f.get(f"lot_{d}", "")).strip()
-                lots.append({"stars": d, "offer_id": int(oid) if oid.isdigit() else 0, "position": pos.get(d, 0)})
+                lot = {"stars": d, "offer_id": int(oid) if oid.isdigit() else 0, "position": pos.get(d, 0)}
+                if d in CUSTOM_DENOMINATIONS:
+                    lot["custom"] = True
+                lots.append(lot)
             chat_ids = [int(x) for x in str(f.get("tg_chat_ids", "")).replace(",", " ").split()
                         if x.lstrip("-").isdigit()]
             upd = {
@@ -832,7 +982,7 @@ def make_app(sup, log_handler=None) -> web.Application:
                 raise web.HTTPFound("/?msg=Настройки сохранены. Нажмите «Запустить бота»")
             raise web.HTTPFound(URL("/setup").with_query(msg="Сохранено. Осталось: " + "; ".join(sup.problems)))
         lots = {int(l.get("stars") or 0): l.get("offer_id") for l in (cfg.funpay.lots or [])}
-        return render("setup.html", request, cfg=cfg, lots=lots, denoms=DENOMINATIONS, problems=sup.problems,
+        return render("setup.html", request, cfg=cfg, lots=lots, denoms=DENOMINATIONS + CUSTOM_DENOMINATIONS, problems=sup.problems,
                       secret=lambda s, k: sup.secret_is_set(s, k))
 
     async def api_test(request: web.Request):
@@ -971,7 +1121,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         q = {"msg": msg}
         if login_step:
             q["login"] = login_step
-        raise web.HTTPFound(URL("/gifts").with_query(**q))
+        raise web.HTTPFound(URL("/shop" if shop else "/gifts").with_query(**q))
 
     # ------------------------------------------------------------------ Лоты
     async def funpay_page(request: web.Request):
@@ -1312,6 +1462,10 @@ def make_app(sup, log_handler=None) -> web.Application:
         lines = [l for l in (log_handler.lines if log_handler else []) if l["n"] > after]
         return web.json_response({"lines": lines[-500:], "state": sup.status()})
 
+    from starsbot.giftshop.web import shop_routes
+    shop_dashboard, extra_routes = shop_routes(sup, render=render, friendly=friendly, need=need, audit=audit,
+                                               num_in=_num_in)
+
     app = web.Application(middlewares=[auth], client_max_size=2 * 1024 * 1024)
     from starsbot.supply_api import install as install_supply
     install_supply(app, sup)                        # контракт поставщика для ShopBot
@@ -1333,12 +1487,15 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.post("/api/preview", preview_message), web.get("/logs", logs), web.get("/api/logs", api_logs),
         web.get("/ozon", ozon_page), web.post("/ozon", ozon_action),
         web.get("/ggsel", ggsel_page), web.post("/ggsel", ggsel_action),
+        web.get("/avito", avito_page), web.post("/avito", avito_action),
+        web.get("/wb", wb_page), web.post("/wb", wb_action), web.get("/wb/codes.csv", wb_export),
         web.get("/gifts", gifts_page), web.post("/gifts", gifts_action),
         web.get("/premium", premium_page), web.post("/premium", premium_action),
         web.get("/funpay", funpay_page), web.post("/funpay", funpay_action),
         web.get("/support/{name}", support_download),
         web.get("/crypto", crypto_page), web.post("/crypto", crypto_action),
         web.post("/api/wallet/addresses", api_wallet_addresses),
+        *extra_routes,
     ])
     return app
 

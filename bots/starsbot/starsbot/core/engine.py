@@ -62,6 +62,7 @@ class Engine:
         self.econ = None                       # starsbot.economics.Economics (подключает Supervisor)
         self.channels: dict[str, Any] = {}     # другие площадки продаж, например «ozon» (starsbot.ozon.channel)
         self.gifts = None                      # starsbot.gifts.service.GiftService — выдача подарками Telegram
+        self.nft = None                        # starsbot.nft_supply.NftSupplyManager — NFT-подарки для TG Gift
         self.premium = None                    # starsbot.premium.service.PremiumService — продажа Telegram Premium
         self.treasury = None                   # starsbot.treasury.service.Treasury — балансы и пополнение кошелька
         self.risk = RiskEngine(cfg.risk, db)
@@ -69,6 +70,7 @@ class Engine:
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self._queued: set[str] = set()
         self._chat_last_sent: dict[str, float] = {}
+        self._chat_last_text: dict[str, tuple[str, float]] = {}   # чат → (последний автоответ, когда) — против повторов
         self._tasks: list[asyncio.Task] = []
         self._purchase_lock = asyncio.Lock()
         self._order_re = re.compile(cfg.funpay.order_match_regex)
@@ -126,21 +128,41 @@ class Engine:
         return {"order_id": o["order_id"], "buyer": o["buyer_username"], "stars": o["stars"],
                 "gifts": gifts, "value": value, "months": months,
                 "months_text": months_text(months, "en" if en else "ru") if months else "",
+                "gift": self.gift_title(o), "qty": o["quantity"] or 1,
                 "username": o["tg_username"] or "", "name_part": f" ({name})" if name else "",
                 "denominations": ", ".join(str(d) for d in self._denominations()),
                 "returning": returning, "last_hint": last_hint}
+
+    def gift_title(self, o) -> str:
+        """Название подарка заказа (магазин подарков TG Gift); у StarsBot пусто."""
+        return ""
 
     def channel_of(self, o):
         """Канал продаж заказа, если это не FunPay (у FunPay-заказов channel = 'funpay' или пусто)."""
         name = o["channel"] if o is not None and "channel" in o.keys() else None
         return self.channels.get(name) if name and name != "funpay" else None
 
+    def waits_code(self, o) -> bool:
+        """Заказ площадки с кодами активации (Ozon, WB), код которого покупатель ещё не активировал: писать ему
+        некуда, поэтому это не просрочка. У площадок с чатом (Avito) покупателю можно напомнить, как на FunPay."""
+        ch = self.channel_of(o)
+        return ch is not None and not getattr(ch, "buyer_chat", False) and getattr(ch, "code_based", True) \
+            and not o["tg_username"]
+
+    def message_variants(self, o) -> list[str]:
+        """Суффиксы вариантов шаблона по типу заказа: для подарков — «…_gift», для Premium — «…_premium»."""
+        if is_gift(o):
+            return ["_gift"]
+        if is_premium(o):
+            return ["_premium"]
+        return []
+
     async def say(self, o, key: str, **extra: Any) -> None:
         """Отправить шаблонное сообщение в чат заказа (для заказов подарками — вариант «…_gift», если он есть)."""
-        if is_gift(o) and f"{key}_gift" in M.TEMPLATES.get(o["lang"] or "ru", M.TEMPLATES["ru"]):
-            key = f"{key}_gift"
-        elif is_premium(o) and f"{key}_premium" in M.TEMPLATES.get(o["lang"] or "ru", M.TEMPLATES["ru"]):
-            key = f"{key}_premium"
+        for suffix in self.message_variants(o):
+            if f"{key}{suffix}" in M.TEMPLATES.get(o["lang"] or "ru", M.TEMPLATES["ru"]):
+                key = f"{key}{suffix}"
+                break
         ch = self.channel_of(o)
         if ch is not None:
             await ch.say(o, key, {**self._order_vars(o), **extra})
@@ -148,16 +170,23 @@ class Engine:
         await self.say_text(o, M.render(o["lang"] or self.cfg.general.language, key,
                                         **{**self._order_vars(o), **extra}))
 
-    async def say_text(self, o, text: str) -> None:
+    async def say_text(self, o, text: str, dedupe: bool = True) -> None:
         ch = self.channel_of(o)
         if ch is not None:
             await ch.say_text(o, text)
             return
-        await self.send_chat(o["chat_id"], text, o["order_id"])
+        await self.send_chat(o["chat_id"], text, o["order_id"], dedupe=dedupe)
 
-    async def send_chat(self, chat_id: str | None, text: str, order_id: str | None = None) -> None:
+    REPEAT_WINDOW = 15 * 60          # тот же автоответ в тот же чат не чаще раза в 15 минут
+
+    async def send_chat(self, chat_id: str | None, text: str, order_id: str | None = None,
+                        dedupe: bool = True) -> None:
         if not chat_id:
             await self.notifier.notify("WARNING", "no_chat", f"У заказа #{order_id} не найден чат", order_id=order_id)
+            return
+        prev = self._chat_last_text.get(str(chat_id))
+        if dedupe and prev and prev[0] == text and time.time() - prev[1] < self.REPEAT_WINDOW:
+            log.info("чат %s: тот же автоответ уже отправлен %.0f с назад — не повторяем", chat_id, time.time() - prev[1])
             return
         gap = float(self.cfg.deal.message_rate_limit_seconds) - (time.time() - self._chat_last_sent.get(chat_id, 0))
         if gap > 0:
@@ -165,6 +194,7 @@ class Engine:
         try:
             await self.fp.send_message(chat_id, text)
             self._chat_last_sent[chat_id] = time.time()
+            self._chat_last_text[str(chat_id)] = (text, time.time())
             self.db.log_message(chat_id, order_id, "out", text)
         except FunPayError as e:
             await self.notifier.notify("WARNING", "send_message_failed",
@@ -219,6 +249,15 @@ class Engine:
     def is_premium_order(self, description: str) -> bool:
         return self.premium is not None and self.premium.is_order(description)
 
+    def accepts_sale(self, so: FunPayOrder) -> bool:
+        """Брать ли новый оплаченный заказ из списка продаж. Заказы чужого раздела (например, «Подарки» —
+        их ведёт бот TG Gift на том же аккаунте) не трогаем, даже если в описании есть подходящее число звёзд."""
+        rx = self.cfg.funpay.get("foreign_subcategory_regex")
+        if rx and so.subcategory and re.search(rx, so.subcategory):
+            return False
+        return self.is_our_order(so.description) or self.is_gift_order(so.description) \
+            or self.is_premium_order(so.description)
+
     def _greeted(self, oid: str) -> bool:
         return bool(self.db.scalar("SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind IN "
                                    "('greeting_sent','greeting_with_username')", (oid,)))
@@ -230,8 +269,7 @@ class Engine:
         for so in sales:
             row = self.db.get_order(so.order_id)
             if row is None:
-                if so.status != "paid" or not (self.is_our_order(so.description) or self.is_gift_order(so.description)
-                                               or self.is_premium_order(so.description)):
+                if so.status != "paid" or not self.accepts_sale(so):
                     continue
                 if not self.coord.claim_order(so.order_id):
                     log.info("заказ %s уже обрабатывает другой бот (%s)", so.order_id,
@@ -619,24 +657,27 @@ class Engine:
         last = self.db.last_order_for_chat(chat_id)
         if last is not None:
             self.db.log_message(chat_id, last["order_id"], "in", msg.text)
+            st = S(last["status"])
+            since = time.time() - (last["delivered_at"] or 0)
+            faq = M.detect_faq(msg.text)
             replied = True
             if M.is_off_platform_request(msg.text):
                 await self.say(last, "off_platform")
-            elif M.detect_faq(msg.text) and S(last["status"]) in (S.DELIVERED, S.COMPLETED) and \
-                    time.time() - (last["delivered_at"] or 0) < 7 * 86400:
-                await self.answer_faq(last, msg.text)
-            elif S(last["status"]) == S.DELIVERED or (S(last["status"]) == S.COMPLETED and M.is_question(msg.text)
-                                                      and time.time() - (last["delivered_at"] or 0) < 3 * 86400):
-                await self.say(last, "after_delivery")
+            elif st in (S.DELIVERED, S.COMPLETED) and since < 7 * 86400 and \
+                    (faq or (M.is_question(msg.text) and (st == S.DELIVERED or since < 3 * 86400))):
+                await self.reply_after_delivery(last, msg.text, faq)
+            elif st == S.DELIVERED or (st == S.COMPLETED and since < 86400 and not self.presale_topic(msg.text)
+                                       and not self.presale_hello(msg.text)):
+                pass                             # «спасибо», «ок» после выдачи — не отвечаем «звёзды уже отправлены»
             else:
                 replied = False
             await self.notifier.notify("INFO", "chat_message", f"💬 {msg.author_name} (заказ #{last['order_id']}): "
                                        f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
-            if replied or not S(last["status"]).is_final:
+            if replied or not st.is_final:
                 return
             # старый заказ закрыт, а покупатель снова пишет «привет / есть звёзды?» — отвечаем как новому
         text_in = msg.text or ""
-        about_stars = bool(M.STARS_TOPIC_RE.search(text_in))
+        about_stars = self.presale_topic(text_in)
         about_premium = self.premium is not None and self.premium.enabled and \
             bool(re.search(r"(?i)преми?ум|premium", text_in))
         if about_premium and not about_stars:
@@ -644,7 +685,7 @@ class Engine:
                 self.db.log_message(chat_id, None, "in", msg.text)
                 await self.notifier.notify("INFO", "presale_question", f"💬 Вопрос о Premium от {msg.author_name}: "
                                            f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
-            if not self.cfg.funpay.presale_replies or self.paused or self.db.presale_recent(chat_id, 6 * 3600):
+            if not self.cfg.funpay.presale_replies or self.paused or self.presale_done(chat_id, last):
                 return
             self.db.mark_presale(chat_id)
             terms = ", ".join(str(l["months"]) for l in self.premium.lots if l.get("offer_id")) or "3, 6, 12"
@@ -652,24 +693,76 @@ class Engine:
             await self.send_chat(chat_id, M.render(lang, "presale_premium",
                                                    premium_terms=terms + (" мес." if lang == "ru" else " mo.")))
             return
-        hello = not about_stars and bool(M.HELLO_RE.search(text_in)) and not M.OTHER_GOODS_RE.search(text_in) and \
-            len(text_in) <= 200
-        if not about_stars and not hello:
+        hello = not about_stars and self.presale_hello(text_in)
+        # новый человек пишет что угодно без заказа — один раз отвечаем шаблоном (кроме вопросов о чужих товарах)
+        anything = last is None and not about_stars and not hello and self.presale_any(text_in)
+        if not about_stars and not hello and not anything:
             return                               # не про звёзды и не «вы тут?» — не наш покупатель, молчим
         if last is None:
             self.db.log_message(chat_id, None, "in", msg.text)
-            await self.notifier.notify("INFO", "presale_question", f"💬 Вопрос о звёздах от {msg.author_name}: "
+            await self.notifier.notify("INFO", "presale_question", f"💬 Сообщение без заказа от {msg.author_name}: "
                                        f"{msg.text[:500]}", throttle_key=f"chat:{chat_id}")
-        if not self.cfg.funpay.presale_replies or self.paused or self.db.presale_recent(chat_id, 6 * 3600):
-            return
+        if not self.cfg.funpay.presale_replies or self.paused or self.presale_done(chat_id, last):
+            return                               # шаблон в этом чате уже был — дальше отвечает продавец
+        if not self.coord.claim_presale(chat_id):
+            return                               # на этот вопрос уже отвечает другой бот аккаунта
         self.db.mark_presale(chat_id)
         lang = M.detect_lang(msg.text, self.cfg.general.language)
-        text = M.render(lang, "presale" if about_stars else "presale_hello",
-                        denominations=", ".join(str(d) for d in self._denominations()))
-        faq = M.detect_faq(msg.text)
+        await self.send_chat(chat_id, self.presale_text(lang, about_stars, msg.text))
+
+    async def reply_after_delivery(self, o, text: str, faq: str | None) -> None:
+        """Вопрос после выдачи: отвечаем один раз на заказ, дальше молчим и зовём продавца, если это жалоба."""
+        oid = o["order_id"]
+        complaint = faq in ("faq_not_arrived", "faq_refund")
+        if complaint and not o["confirm_reminded"]:
+            self.db.update_order(oid, confirm_reminded=1)   # недовольному покупателю не напоминаем «подтвердите»
+        key = f"after_delivery_reply:{oid}"
+        if self.db.kv_get(key, 0):
+            if complaint:
+                await self.notifier.notify("WARNING", f"buyer_{faq[4:]}", f"#{oid}: покупатель {o['buyer_username']} "
+                                           f"снова пишет после выдачи (автоответ уже был, ответьте сами): "
+                                           f"{text[:300]}", order_id=oid)
+            return
+        self.db.kv_set(key, time.time())
+        if faq:
+            await self.answer_faq(o, text)
+        else:
+            await self.say(o, "after_delivery")
+
+    def presale_done(self, chat_id: str, last=None) -> bool:
+        """Шаблон без заказа отправляем один раз на чат; вернувшемуся покупателю — снова, но после нового заказа."""
+        ts = float(self.db.scalar("SELECT presale_at FROM chat_state WHERE chat_id=?", (chat_id,), 0) or 0)
+        if not ts:
+            return False
+        return last is None or ts > float(last["created_at"] or 0)
+
+    # пресейл: о чём вопрос и что ответить (бот TG Gift переопределяет под подарки)
+    def presale_any(self, text: str) -> bool:
+        """Сообщение не о звёздах и без приветствия: отвечаем шаблоном, если это не вопрос о чужом товаре
+        (Steam — MannBot, подарки — TG Gift)."""
+        t = text or ""
+        if M.OTHER_GOODS_RE.search(t):
+            return False
+        try:
+            from starsbot.giftshop.engine import GIFT_TOPIC_RE
+        except Exception:  # noqa: BLE001
+            return True
+        return not GIFT_TOPIC_RE.search(t)
+
+    def presale_topic(self, text: str) -> bool:
+        return bool(M.STARS_TOPIC_RE.search(text or ""))
+
+    def presale_hello(self, text: str) -> bool:
+        t = text or ""
+        return bool(M.HELLO_RE.search(t)) and not M.OTHER_GOODS_RE.search(t) and len(t) <= 200
+
+    def presale_text(self, lang: str, about_topic: bool, text: str) -> str:
+        out = M.render(lang, "presale" if about_topic else "presale_hello",
+                       denominations=", ".join(str(d) for d in self._denominations()))
+        faq = M.detect_faq(text)
         if faq and faq != "faq_time":
-            text += "\n\n" + M.render(lang, faq, status_hint="")
-        await self.send_chat(chat_id, text)
+            out += "\n\n" + M.render(lang, faq, status_hint="")
+        return out
 
     # ================================================================== покупка звёзд
     def cost_per_star_ton(self) -> float | None:
@@ -733,6 +826,8 @@ class Engine:
             if self.gifts is not None:
                 await self.gifts.deliver(o)
             return
+        if self.engine_nft_wait(o):
+            return
         if self._in_flight():
             self.enqueue(oid, 5)                 # одна транзакция за раз: seqno кошелька идут по порядку
             return
@@ -752,7 +847,17 @@ class Engine:
                 await self.notifier.notify("CRITICAL", "purchase_retry_limit", f"#{oid}: покупка не прошла "
                                            f"{o['purchase_attempts']} раз. Требуется вмешательство.", order_id=oid)
                 return
+            if self.nft is not None and self.nft.owns(o):
+                await self.nft.step(o)
+                return
             await self._purchase_locked(o)
+
+    def engine_nft_wait(self, o) -> bool:
+        """Задание NFT при выключенном модуле не исполняем (оно останется в очереди у человека)."""
+        if str(o["order_id"]).startswith("NFT-") and self.nft is None:
+            self._set(o["order_id"], S.MANUAL, "nft_disabled", fail_reason="nft_disabled")
+            return True
+        return False
 
     async def _purchase_locked(self, o) -> None:
         oid, stars = o["order_id"], int(o["stars"])
@@ -826,14 +931,22 @@ class Engine:
         except (FragmentError, TonError) as e:
             await self._purchase_error(o, getattr(e, "code", "fragment"), str(e))
             return
+        await self.send_fragment_tx(o, req_id, tx, amount, stars=stars)
+
+    async def send_fragment_tx(self, o, req_id: str, tx, amount: float, *, stars: int,
+                               max_total_ton: float | None = None) -> bool:
+        """Проверка транзакции Fragment, запись попытки, подпись и отправка в сеть (одна транзакция за раз).
+        Возвращает True, если транзакция ушла (или её исход сверит наблюдатель за транзакциями)."""
+        oid = o["order_id"]
         total = sum(m.amount for m in tx.messages)
         own = self.wallet.raw_address.lower()
-        if total > to_nano(amount) * 1.03 + to_nano(0.05) or any(m.address.lower() == own for m in tx.messages):
+        limit = to_nano(max_total_ton) if max_total_ton else to_nano(amount) * 1.03 + to_nano(0.05)
+        if total > limit or any(m.address.lower() == own for m in tx.messages):
             self._set(oid, S.MANUAL, "tx_mismatch", fail_reason="tx_mismatch")
             await self.notifier.notify("CRITICAL", "tx_mismatch", f"#{oid}: транзакция Fragment не совпала с "
                                        f"котировкой ({from_nano(total):.4f} TON против {amount:.4f}). Оплата не "
                                        "выполнена, проверьте вручную.", order_id=oid)
-            return
+            return False
         dest = tx.messages[0].address
         ref = (re.search(r"Ref#\w+", tx.comment or "") or [None])[0] or ""
         pid = self.db.add_purchase(order_id=oid, req_id=req_id, stars=stars, recipient=o["tg_recipient"], dest=dest,
@@ -855,18 +968,19 @@ class Engine:
                 # подписали, но не знаем, дошло ли до сети — решит сверка по seqno и valid_until
                 self.db.update_purchase(pid, state="unknown", error=str(e))
                 self._set(oid, S.SENT, "send_unknown", sent_at=time.time(), fail_reason="send_unknown")
-                return
+                return True
             self.db.update_purchase(pid, state="failed", error=str(e))
             self._set(oid, S.READY, "purchase_not_sent", fail_reason=e.code)
             if e.code == "insufficient_funds":
                 await self.out_of_funds(self.db.get_order(oid), str(e))
-                return
+                return False
             await self._purchase_error(self.db.get_order(oid), e.code, str(e))
-            return
+            return False
         self.db.update_purchase(pid, state="sent", msg_hash=sent.msg_hash)
         self._set(oid, S.SENT, "tx_sent", sent_at=time.time(), tx_msg_hash=sent.msg_hash)
         self.wallet_info["ts"] = 0
         await self.fragment.confirm(tx, sent.boc)
+        return True
 
     def live_purchases(self) -> int:
         """Сколько реальных (не dry-run) оплат уже ушло в сеть."""
@@ -1043,6 +1157,9 @@ class Engine:
 
     async def on_delivered(self, o, tx: dict) -> None:
         oid = o["order_id"]
+        if self.nft is not None and self.nft.owns(o):       # этап покупки/отправки NFT-подарка для TG Gift
+            await self.nft.on_tx_confirmed(o, tx)
+            return
         fee = tx.get("fee")
         o = self._set(oid, S.DELIVERED, "delivered", delivered_at=time.time(), tx_hash=tx.get("hash", ""),
                       tx_fee_ton=from_nano(fee) if fee else None, fail_reason="")
@@ -1182,14 +1299,32 @@ class Engine:
                                            throttle_key=f"lot:{lot['offer_id']}")
 
     # ================================================================== таймеры / SLA
+    async def confirm_reminders(self, now: float | None = None) -> int:
+        """Одно напоминание подтвердить заказ через deal.confirm_reminder_minutes после выдачи, если покупатель
+        ещё не подтвердил. Старые выдачи (больше 6 ч) не трогаем — им напомнит автопилот, если он включён."""
+        mins = float(self.cfg.deal.get("confirm_reminder_minutes") or 0)
+        if mins <= 0 or self.paused:
+            return 0
+        now = now or time.time()
+        n = 0
+        for o in self.db.q("SELECT * FROM orders WHERE status=? AND fp_status='paid' AND COALESCE(confirm_reminded,0)=0 "
+                           "AND delivered_at<? AND delivered_at>? AND COALESCE(channel,'funpay')='funpay'",
+                           (S.DELIVERED.value, now - mins * 60, now - 6 * 3600)):
+            if not o["chat_id"]:
+                continue
+            self.db.update_order(o["order_id"], confirm_reminded=1)     # сначала отметка: второго не будет
+            self.db.add_event(o["order_id"], "confirm_reminder", after_minutes=mins)
+            await self.say(o, "confirm_reminder")
+            n += 1
+        return n
+
     async def timers(self) -> None:
         now = time.time()
         d = self.cfg.deal
         for o in self.db.orders_by_status(S.AWAITING_USERNAME):
             if self.paused:
                 break
-            ch = self.channel_of(o)
-            if ch is not None and not getattr(ch, "buyer_chat", False) and not o["tg_username"]:
+            if self.waits_code(o):
                 continue                 # код Ozon ещё не активирован: напомнить покупателю некуда, это не просрочка
             if o["tg_username"] and not o["tg_recipient"] and o["fail_reason"] in ("fragment_auth", "network",
                                                                                    "rate_limit", "layout", "fragment",
@@ -1207,6 +1342,7 @@ class Engine:
                 await self.notifier.notify("WARNING", "sla_username", f"#{o['order_id']}: покупатель "
                                            f"{o['buyer_username']} не присылает username {int(idle)} мин.",
                                            order_id=o["order_id"])
+        await self.confirm_reminders(now)
         for o in self.db.orders_by_status(S.PENDING_APPROVAL, S.MANUAL):
             if (now - (o["updated_at"] or now)) > 900 and not o["admin_alerted"]:
                 self._set(o["order_id"], admin_alerted=1)
@@ -1218,9 +1354,7 @@ class Engine:
                 self.enqueue(o["order_id"])
         for o in self.db.active_orders():
             total_m = (now - (o["paid_at"] or now)) / 60
-            ch = self.channel_of(o)
-            if ch is not None and not getattr(ch, "buyer_chat", False) and S(o["status"]) == S.AWAITING_USERNAME \
-                    and not o["tg_username"]:
+            if self.waits_code(o) and S(o["status"]) == S.AWAITING_USERNAME:
                 continue
             if S(o["status"]) != S.DELIVERED and total_m > float(self.cfg.sla.order_total_minutes):
                 await self.notifier.notify("WARNING", "sla_total", f"#{o['order_id']} не выдан {total_m:.0f} мин. "
@@ -1362,8 +1496,7 @@ class Engine:
                          "WHERE order_id=? AND state IN ('unknown','sending')", (oid,))
         if not o["tg_username"]:
             self._set(oid, S.AWAITING_USERNAME, "admin_take", approved=1, username_attempts=0, admin_alerted=0)
-            ch = self.channel_of(o)
-            if ch is not None and not getattr(ch, "buyer_chat", False):
+            if self.waits_code(o):
                 return "заказ передан боту: ждём, когда покупатель активирует код"
             await self.say(o, "greeting_need_username")
             self.db.add_event(oid, "greeting_sent")
@@ -1421,7 +1554,7 @@ class Engine:
             return "заказ не найден"
         if M.contains_forbidden_link(text):
             return "в сообщении ссылка на сторонний ресурс — FunPay это запрещает (п. 1.12)"
-        await self.say_text(o, text)
+        await self.say_text(o, text, dedupe=False)
         self.db.add_event(oid, "admin_message", text=text)
         return "отправлено"
 
@@ -1502,12 +1635,8 @@ class Engine:
             return ap.make_support_file(due) if due else "неподтверждённых заказов старше порога нет"
         lm = getattr(self, "lot_manager", None)
         if cmd == "lots_on":
-            for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:"),
-                                    ("premium", "premium_lot_amount:")):
-                for l in ((self.cfg.get(section) or {}).get("lots") or []):
-                    if l.get("offer_id"):
-                        self.db.kv_set(prefix + str(l["offer_id"]), None)
-            await self.wallet_watch()
+            self.reset_lot_amounts()
+            await self.refresh_stock()
             return "лоты включены по балансу кошелька"
         if cmd == "lots_off" and lm is not None:
             return await lm.close_all(reason="команда")
@@ -1816,6 +1945,27 @@ class Engine:
         except Exception:  # noqa: BLE001
             pass
 
+    LOT_AMOUNT_KEYS = (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:"), ("premium", "premium_lot_amount:"),
+                       ("giftshop", "shop_lot_amount:"))
+
+    def reset_lot_amounts(self) -> None:
+        """Забыть записанное «наличие» лотов: следующая синхронизация выставит его на FunPay заново."""
+        for section, prefix in self.LOT_AMOUNT_KEYS:
+            for l in ((self.cfg.get(section) or {}).get("lots") or []):
+                if l.get("offer_id"):
+                    self.db.kv_set(prefix + str(l["offer_id"]), None)
+
+    async def refresh_stock(self) -> None:
+        """Пересчитать наличие лотов по балансу (у StarsBot — кошелёк TON)."""
+        await self.wallet_watch()
+
+    def no_lots_yet(self) -> bool:
+        return not any(l.get("offer_id") for l in (self.cfg.funpay.lots or []))
+
+    def start_banner(self) -> str:
+        return (f"🤖 Бот запущен. FunPay: {self.fp.username}, кошелёк: {self.wallet.friendly_address}, Fragment: "
+                f"{'ok' if self.fragment_ok else 'нет связи'}{' · DRY-RUN' if self.cfg.general.dry_run else ''}")
+
     async def start(self) -> None:
         other = self.take_lease()
         for _ in range(int(self.LEASE_TTL // 5) + 2):    # перезапуск: прежний процесс ещё закрывается
@@ -1832,11 +1982,7 @@ class Engine:
         if not self.cfg.general.dry_run:
             # остатки, записанные в тестовом режиме, на FunPay не отправлялись: первая синхронизация
             # в боевом режиме должна выставить наличие и включить лоты заново
-            for section, prefix in (("funpay", "lot_amount:"), ("gifts", "gift_lot_amount:"),
-                                    ("premium", "premium_lot_amount:")):
-                for l in ((self.cfg.get(section) or {}).get("lots") or []):
-                    if l.get("offer_id"):
-                        self.db.kv_set(prefix + str(l["offer_id"]), None)
+            self.reset_lot_amounts()
         lm = getattr(self, "lot_manager", None)
         if lm is not None:
             try:
@@ -1845,7 +1991,7 @@ class Engine:
                     log.info("лоты: %s", msg)
             except Exception as e:  # noqa: BLE001
                 log.warning("обновление описаний лотов: %s", e)
-        no_lots = not any(l.get("offer_id") for l in (self.cfg.funpay.lots or []))
+        no_lots = self.no_lots_yet()
         if lm is not None and (self.cfg.funpay.get("auto_create_lots") or no_lots):
             try:
                 report = await lm.create_missing()
@@ -1853,10 +1999,7 @@ class Engine:
                     await self.notifier.notify("INFO", "lots_created", "Выставлены лоты: " + "; ".join(report))
             except Exception as e:  # noqa: BLE001
                 log.warning("автовыставление лотов: %s", e)
-        await self.notifier.notify("INFO", "started", f"🤖 Бот запущен. FunPay: {self.fp.username}, кошелёк: "
-                                   f"{self.wallet.friendly_address}, Fragment: "
-                                   f"{'ok' if self.fragment_ok else 'нет связи'}"
-                                   f"{' · DRY-RUN' if self.cfg.general.dry_run else ''}")
+        await self.notifier.notify("INFO", "started", self.start_banner())
         self.notifier.command_handler = self.handle_command
         loops = [
             self._loop("funpay", float(self.cfg.funpay.poll_interval), self.funpay_poll),
@@ -1885,6 +2028,15 @@ class Engine:
         tr = getattr(self, "treasury", None)
         if tr is not None and tr.enabled:
             loops.append(self._loop("treasury", float(tr.t.get("interval_seconds") or 120), tr.tick))
+        if getattr(self, "supply", None) is not None and self.supply.enabled:
+            loops.append(self._loop("supply", 120, self.supply.tick))
+        if self.gifts is not None and getattr(self.gifts, "moved", False):
+            loops.append(self._loop("gift_handover", 300, self.gifts.handover_tick))
+        if self.nft is not None and self.coord.enabled:
+            loops.append(self._loop("nft", 60, self.nft.tick))
+        assort = getattr(self.gifts, "assortment", None) if self.gifts is not None else None
+        if assort is not None:
+            loops.append(self._loop("assortment", 600, assort.tick))
         for ch in self.channels.values():
             loops += ch.loops(self._loop)
         self._tasks = [asyncio.create_task(c) for c in loops]

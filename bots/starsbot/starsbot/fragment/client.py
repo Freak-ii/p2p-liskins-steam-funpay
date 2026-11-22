@@ -77,6 +77,52 @@ def parse_wallet_init(page: str) -> dict:
         return {}
 
 
+GIFT_ITEM_RE = re.compile(r'<a href="/gift/([a-z0-9]+-\d+)[^"]*"\s+class="tm-grid-item"(.*?)</a>', re.S)
+GIFT_VALUE_RE = re.compile(r'tm-grid-item-value[^>]*>\s*([\d][\d,\.]*)\s*<')
+AJ_STATE_RE = re.compile(r"ajInit\((\{.*?\})\);", re.S)
+BUY_BTN_RE = re.compile(r'js-buy-now-btn"[^>]*data-bid-amount="([\d\.]+)"')
+GIFT_TYPE = 5                 # Aj.state.type на странице подарка fragment.com/gift/<slug>-<номер>
+
+
+def _num(text: str) -> float:
+    try:
+        return float(str(text).replace(",", "").strip())
+    except ValueError:
+        return 0.0
+
+
+def parse_gift_listings(page: str) -> list[dict]:
+    """Страница коллекции /gifts/<slug>?sort=price_asc&filter=sale → [{'item': 'lolpop-236254', 'price': 5.0}]
+    (только выставленные на продажу, по возрастанию цены)."""
+    out = []
+    for item, body in GIFT_ITEM_RE.findall(page or ""):
+        m = GIFT_VALUE_RE.search(body)
+        if not m or "For sale" not in body and "tm-status-avail" not in body:
+            continue
+        price = _num(m.group(1))
+        if price > 0:
+            out.append({"item": item, "price": price})
+    out.sort(key=lambda x: x["price"])
+    return out
+
+
+def parse_gift_item(page: str) -> dict:
+    """Страница подарка: продаётся ли, цена «купить сейчас», тип объекта для API и владелец."""
+    state: dict = {}
+    m = AJ_STATE_RE.search(page or "")
+    if m:
+        try:
+            state = (json.loads(m.group(1)) or {}).get("state") or {}
+        except json.JSONDecodeError:
+            state = {}
+    b = BUY_BTN_RE.search(page or "")
+    owner = re.search(r'>Owner<.{0,300}?href="https?://[^"]*/address/([^"/?]+)"', page or "", re.S)
+    return {"type": int(state.get("type") or GIFT_TYPE), "item": str(state.get("username") or ""),
+            "title": str(state.get("itemTitle") or ""), "for_sale": b is not None,
+            "price": _num(b.group(1)) if b else 0.0, "owner": owner.group(1) if owner else "",
+            "ton_usd": float(state.get("tonRate") or 0)}
+
+
 def _strip_html(text: str) -> str:
     return html_lib.unescape(re.sub(r"<[^>]+>", " ", text or "")).strip()
 
@@ -317,6 +363,60 @@ class FragmentClient:
         return FragmentTx(req_id=req_id, valid_until=valid_until, messages=msgs, amount_ton=total or amount_ton,
                           comment=decode_comment(msgs[0].payload), confirm_method=str(resp.get("confirm_method") or ""),
                           confirm_params=dict(resp.get("confirm_params") or {}))
+
+    # ------------------------------------------------------------------ коллекционные подарки (NFT)
+    # fragment.com/gifts: подарки продаются за TON. «Купить сейчас» — метод getBidLink (type=5, username=<slug-номер>,
+    # bid=цена): после транзакции подарок оказывается на кошельке. Отправка в Telegram получателю — как на сайте:
+    # searchNftTransferRecipient → initNftTransferRequest(recipient, slug) → getNftTransferLink(id) → транзакция.
+    async def page(self, path: str) -> str:
+        await self._throttle()
+        sess = await self._sess()
+        try:
+            async with sess.get(f"{BASE}/{path.lstrip('/')}") as r:
+                text = await r.text()
+                if r.status >= 500 or r.status == 429:
+                    raise FragmentError(f"Fragment HTTP {r.status}", "network")
+                if r.status == 404:
+                    raise FragmentError(f"{path}: нет такой страницы на Fragment", "not_found")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise FragmentError(f"Fragment недоступен: {e}", "network") from e
+        return text
+
+    async def gift_listings(self, collection: str, limit: int = 10) -> list[dict]:
+        page = await self.page(f"gifts/{collection}?sort=price_asc&filter=sale")
+        return parse_gift_listings(page)[:limit]
+
+    async def gift_item(self, item: str) -> dict:
+        return parse_gift_item(await self.page(f"gift/{item}"))
+
+    async def gift_buy_link(self, item: str, amount: float) -> FragmentTx:
+        await self.wallet.refresh()
+        resp = await self.api("getBidLink", _page=f"gift/{item}", account=self._account(), device=self._device(),
+                              transaction=1, type=GIFT_TYPE, username=item, bid=f"{amount:g}")
+        return self._tx_from(resp, f"buy:{item}", amount)
+
+    async def gift_transfer_recipient(self, username: str) -> Recipient:
+        resp = await self.api("searchNftTransferRecipient", _page="my/assets", query=username.lstrip("@"))
+        found = resp.get("found") or {}
+        if not found.get("recipient"):
+            err = _strip_html(str(resp.get("error") or ""))
+            raise FragmentError(err or f"пользователь @{username} не найден в Telegram",
+                                classify_error(err) if err else "not_found")
+        return Recipient(username=username.lstrip("@"), recipient=str(found["recipient"]),
+                         name=_strip_html(str(found.get("name") or "")))
+
+    async def gift_transfer_init(self, recipient: str, item: str) -> str:
+        resp = await self.api("initNftTransferRequest", _page=f"gift/{item}", recipient=recipient, slug=item)
+        req_id = str(resp.get("req_id") or "")
+        if not req_id:
+            raise FragmentError(f"Fragment не создал перевод подарка: {str(resp)[:200]}", "layout")
+        return req_id
+
+    async def gift_transfer_link(self, req_id: str, item: str) -> FragmentTx:
+        await self.wallet.refresh()
+        resp = await self.api("getNftTransferLink", _page=f"gift/{item}", account=self._account(),
+                              device=self._device(), transaction=1, id=req_id, show_sender=0)
+        return self._tx_from(resp, req_id, 0.0)
 
     async def confirm(self, tx: FragmentTx, boc: str) -> None:
         """Сообщает Fragment, что транзакция отправлена (как это делает сайт после TON Connect). Не критично."""

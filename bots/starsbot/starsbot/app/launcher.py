@@ -89,11 +89,26 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
     from starsbot.web.server import start_web
     from starsbot.ozon.fake import DEMO_PRODUCTS
     from starsbot.ggsel.fake import DEMO_PREMIUM_PRODUCTS, DEMO_PRODUCTS as GG_PRODUCTS
+    from starsbot.avito.fake import DEMO_PRODUCTS as AVITO_DEMO
+    shop = os.environ.get("STARSBOT_PROFILE") == "giftshop"
     demo_over = {**DEMO_OVERRIDES, "ozon": {"enabled": True, "products": DEMO_PRODUCTS},
-                 "ggsel": {"enabled": True, "products": GG_PRODUCTS, "premium_products": DEMO_PREMIUM_PRODUCTS}}
+                 "ggsel": {"enabled": True, "products": GG_PRODUCTS, "premium_products": DEMO_PREMIUM_PRODUCTS},
+                 "avito": {"enabled": True, "products": AVITO_DEMO},
+                 "wb": {"enabled": True, "products": [{"stars": n, "nm_id": f"WB{n}", "price": p} for n, p in
+                                                      ((100, 189), (250, 459), (500, 899))]}}
+    if shop:
+        demo_over = {k: v for k, v in DEMO_OVERRIDES.items() if k in ("general", "notifications")}
+        demo_over["gifts"] = {"pause_between_gifts": 0}
+        demo_over["giftshop"] = {"nft": {"rub_per_ton": 80.0}}      # курс TON в демо (≈ $0.95 × 84 ₽)
     sup = Supervisor(home, demo=demo, overrides=demo_over if demo else None)
     token = sup.ensure_token()
-    if demo:
+    if demo and shop:
+        from starsbot.giftshop.demo import run_shop_demo
+        sup.engine.cfg.deal.message_rate_limit_seconds = 0
+        await sup.engine.lot_manager.create_missing()
+        await run_shop_demo(sup.engine, sup.engine.fp)
+        log.info("Демо TG Gift: лоты выставлены, 2 заказа подарков в CRM")
+    elif demo:
         from starsbot.demo import run_scenario
         sup.engine.cfg.deal.message_rate_limit_seconds = 0
         await run_scenario(sup.engine, sup.engine.fp, sup.engine.wallet, verbose=False)
@@ -106,15 +121,24 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         await run_gift_demo(sup.engine, sup.engine.fp, sup.engine.wallet)
         from starsbot.demo import run_premium_demo
         await run_premium_demo(sup.engine, sup.engine.fp, sup.engine.wallet)
+        from starsbot.avito.fake import run_avito_demo
+        await run_avito_demo(sup.engine, sup.engine.wallet)
+        from starsbot.wb.channel import run_wb_demo
+        await run_wb_demo(sup.engine, sup.engine.wallet)
         from starsbot.treasury.fake import run_treasury_demo
         await run_treasury_demo(sup)
-        log.info("Демо-сценарий выполнен: заказы FunPay, Ozon и GGSEL в CRM")
+        log.info("Демо-сценарий выполнен: заказы FunPay, Ozon, GGSEL, Авито и Wildberries в CRM")
     runner = await start_web(sup, host, port, mem)
+    from starsbot.app.watchdog import LoopWatchdog
+    loop_ = asyncio.get_running_loop()
+    _quiet_windows_resets(loop_)
+    sup.watchdog = LoopWatchdog(loop_).start()
     shown_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     url = f"http://{shown_host}:{port}/login?token={token}"
     log.info("Интерфейс запущен: http://%s:%s/", shown_host, port)   # токен в журнал не пишем
     if sys.stdout is not None:
-        print(f"\n  {APP_NAME} открыт: {url}\n  Данные: {home}\n  Закройте это окно или нажмите Ctrl+C для выхода.\n",
+        name = "TG Gift" if shop else APP_NAME
+        print(f"\n  {name} открыт: {url}\n  Данные: {home}\n  Закройте это окно или нажмите Ctrl+C для выхода.\n",
               flush=True)
     if open_browser:
         webbrowser.open(url)
@@ -141,6 +165,21 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         await runner.cleanup()
 
 
+def _quiet_windows_resets(loop: asyncio.AbstractEventLoop) -> None:
+    """Windows: браузер закрыл вкладку с живым потоком — asyncio печатает ConnectionResetError (WinError 10054)
+    с трассировкой. Это не ошибка бота, только шум в журнале; остальные исключения пишем как раньше."""
+    default = loop.get_exception_handler()
+
+    def handler(lp, ctx):
+        if isinstance(ctx.get("exception"), ConnectionResetError) and "_call_connection_lost" in str(ctx.get("handle", "")):
+            return
+        if default is None:
+            lp.default_exception_handler(ctx)
+        else:
+            default(lp, ctx)
+    loop.set_exception_handler(handler)
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
     ap = argparse.ArgumentParser(prog=APP_NAME, description="StarsBot — автопродажа Telegram Stars на FunPay через Fragment")
@@ -150,7 +189,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--no-browser", action="store_true", help="не открывать браузер")
     ap.add_argument("--headless", action="store_true", help="сервер/VPS: без браузера, бот стартует сам")
     ap.add_argument("--demo", action="store_true", help="демо с эмуляцией FunPay, Fragment и TON-кошелька")
+    ap.add_argument("--profile", choices=("stars", "giftshop"), default=None,
+                    help="giftshop — бот TG Gift (подарки Telegram в разделе FunPay «Подарки»)")
     args = ap.parse_args(argv)
+    if args.profile:
+        os.environ["STARSBOT_PROFILE"] = args.profile
 
     home = app_home(args.home)
     if args.demo:

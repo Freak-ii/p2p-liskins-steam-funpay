@@ -37,6 +37,25 @@ def parse_username(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+# Ошибки данных покупателя у MannBot: ключи не ушли, нужна другая (или та же, но рабочая) ссылка на обмен
+TRADE_FIX = {
+    "invalid_token": "ссылка на обмен устарела — скопируйте новую",
+    "bad_token": "в ссылке неверный token — скопируйте ссылку целиком",
+    "no_token": "в ссылке нет token — скопируйте ссылку целиком",
+    "bad_format": "это не ссылка на обмен Steam",
+    "cannot_trade": "аккаунт сейчас не может обмениваться",
+    "trade_banned": "у аккаунта бан обменов",
+    "inventory_full": "инвентарь TF2 переполнен — освободите место",
+    "inventory_private": "инвентарь скрыт — откройте его в настройках приватности Steam",
+    "self": "это ссылка нашего же аккаунта",
+    "trade_hold": "у аккаунта задержка обменов: включите мобильный Steam Guard (7 дней) и пришлите ссылку снова",
+    "offer_declined": "обмен отклонён",
+    "offer_expired": "обмен не приняли вовремя",
+    "offer_countered": "обмен изменён (контрпредложения не принимаем)",
+    "api_scam_suspect": "обмен отменён не нами — проверьте, не утёк ли ваш API-ключ Steam, и смените его",
+}
+
+
 def parse_trade_url(text: str) -> str | None:
     m = TRADE_RE.search(text or "")
     return f"https://steamcommunity.com/tradeoffer/new/?partner={m.group(1)}&token={m.group(2)}" if m else None
@@ -76,6 +95,10 @@ class Shop:
     def gift(self, gid: str) -> dict | None:
         return next((g for g in self.gifts() if g["id"] == gid), None)
 
+    def _order_gift(self, o) -> dict | None:
+        """Подарок заказа для поставщика: TG Gift выдаёт именно его (а не любой подарок той же цены)."""
+        return self.gift(o["item"]) if o["product"] == "gift" else None
+
     def product_title(self, product: str, item: str, amount: int) -> str:
         if product == "stars":
             return f"{amount} ⭐ Telegram Stars"
@@ -107,7 +130,8 @@ class Shop:
             if g is None:
                 raise ValueError("нет такого подарка")
             sup_amount = int(g["stars"])
-        q = await sup.quote("gift" if product == "gift" else product, sup_amount, months)
+        q = await sup.quote("gift" if product == "gift" else product, sup_amount, months,
+                            gift=self.gift(item) if product == "gift" else None)
         if not q.get("available"):
             raise SupplierError(q.get("reason") or "товар временно недоступен")
         cost = float(q["cost_rub"])
@@ -202,7 +226,7 @@ class Shop:
         months = int(o["item"]) if o["product"] == "premium" else 0
         try:
             res = await sup.order(oid, "gift" if o["product"] == "gift" else o["product"], o["recipient"],
-                                  int(o["amount"]), months)
+                                  int(o["amount"]), months, gift=self._order_gift(o))
         except SupplierError as e:
             self.rtba.supplier_failed(o["supplier"], str(e))
             first = not self.db.scalar("SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind='supplier_retry'",
@@ -229,7 +253,13 @@ class Shop:
             await self.on_delivered(oid)
         elif s == "failed":
             detail = str(st.get("detail") or "")
-            if detail in ("not_found", "cannot_receive", "bad_format", "blacklisted") and o["product"] != "steam_keys":
+            if o["product"] == "steam_keys" and detail in TRADE_FIX:
+                self.db.update_order(oid, status="need_recipient", fail_reason=detail)
+                self.db.set_session(o["user_id"], "fix_recipient", {"order": oid})
+                await self.tell(o["user_id"], f"⚠️ По заказу <b>#{oid}</b> ключи не отправлены: "
+                                f"{TRADE_FIX[detail]}.\nПришлите ссылку на обмен Steam ещё раз — отправлю сразу, "
+                                f"деньги уже оплачены.")
+            elif detail in ("not_found", "cannot_receive", "bad_format", "blacklisted") and o["product"] != "steam_keys":
                 self.db.update_order(oid, status="need_recipient", fail_reason=detail)
                 self.db.set_session(o["user_id"], "fix_recipient", {"order": oid})
                 await self.tell(o["user_id"], f"⚠️ По заказу <b>#{oid}</b> получатель <b>@{o['recipient']}</b> не "
@@ -255,7 +285,8 @@ class Shop:
         sup = self.suppliers[o["supplier"]]
         try:
             res = await sup.order(new_ref, "gift" if o["product"] == "gift" else o["product"], recipient,
-                                  int(o["amount"]), int(o["item"]) if o["product"] == "premium" else 0)
+                                  int(o["amount"]), int(o["item"]) if o["product"] == "premium" else 0,
+                                  gift=self._order_gift(o))
         except SupplierError as e:
             self.db.update_order(oid, event="supplier_retry", fail_reason=str(e))
             return

@@ -19,8 +19,10 @@ MAX_BAD_CODES_PER_HOUR = 6
 
 
 class ActivationBot:
-    def __init__(self, token: str, channel, *, prefix: str = "TGS", api: str = "https://api.telegram.org"):
+    def __init__(self, token: str, channel, *, prefix: str = "TGS", api: str = "https://api.telegram.org",
+                 texts=None):
         self.token = token
+        self.T = texts or T                         # тексты площадки (Ozon, Wildberries)
         self.channel = channel
         self.api = api
         prefix = T.normalize_code(prefix)[:6]
@@ -76,20 +78,20 @@ class ActivationBot:
             payload = t.split(maxsplit=1)[1] if len(t.split(maxsplit=1)) > 1 else ""
             if payload and T.find_code(payload.replace("_", "-")):
                 return await self.handle(chat_id, payload.replace("_", "-"))
-            return T.BOT["start"].format(example=self.example)
+            return self.T.BOT["start"].format(example=self.example)
         if low.startswith("/help"):
-            return T.BOT["help"]
+            return self.T.BOT["help"]
         if low.startswith("/status"):
             rows = self.channel.orders_for_chat(chat_id)
-            return "\n".join(f"{r['code']}: " + self.channel.status_line(r) for r in rows) or T.BOT["status_none"]
+            return "\n".join(f"{r['code']}: " + self.channel.status_line(r) for r in rows) or self.T.BOT["status_none"]
         code = T.find_code(t)
         if code:
             if self._limited(chat_id):
-                return T.BOT["too_many"]
+                return self.T.BOT["too_many"]
             rest = t.upper().replace(code, " ")
             chk = self.channel.check_code(code)
             if not chk.ok:
-                if chk.text == T.BOT["bad_code"]:
+                if chk.text == self.T.BOT["bad_code"]:
                     self.bad.setdefault(chat_id, []).append(time.time())
                 return chk.text
             if chk.need != "username":
@@ -113,7 +115,7 @@ class ActivationBot:
             if res.need != "username":
                 self.pending.pop(chat_id, None)
             return res.text
-        return T.BOT["need_code"].format(example=self.example)
+        return self.T.BOT["need_code"].format(example=self.example)
 
     # ------------------------------------------------------------------ long polling
     async def run(self) -> None:
@@ -131,12 +133,13 @@ class ActivationBot:
                                     params={"timeout": 30, "offset": offset, "allowed_updates": '["message"]'}) as r:
                     if r.status == 409:
                         await self.channel.notifier.notify(
-                            "CRITICAL", "ozon_bot_conflict", "Бот активации Ozon: этот токен уже опрашивает другая "
+                            "CRITICAL", f"{self.channel.name}_bot_conflict", f"Бот активации {self.channel.title}: этот токен уже опрашивает другая "
                             "программа. Покупатели не смогут активировать коды — укажите отдельного бота.")
                         return
                     if r.status == 401:
-                        await self.channel.notifier.notify("CRITICAL", "ozon_bot_token",
-                                                           "Бот активации Ozon: неверный токен (@BotFather)")
+                        await self.channel.notifier.notify("CRITICAL", f"{self.channel.name}_bot_token",
+                                                           f"Бот активации {self.channel.title}: неверный токен "
+                                                           "(@BotFather)")
                         return
                     data = await r.json()
                 for upd in data.get("result", []):
@@ -152,7 +155,7 @@ class ActivationBot:
                         reply = "Что-то пошло не так 🙏 Попробуйте ещё раз через минуту."
                     if reply:
                         await self.send(int(chat["id"]), reply)
-                self.channel.engine.last_ok["ozon_bot"] = time.time()
+                self.channel.engine.last_ok[f"{self.channel.name}_bot"] = time.time()
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001

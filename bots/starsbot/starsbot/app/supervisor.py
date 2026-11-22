@@ -29,7 +29,9 @@ log = logging.getLogger("app")
 SECRET_FIELDS = {("gifts", "api_hash"), ("funpay", "golden_key"), ("fragment", "cookies"), ("ton", "mnemonic"), ("ton", "toncenter_api_key"),
                  ("notifications.telegram", "bot_token"), ("dashboard", "token"), ("dashboard", "operator_token"),
                  ("dashboard", "viewer_token"), ("ozon", "api_key"), ("ozon.activation_bot", "bot_token"),
-                 ("ggsel", "api_key"), ("treasury.bybit", "api_key"), ("treasury.bybit", "api_secret"), ("treasury.hub", "mnemonic")}
+                 ("ggsel", "api_key"), ("treasury.bybit", "api_key"), ("treasury.bybit", "api_secret"), ("treasury.hub", "mnemonic"),
+                 ("avito", "client_secret"), ("wb.activation_bot", "bot_token"),
+                 ("supply", "token")}
 
 
 class MemoryLogHandler(logging.Handler):
@@ -56,9 +58,11 @@ class Supervisor:
         self.config_path = self.home / "config.yaml"
         self.demo = demo
         self.overrides = overrides or {}
+        self.inherited: list[str] = []        # TG Gift: настройки, взятые у StarsBot (golden_key, уведомления)
         self.raw: dict = self._read_raw()
         self.cfg: Section = self._load()
         self._apply_patch_file()
+        self._add_new_denominations()
         db_path = self.cfg.general.database
         if db_path != ":memory:" and not Path(db_path).is_absolute():
             db_path = str(self.home / db_path)
@@ -77,6 +81,27 @@ class Supervisor:
         self._build()
 
     # ------------------------------------------------------------------ config
+    def _add_new_denominations(self) -> None:
+        """StarsBot: в своём списке лотов «По username» дописать номиналы, которых раньше не было (200, 300, 2500,
+        750, 1500, …) — без id лота, чтобы они появились в «Лотах» с кнопкой «выставить». Один раз на номинал."""
+        if self.profile != "stars" or not self.config_path.exists():
+            return
+        raw_lots = (self.raw.get("funpay") or {}).get("lots")
+        if not isinstance(raw_lots, list) or not raw_lots:
+            return
+        from starsbot.config import CUSTOM_DENOMINATIONS, DENOMINATIONS
+        have = {int(l.get("stars") or 0) for l in raw_lots if isinstance(l, dict)}
+        done = set((self.raw.get("funpay") or {}).get("denominations_added") or [])
+        new = [d for d in DENOMINATIONS + CUSTOM_DENOMINATIONS if d not in have and d not in done]
+        if not new:
+            return
+        lots = [dict(l) for l in raw_lots] + [
+            {"stars": d, "offer_id": 0, "position": 0, **({"custom": True} if d in CUSTOM_DENOMINATIONS else {})}
+            for d in new]
+        lots.sort(key=lambda l: int(l.get("stars") or 0))
+        self.save({"funpay": {"lots": lots, "denominations_added": sorted(done | set(new))}}, rebuild=False)
+        log.warning("в лоты добавлены новые номиналы (без id, выставляются кнопкой): %s", ", ".join(map(str, new)))
+
     def _apply_patch_file(self) -> None:
         """config.patch.yaml рядом с config.yaml — разовая правка настроек (без секретов): сливается в config.yaml
         при запуске и переименовывается в config.patch.applied.yaml. Так поддержка может поправить настройки,
@@ -110,7 +135,14 @@ class Supervisor:
         if cfg.general.log_file and not Path(cfg.general.log_file).is_absolute():
             cfg.general.log_file = str(self.home / cfg.general.log_file)
         M.set_overrides(cfg.get("messages"))
+        if cfg.general.get("profile") == "giftshop":
+            from starsbot.giftshop.profile import inherit_shared
+            self.inherited = inherit_shared(cfg, self.home)
         return cfg
+
+    @property
+    def profile(self) -> str:
+        return str(self.cfg.general.get("profile") or "stars")
 
     def ensure_token(self) -> str:
         token = str(self.cfg.dashboard.token or "")
@@ -172,8 +204,23 @@ class Supervisor:
     def _build(self) -> None:
         cfg = self.cfg
         self.notifier = Notifier(cfg.notifications, self.db)
-        coord = Coordinator.from_env("starsbot", cfg.funpay.coord_db or None)
-        if cfg.general.demo or self.demo:
+        shop = self.profile == "giftshop"
+        coord = Coordinator.from_env("tggift" if shop else "starsbot", cfg.funpay.coord_db or None)
+        if shop and not (cfg.general.demo or self.demo):
+            from starsbot.funpay.client import FunPayClient
+            from starsbot.giftshop.engine import NullFragment
+            from starsbot.ton.wallet import UnconfiguredWallet
+            fp = FunPayClient(cfg.funpay.golden_key, cfg.funpay.user_agent, dry_run=cfg.general.dry_run,
+                              coordinator=coord)
+            wallet, fragment = UnconfiguredWallet("TG Gift не платит TON — звёзды покупает StarsBot"), NullFragment()
+            rates = RateProvider(cfg.rates, self.db)
+        elif shop:
+            from starsbot.giftshop.demo import FakeShopFunPay
+            from starsbot.giftshop.engine import NullFragment
+            from starsbot.rates import StaticRate
+            from starsbot.ton.wallet import UnconfiguredWallet
+            fp, wallet, fragment, rates = FakeShopFunPay(), UnconfiguredWallet("демо"), NullFragment(), StaticRate(105.0)
+        elif cfg.general.demo or self.demo:
             from starsbot.demo import FakeFragment, FakeFunPay, FakeWallet
             from starsbot.rates import StaticRate
             fp, wallet = FakeFunPay(), FakeWallet(balance=120.0)
@@ -195,8 +242,16 @@ class Supervisor:
                                       dry_run=cfg.general.dry_run, min_interval=cfg.fragment.min_interval)
             rates = RateProvider(cfg.rates, self.db)
         self.coord = coord
-        self.engine = Engine(cfg, self.db, fp, fragment, wallet, self.notifier, rates, coord)
-        self.econ = Economics(cfg, self.db, rates, self.engine)
+        if shop:
+            from starsbot.giftshop.engine import GiftShopEngine
+            self.engine = GiftShopEngine(cfg, self.db, fp, fragment, wallet, self.notifier, rates, coord)
+        else:
+            self.engine = Engine(cfg, self.db, fp, fragment, wallet, self.notifier, rates, coord)
+        if shop:
+            from starsbot.giftshop.engine import shop_economics
+            self.econ = shop_economics(cfg, self.db, rates, self.engine)
+        else:
+            self.econ = Economics(cfg, self.db, rates, self.engine)
         self.engine.econ = self.econ
         self.analytics = Analytics(cfg, self.db, self.notifier, self.engine)
         self.engine.analytics = self.analytics
@@ -205,31 +260,61 @@ class Supervisor:
         if cfg.general.demo or self.demo:
             from starsbot.gifts.telegram import FakeTelegramGifts
             tg = FakeTelegramGifts()
+            if shop:
+                from starsbot.giftshop.demo import shop_catalog
+                tg._catalog = shop_catalog()[1]
         else:
             from starsbot.gifts.telegram import TelegramGifts
             sess = Path(str(g.get("session_file") or "data/telegram.session"))
             tg = TelegramGifts(int(g.get("api_id") or 0), str(g.get("api_hash") or ""),
                                sess if sess.is_absolute() else self.home / sess, dry_run=cfg.general.dry_run)
-        self.engine.gifts = GiftService(cfg, self.engine, tg)
-        self.engine.channels["internal"] = InternalChannel(self.engine.gifts)
-        from starsbot.supply_api import ShopChannel
-        self.engine.channels["shop"] = ShopChannel(self.engine)     # заказы Telegram-магазина (ShopBot)
-        from starsbot.premium.service import PremiumService
-        self.engine.premium = PremiumService(cfg, self.engine)
-        self.engine.premium.register_supply_channels()
-        from starsbot.funpay.lots import LotManager
-        self.engine.lot_manager = LotManager(self.engine, save_config=self.save)
+        if shop:
+            from starsbot.giftshop.lots import ShopLotManager
+            from starsbot.giftshop.service import ShopGiftService
+            self.engine.gifts = ShopGiftService(cfg, self.engine, tg)
+            self.engine.lot_manager = ShopLotManager(self.engine, save_config=self.save)
+            from starsbot.giftshop.market import Assortment
+            from starsbot.giftshop.nft import NftDesk, PublicFragment
+            if cfg.general.demo or self.demo:
+                from starsbot.giftshop.demo import demo_nft
+                public = demo_nft(tg)
+            else:
+                public = PublicFragment(user_agent=str(cfg.funpay.get("user_agent") or "Mozilla/5.0"))
+            self.engine.gifts.nft = NftDesk(self.engine.gifts, public)      # NFT: Fragment или рынок Telegram
+            self.engine.gifts.assortment = Assortment(self.engine.gifts)    # подбор NFT-лотов по рынку
+        else:
+            self.engine.gifts = GiftService(cfg, self.engine, tg)
+            self.engine.channels["internal"] = InternalChannel(self.engine.gifts)
+            from starsbot.supply_api import ShopChannel
+            self.engine.channels["shop"] = ShopChannel(self.engine)     # заказы Telegram-магазина (ShopBot)
+            from starsbot.premium.service import PremiumService
+            self.engine.premium = PremiumService(cfg, self.engine)
+            self.engine.premium.register_supply_channels()
+            from starsbot.funpay.lots import LotManager
+            self.engine.lot_manager = LotManager(self.engine, save_config=self.save)
+            from starsbot.supply import SupplyManager
+            self.engine.supply = SupplyManager(cfg, self.engine)
+            from starsbot.nft_supply import NftSupplyManager
+            self.engine.nft = NftSupplyManager(cfg, self.engine)       # NFT-подарки с Fragment для TG Gift
         from starsbot.autopilot import Autopilot
         self.engine.autopilot = Autopilot(cfg, self.engine, self.home)
         self.engine.treasury = self._treasury(cfg)
         from starsbot.ozon.channel import build_channel
         ozon = build_channel(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
-        if ozon is not None:
+        if ozon is not None and not shop:
             self.engine.channels["ozon"] = ozon
         from starsbot.ggsel.channel import build_channel as build_ggsel
         ggsel = build_ggsel(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
         if ggsel is not None:
             self.engine.channels["ggsel"] = ggsel
+        from starsbot.avito.channel import build_channel as build_avito
+        avito = build_avito(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
+        if avito is not None:
+            self.engine.channels["avito"] = avito
+        from starsbot.wb.channel import build_channel as build_wb
+        wb = build_wb(cfg, self.db, self.engine, self.notifier, demo=bool(cfg.general.demo or self.demo))
+        if wb is not None:
+            self.engine.channels["wb"] = wb
 
     def _treasury(self, cfg):
         from starsbot.treasury.service import Treasury

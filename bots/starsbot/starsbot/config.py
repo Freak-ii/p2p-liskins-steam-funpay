@@ -9,7 +9,11 @@ from typing import Any
 
 import yaml
 
-DENOMINATIONS = (50, 75, 100, 150, 250, 350, 500, 1000)   # 750 и 1500 в разделе FunPay нет
+# Номиналы «По username», которые есть в списке «Количество» раздела FunPay (проверено 2026-11-21)
+DENOMINATIONS = (50, 75, 100, 150, 200, 250, 300, 350, 500, 1000, 2500)
+# Fragment продаёт любое количество от 50 звёзд; этих номиналов в списке FunPay нет — лот выставляется через
+# «Другое количество» с числом звёзд (так продают 750, 1500, 5000 и т. д. другие продавцы)
+CUSTOM_DENOMINATIONS = (750, 1500, 2000, 3000, 5000, 10000)
 PREMIUM_MONTHS = (3, 6, 12)                              # сроки, которые Fragment дарит (fragment.com/premium/gift)
 GIFT_DENOMINATIONS = (13, 21, 43, 85, 50, 100, 150, 250, 350, 500)
 
@@ -18,6 +22,7 @@ DEFAULTS: dict[str, Any] = {
         "dry_run": True, "demo": False, "language": "ru",
         "database": "data/starsbot.sqlite3", "log_file": "data/starsbot.log", "log_level": "INFO",
         "autostart": False, "backup_keep_days": 14,
+        "profile": "stars",              # stars — StarsBot (звёзды через Fragment), giftshop — TG Gift (подарки)
     },
     "messages": {"ru": {}, "en": {}},
     "funpay": {
@@ -28,15 +33,18 @@ DEFAULTS: dict[str, Any] = {
         "game_id": 0,                    # id игры для поднятия лотов (0 — не поднимать)
         # Лоты: один лот на номинал. offer_id — id лота из ссылки funpay.com/lots/offer?id=…
         # position — желаемое место лота в списке раздела (1 — первый). 0 — как в настройках RTBA
-        "lots": [{"stars": n, "offer_id": 0, "position": 0} for n in DENOMINATIONS],
+        "lots": [{"stars": n, "offer_id": 0, "position": 0} for n in DENOMINATIONS] +
+                [{"stars": n, "offer_id": 0, "position": 0, "custom": True} for n in CUSTOM_DENOMINATIONS],
         "order_match_regex": r"(?i)(зв[её]зд|stars|⭐)",
         "order_exclude_regex": r"(?i)(подарк|gift|с заходом|вход на аккаунт)",
         "auto_raise": True, "raise_interval_minutes": 240,
         "stock_sync": True,              # «Наличие» лотов = сколько раз хватит баланса кошелька
         "max_display_amount": 200,
         "deactivate_when_empty": True,
-        "presale_replies": True,         # отвечать на вопросы о звёздах в чатах без заказа
+        "presale_replies": True,         # ответить шаблоном тому, кто пишет без заказа (один раз на чат)
         "coord_db": "",                  # общий файл координации с другими ботами (обычно задаёт Центр)
+        # заказы этих подразделов не наши, даже если в описании есть число звёзд: «Подарки» ведёт бот TG Gift
+        "foreign_subcategory_regex": r"(?i)подарки|\bgifts\b",
         # Автовыставление лотов: бот сам создаёт недостающие лоты по образцу вашего лота (копия полей формы)
         "auto_create_lots": False,
         "lot_price_per_star": 1.6,       # стартовая цена нового лота, ₽ за звезду (дальше её ведёт RTBA)
@@ -50,6 +58,9 @@ DEFAULTS: dict[str, Any] = {
     # Выдача звёзд подарками Telegram (раздел FunPay «Звёзды → Подарком»)
     "gifts": {
         "enabled": False,
+        # раздел «Звёзды → Подарком» ведёт бот TG Gift (свой Telegram-аккаунт, звёзды от StarsBot): у StarsBot эта
+        # выдача выключена, его старые лоты подарками выключаются, пока TG Gift не возьмёт их себе
+        "moved_to_tggift": True,
         "api_id": 0, "api_hash": "",     # свои ключи приложения: my.telegram.org → API development tools
         "phone": "",
         "session_file": "data/telegram.session",
@@ -96,6 +107,46 @@ DEFAULTS: dict[str, Any] = {
         "quote_minutes": 30,
         "pilot_orders": 1,               # первые N боевых заказов Premium — после одобрения
         "lot_texts": {},                 # ручные тексты карточки: summary_ru, desc_ru, summary_en, desc_en ({months})
+    },
+    # Снабжение звёздами других ботов (TG Gift): они пишут заявку в общий файл координации, StarsBot покупает
+    # звёзды на Fragment на @username их Telegram-аккаунта тем же безопасным путём, что и обычные заказы
+    "supply": {
+        "enabled": True,
+        "token": "",                     # ключ API /api/supply/* для Telegram-магазина ShopBot (≥16 символов)
+        "max_per_topup": 2500,           # не больше N ⭐ за одну поставку
+        "max_per_day": 5000,             # и N ⭐ за сутки на один аккаунт (0 — без лимита)
+        "cooldown_minutes": 20,          # пауза после поставки: звёзды от Fragment приходят за несколько минут
+        "min_wallet_reserve_stars": 500, # не снабжать, если после поставки кошелька хватит меньше чем на N ⭐ своих заказов
+    },
+    # NFT-подарки для TG Gift: StarsBot покупает коллекционный подарок на fragment.com/gifts своим кошельком TON и
+    # отправляет его покупателю в Telegram по заданию TG Gift (см. starsbot/nft_supply.py)
+    "nft_supply": {
+        "enabled": True,
+        "max_ton_per_item": 60.0,        # дороже N TON за подарок не покупать, что бы ни просил TG Gift
+        "max_ton_per_day": 200.0,        # всего на NFT-подарки за сутки, TON
+        "transfer_max_ton": 0.6,         # перевод подарка в Telegram (газ и сбор Fragment) не дороже N TON
+        "expected_transfer_ton": 0.15,   # оценка стоимости перевода для цен TG Gift
+        "wallet_reserve_ton": 2.0,       # после покупки на кошельке остаётся N TON на заказы звёзд
+        "transfer_wait_minutes": 30,     # ждать появления купленного подарка на кошельке до перевода
+    },
+    # Бот TG Gift (профиль giftshop): продажа подарков Telegram в разделе FunPay «Подарки»
+    "giftshop": {
+        # Лоты: один лот на подарок. emoji/stars — подарок из каталога Telegram (цена в звёздах), name — название
+        # в карточке. offer_id — id лота FunPay (0 — бот выставит сам), position — место в списке (0 — как в RTBA),
+        # price — своя цена лота, ₽ (0 — ведёт RTBA), sell — продавать ли этот подарок
+        "lots": [],
+        "subcategory_regex": r"(?i)подарк|gift",
+        "rub_per_star": 1.35,            # себестоимость звезды, пока не было поставок от StarsBot (₽)
+        "min_margin_pct": 5.0,           # цена лота не ниже себестоимости подарка + N%
+        "start_markup_pct": 30.0,        # стартовая цена нового лота: себестоимость + N%
+        "auto_create_lots": True,        # выставлять лоты подарков с sell=true, у которых нет offer_id
+        "lot_texts": {},                 # свои тексты карточки: summary_ru, desc_ru, summary_en, desc_en ({gift}, {stars})
+        "share_from": "../starsbot/config.yaml",   # взять golden_key и Telegram-уведомления у StarsBot, если свои пусты
+        "supply": {
+            "enabled": True,             # просить у StarsBot звёзды на аккаунт подарков
+            "min_stars": 300,            # когда свободных звёзд меньше — заявка на пополнение
+            "amount": 1000,              # сколько просить за раз
+        },
     },
     # Автономный цикл: напоминания о подтверждении, файлы для поддержки, вывод с FunPay на кошелёк
     "autopilot": {
@@ -183,6 +234,7 @@ DEFAULTS: dict[str, Any] = {
         "auto_refund_no_funds": False,   # авто-возврат, если на кошельке нет денег
         "message_rate_limit_seconds": 2,
         "review_reply": True,            # отвечать на отзывы 4–5★ (на 1–3★ — только алерт, отвечаете вы)
+        "confirm_reminder_minutes": 10,  # одно напоминание подтвердить заказ через N мин после выдачи (0 — не напоминать)
     },
     "risk": {
         "enabled": True, "manual_review_score": 60, "block_score": 90, "large_order_stars": 1500,
@@ -255,6 +307,51 @@ DEFAULTS: dict[str, Any] = {
         "activation_bot": {"enabled": True, "bot_token": ""},   # отдельный Telegram-бот для покупателей
         "activation_web": {"enabled": False, "host": "0.0.0.0", "port": 8084, "public_url": ""},
         "messages": {},                  # свои тексты для покупателей Ozon (ключи как в starsbot/ozon/texts.py)
+        "min_margin_pct": 3.0,           # пол маржи: панель подсветит цену ниже, рекомендованная цена — не ниже
+    },
+    # Третий канал: Avito (безопасная сделка для цифровых товаров, с 30.04.2026). Покупатель нажимает «Купить»,
+    # платит Авито, бот видит оплату в чате объявления, просит @username и покупает звёзды на Fragment.
+    # Нужен доступ к API Авито (Профиль → Для профессионалов → API) с правом на мессенджер.
+    "avito": {
+        "enabled": False,
+        "client_id": "", "client_secret": "",    # avito.ru/professionals/api
+        "user_id": 0,                    # номер профиля; 0 — узнать автоматически (/core/v1/accounts/self)
+        "api_base": "https://api.avito.ru",
+        "poll_interval": 20,             # опрос чатов, сек (вебхук не нужен — работает с домашнего ПК)
+        # Объявления: id объявления → номинал. price — ваша цена, ₽ (не опустится ниже пола маржи)
+        "products": [{"stars": n, "item_id": 0, "price": 0} for n in DENOMINATIONS],
+        # Признаки оплаты в системных сообщениях чата (регулярные выражения, без учёта регистра)
+        "paid_patterns": ["оплатил", "оплачен", "заказ оформлен", "новый заказ"],
+        "done_patterns": ["подтвердил получение", "заказ завершён", "заказ завершен"],
+        "cancel_patterns": ["отменил заказ", "заказ отменён", "заказ отменен", "возврат"],
+        "presale_replies": True,         # отвечать на вопросы до оплаты (цена, как купить)
+        "presale_cooldown_minutes": 60,  # не чаще раза в N минут в одном чате
+        "auto_complete_hours": 48,       # «выдан» → «завершён», если Авито не прислал подтверждение покупателя
+        "commission_pct": 10.0,          # комиссия Авито за безопасную сделку, % (уточните в кабинете)
+        "withdraw_fee_pct": 0.0,
+        "min_margin_pct": 3.0,           # маржа не ниже, % от цены
+        "price_mode": "fixed",           # fixed — ваша цена (но не ниже пола), margin — по целевой марже
+        "target_margin_pct": 8.0,
+        "price_round": 1,                # шаг цены, ₽ (округление вверх)
+        "price_sync": True,              # бот сам меняет цену объявлений через API
+        "price_interval": 900,           # как часто пересчитывать цены, сек
+        "messages": {},                  # свои тексты (ключи как в starsbot/avito/texts.py)
+    },
+    # Четвёртый канал: Wildberries, категория «Цифровые товары» (ключи активации). Площадку WB Digital закрыли
+    # 01.12.2025; на основной витрине категория пока в пилоте для части продавцов, открытого API выдачи нет.
+    # Поэтому бот выпускает пул кодов активации, вы загружаете их в кабинет WB файлом, а покупатель вводит код
+    # и @username в боте активации — как на Ozon.
+    "wb": {
+        "enabled": False,
+        "products": [{"stars": n, "nm_id": "", "price": 0} for n in DENOMINATIONS],   # nm_id — артикул WB
+        "code_prefix": "TGW",            # коды вида TGW-ABCD-EFGH-JKMN (не путаются с кодами Ozon)
+        "pool_warn_low": 2,              # предупредить, когда невыданных кодов номинала осталось меньше
+        "commission_pct": 5.0,           # комиссия WB для ключей активации, % (уточните в кабинете)
+        "withdraw_fee_pct": 0.0,
+        "min_margin_pct": 3.0,
+        "price_mode": "fixed", "target_margin_pct": 8.0, "price_round": 1,
+        "activation_bot": {"enabled": True, "bot_token": ""},   # отдельный бот для покупателей WB
+        "messages": {},
     },
     # Третий канал продаж: маркетплейс GGSEL (ggsel.net, Seller API). Покупатель указывает @username в поле
     # заказа при оформлении (или пишет его в чат заказа), дальше — тот же путь, что у FunPay: Fragment → TON.
@@ -329,11 +426,25 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
+def profile_of(data: dict | None, overrides: dict | None = None) -> str:
+    """Профиль бота: из настроек, из переменной STARSBOT_PROFILE (её ставит запуск с --profile) или stars."""
+    for src in (overrides or {}, data or {}):
+        p = ((src.get("general") or {}) if isinstance(src, dict) else {}).get("profile")
+        if p:
+            return str(p)
+    return os.environ.get("STARSBOT_PROFILE") or "stars"
+
+
 def load_config(path: str | Path | None = None, overrides: dict | None = None) -> Section:
     data: dict = {}
     if path and Path(path).exists():
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    merged = _merge(DEFAULTS, _expand_env(data))
+    base = DEFAULTS
+    profile = profile_of(data, overrides)
+    if profile == "giftshop":
+        from starsbot.giftshop.profile import PROFILE_DEFAULTS
+        base = _merge(DEFAULTS, PROFILE_DEFAULTS)
+    merged = _merge(base, _expand_env(data))
     if overrides:
         merged = _merge(merged, overrides)
     return _wrap(merged)
@@ -344,6 +455,9 @@ def validate_config(cfg: Section) -> list[str]:
     problems: list[str] = []
     if cfg.general.demo:
         return problems
+    if cfg.general.get("profile") == "giftshop":
+        from starsbot.giftshop.profile import validate_giftshop
+        return validate_giftshop(cfg)
     if not cfg.funpay.golden_key:
         problems.append("funpay.golden_key не задан")
     # лоты без offer_id — не ошибка: бот выставит их сам при запуске или по кнопке «Лоты → Выставить недостающие»
@@ -366,6 +480,8 @@ def validate_config(cfg: Section) -> list[str]:
     problems += validate_premium(cfg)
     problems += validate_ozon(cfg)
     problems += validate_ggsel(cfg)
+    problems += validate_avito(cfg)
+    problems += validate_wb(cfg)
     return problems
 
 
@@ -396,6 +512,33 @@ def validate_ggsel(cfg: Section) -> list[str]:
         out.append("ggsel.price_mode: manual или margin")
     if float(gg.get("min_margin_pct") or 0) > float(gg.get("margin_pct") or 0) and gg.get("price_mode") == "margin":
         out.append("ggsel.margin_pct должна быть не меньше min_margin_pct")
+    return out
+
+
+def validate_avito(cfg: Section) -> list[str]:
+    av = cfg.get("avito") or {}
+    if not av.get("enabled"):
+        return []
+    out = []
+    if not str(av.get("client_id") or "").strip() or not str(av.get("client_secret") or "").strip():
+        out.append("avito: укажите client_id и client_secret (Авито → Для профессионалов → API)")
+    if not any(p.get("item_id") and p.get("stars") for p in (av.get("products") or [])):
+        out.append("avito.products: укажите id хотя бы одного объявления со звёздами")
+    return out
+
+
+def validate_wb(cfg: Section) -> list[str]:
+    wb = cfg.get("wb") or {}
+    if not wb.get("enabled"):
+        return []
+    out = []
+    bot = wb.get("activation_bot") or {}
+    if not (bot.get("enabled") and bot.get("bot_token")):
+        out.append("wb: укажите токен бота активации (@BotFather) — без него покупатель не введёт код")
+    tokens = {str(cfg.notifications.telegram.bot_token or ""),
+              str(((cfg.get("ozon") or {}).get("activation_bot") or {}).get("bot_token") or "")} - {""}
+    if bot.get("bot_token") and str(bot.get("bot_token")) in tokens:
+        out.append("wb.activation_bot: нужен отдельный бот (не уведомлений и не бот активации Ozon)")
     return out
 
 

@@ -22,7 +22,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("stock_sync", "«Наличие» лотов по балансу кошелька", "bool", "Лот скрывается, когда TON не хватает на номинал"),
         ("max_display_amount", "Максимум показываемого наличия", "int", ""),
         ("deactivate_when_empty", "Скрывать лот, когда баланса не хватает", "bool", ""),
-        ("presale_replies", "Отвечать на вопросы о звёздах без заказа", "bool", "Один ответ в чат раз в 6 часов"),
+        ("presale_replies", "Отвечать тем, кто пишет без заказа", "bool", "Один шаблонный ответ на чат (до следующего заказа)"),
         ("auto_create_lots", "Выставлять недостающие лоты автоматически", "bool", "По образцу вашего лота или пустой форме раздела"),
         ("lot_price_per_star", "Стартовая цена нового лота, ₽ за звезду", "float", "Дальше цену ведёт RTBA / позиция"),
         ("lot_description", "Описание новых лотов «По username»", "str", "Без ссылок и контактов"),
@@ -117,6 +117,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("auto_refund_bad_recipient", "Авто-возврат, если username так и не получен", "bool", ""),
         ("auto_refund_no_funds", "Авто-возврат, если не хватает TON", "bool", ""),
         ("message_rate_limit_seconds", "Пауза между сообщениями в чат, сек", "float", ""),
+        ("confirm_reminder_minutes", "Напомнить подтвердить заказ через, мин", "int", "Одно напоминание после выдачи; 0 — не напоминать"),
     ]),
     ("risk", [
         ("enabled", "Риск-система включена", "bool", ""),
@@ -215,7 +216,8 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("stock_sync", "Остатки на Ozon по балансу кошелька", "bool", "Товар уходит в 0, когда TON не хватает"),
         ("max_stock", "Максимальный остаток на Ozon", "int", ""),
         ("commission_pct", "Комиссия Ozon, %", "float", "Игровая валюта — 10%, прочие цифровые товары — 15%"),
-        ("withdraw_fee_pct", "Комиссия вывода с Ozon, %", "float", "Обычно 0"),
+        ("withdraw_fee_pct", "Вывод и налог с Ozon, %", "float", "Налог (НПД 6%, УСН 6%) + комиссия вывода"),
+        ("min_margin_pct", "Минимальная маржа, %", "float", "Панель подсветит цену ниже"),
     ]),
     ("ggsel", [
         ("enabled", "Продавать на GGSEL", "bool", "Маркетплейс ggsel.net, работа через Seller API"),
@@ -244,6 +246,33 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("port", "Порт страницы", "int", ""),
         ("public_url", "Публичная ссылка", "str", "Для инструкции в карточке, например https://stars.example.ru"),
     ]),
+    ("avito", [
+        ("enabled", "Продавать на Авито", "bool", "Безопасная сделка для цифровых товаров, чаты через API Авито"),
+        ("client_id", "client_id", "str", "Авито → Для профессионалов → API"),
+        ("client_secret", "client_secret", "secret", "Ключ API. Мессенджер API доступен не на всех тарифах"),
+        ("user_id", "Номер профиля", "int", "0 — бот узнает сам"),
+        ("poll_interval", "Проверять чаты, сек", "int", ""),
+        ("presale_replies", "Отвечать до оплаты", "bool", "Как купить, номиналы; username можно прислать заранее"),
+        ("presale_cooldown_minutes", "Автоответ до оплаты не чаще, мин", "int", "В одном чате"),
+        ("commission_pct", "Комиссия Авито, %", "float", "За безопасную сделку — уточните в кабинете"),
+        ("withdraw_fee_pct", "Вывод и налог с Авито, %", "float", "Налог (НПД 4–6%, УСН 6%) + комиссия вывода — иначе маржа завышена"),
+        ("min_margin_pct", "Минимальная маржа, %", "float", "Цена объявления не опустится ниже"),
+        ("price_sync", "Менять цены объявлений автоматически", "bool", ""),
+        ("price_interval", "Пересчитывать цены, сек", "int", ""),
+        ("auto_complete_hours", "Считать заказ завершённым через, ч", "int", "Если Авито не прислал подтверждение"),
+    ]),
+    ("wb", [
+        ("enabled", "Продавать на Wildberries", "bool", "Категория «Цифровые товары»: коды активации из пула"),
+        ("code_prefix", "Префикс кодов", "str", "Коды вида TGW-ABCD-EFGH-JKMN, не совпадает с Ozon"),
+        ("pool_warn_low", "Предупредить, когда кодов номинала меньше", "int", ""),
+        ("commission_pct", "Комиссия WB, %", "float", "Уточните в кабинете для ключей активации"),
+        ("withdraw_fee_pct", "Вывод и налог с WB, %", "float", "Налог (НПД 6%, УСН 6%) + комиссия вывода"),
+        ("min_margin_pct", "Минимальная маржа, %", "float", "Панель подскажет цену не ниже"),
+    ]),
+    ("wb.activation_bot", [
+        ("enabled", "Бот активации в Telegram", "bool", "Покупатель присылает боту код и @username"),
+        ("bot_token", "Токен бота активации WB (@BotFather)", "secret", "Отдельный бот: не уведомлений и не Ozon"),
+    ]),
 ]
 
 SECTION_TITLES = {
@@ -255,6 +284,7 @@ SECTION_TITLES = {
     "notifications.telegram": "Telegram", "notifications": "Уведомления", "dashboard": "Доступ к панели (роли)",
     "sla": "Сроки (SLA)", "ozon": "Ozon: продажи", "ozon.activation_bot": "Ozon: бот активации",
     "ozon.activation_web": "Ozon: страница активации", "ggsel": "GGSEL: продажи",
+    "avito": "Авито: продажи", "wb": "Wildberries: продажи", "wb.activation_bot": "Wildberries: бот активации",
     "gifts": "Подарки: выдача подарками Telegram", "gifts.topup": "Подарки: автопополнение звёзд",
     "autopilot": "Автопилот", "autopilot.withdraw": "Автопилот: вывод с FunPay",
 }

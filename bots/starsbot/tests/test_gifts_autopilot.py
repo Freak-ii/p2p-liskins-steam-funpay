@@ -18,6 +18,9 @@ from tests.test_engine import boot, drain, make
 from tests.test_wallet_fragment import FakeApi, wallet_data
 
 W12 = ("abandon " * 11 + "about").split()
+# старый режим: «Подарком» выдаёт сам StarsBot (теперь по умолчанию этим занимается TG Gift)
+from starsbot.app.launcher import DEMO_OVERRIDES  # noqa: E402
+LEGACY_GIFTS = {**DEMO_OVERRIDES["gifts"], "moved_to_tggift": False}
 
 
 # ---------------------------------------------------------------- сид-фраза 12 слов
@@ -102,7 +105,7 @@ def test_gift_plans_match_funpay_denominations():
 
 # ---------------------------------------------------------------- заказ подарками целиком
 def test_gift_order_end_to_end(tmp_path):
-    sup, e, fp, wallet = make(tmp_path)
+    sup, e, fp, wallet = make(tmp_path, gifts=LEGACY_GIFTS)
     tg = e.gifts.tg
     start = tg.balance
 
@@ -131,7 +134,7 @@ def test_gift_order_end_to_end(tmp_path):
 
 
 def test_gift_unknown_outcome_goes_to_seller_and_resend_after_approve(tmp_path):
-    sup, e, fp, wallet = make(tmp_path)
+    sup, e, fp, wallet = make(tmp_path, gifts=LEGACY_GIFTS)
     tg = e.gifts.tg
 
     async def go():
@@ -153,7 +156,7 @@ def test_gift_unknown_outcome_goes_to_seller_and_resend_after_approve(tmp_path):
 
 
 def test_out_of_stars_triggers_fragment_topup_and_closes_lots(tmp_path):
-    sup, e, fp, wallet = make(tmp_path, gifts={"enabled": True, "pilot_orders": 0, "pause_between_gifts": 0,
+    sup, e, fp, wallet = make(tmp_path, gifts={"enabled": True, "moved_to_tggift": False, "pilot_orders": 0, "pause_between_gifts": 0,
                                                "lots": [{"stars": 43, "offer_id": 150}],
                                                "topup": {"enabled": True, "min_stars": 100, "amount": 500}})
     tg = e.gifts.tg
@@ -374,12 +377,13 @@ def test_presale_hello_and_other_goods(tmp_path):
     asyncio.run(e.on_chat_without_order("c1", ChatMessage(1, "c1", 7, "ivan", "Здравствуйте, вы тут?")))
     assert len(fp.outbox) == n0 + 1 and "на связи" in fp.outbox[-1][1]
     asyncio.run(e.on_chat_without_order("c1", ChatMessage(2, "c1", 7, "ivan", "ау")))
-    assert len(fp.outbox) == n0 + 1                     # не чаще раза в 6 часов на чат
+    assert len(fp.outbox) == n0 + 1                     # шаблон — один раз на чат
     asyncio.run(e.on_chat_without_order("c2", ChatMessage(3, "c2", 8, "petr", "привет, скины cs2 есть?")))
+    assert len(fp.outbox) == n0 + 1                     # чужой товар — молчим
     asyncio.run(e.on_chat_without_order("c3", ChatMessage(4, "c3", 9, "olga", "ок")))
-    assert len(fp.outbox) == n0 + 1                     # чужой товар и пустая болтовня — молчим
+    assert len(fp.outbox) == n0 + 2 and "на связи" in fp.outbox[-1][1]   # просто написал без заказа — шаблон
     asyncio.run(e.on_chat_without_order("c4", ChatMessage(5, "c4", 10, "max", "сколько стоят 100 звезд?")))
-    assert "Fragment" in fp.outbox[-1][1] and len(fp.outbox) == n0 + 2
+    assert "Fragment" in fp.outbox[-1][1] and len(fp.outbox) == n0 + 3
 
 
 def test_custom_lot_texts_and_manage_switch(tmp_path):

@@ -60,6 +60,9 @@ DEFAULTS: dict[str, Any] = {
         "min_level": "INFO", "throttle_seconds": 300, "daily_report_hour": 10,
     },
     "dashboard": {"enabled": True, "host": "127.0.0.1", "port": 8080, "token": ""},
+    # Поставка ключей Telegram-магазину ShopBot (/api/supply/*): токен ≥16 символов, такой же, как
+    # suppliers.steam_keys.token у ShopBot; пусто — API выключен
+    "supply": {"token": ""},
     "sla": {"link_wait_minutes": 120, "offer_accept_hours": 12, "order_total_hours": 24},
     "ai": {
         "enabled": False, "backend": "claude", "api_key": "", "model": "claude-opus-5-5", "effort": "low",

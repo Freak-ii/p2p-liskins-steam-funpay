@@ -1,0 +1,52 @@
+{% extends "base.html" %}{% block title %}Главная{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>🎁 TG Gift — подарки Telegram на FunPay</h1>
+<div class="row">{% for d in [1,7,30] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/?days={{d}}">{{d}} дн.</a>{% endfor %}</div></div>
+
+{% if problems and not app.demo %}<div class="card" style="border-left:4px solid var(--amber)"><b>Чтобы бот заработал:</b>
+<ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul><a href="/shop">Открыть «Подарки и лоты» →</a></div>{% endif %}
+
+{% if health %}<div class="card" style="padding:8px 12px"><div class="row"><b>Здоровье:</b>
+  {% for c in health.checks %}<span class="chip c-{{ 'green' if c.ok else 'red' }}" title="{{ c.detail or ('обновлялось ' ~ c.age ~ ' c назад') }}">{{ {'funpay_poll': 'FunPay', 'tg_gifts': 'Telegram'}.get(c.name, c.name) }}</span>{% endfor %}
+  <span class="muted">работает {{ health.uptime|dur }}</span></div></div>{% endif %}
+
+<div class="grid">
+  <div class="card kpi"><div class="v">{% if account.username or account.name %}@{{ account.username or account.name }}{% else %}—{% endif %}</div><div class="l">аккаунт подарков{% if status.error %} · <span class="c-red">{{ status.error }}</span>{% endif %}</div></div>
+  <div class="card kpi"><div class="v">{{ stars.balance if stars.balance is not none else '—' }} ⭐</div><div class="l">звёзд на аккаунте · свободно {{ free }}</div></div>
+  <div class="card kpi"><div class="v">{{ committed }} ⭐</div><div class="l">обещано активным заказам</div></div>
+  <div class="card kpi"><div class="v">{{ sends24 }}</div><div class="l">подарков отправлено за сутки</div></div>
+</div>
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ s.revenue|money }}</div><div class="l">Выручка, ₽</div></div>
+  <div class="card kpi"><div class="v">{{ s.profit|money }}</div><div class="l">Прибыль, ₽ (звёзды по себестоимости)</div></div>
+  <div class="card kpi"><div class="v">{{ s.orders }}</div><div class="l">Заказов · ср. чек {{ s.avg_check|money }}</div></div>
+  <div class="card kpi"><div class="v">{{ s.delivery_rate }}%</div><div class="l">Выдано · авто {{ s.auto_rate }}%</div></div>
+  <div class="card kpi"><div class="v">{{ s.confirm_rate }}%</div><div class="l">Подтверждают</div></div>
+  <div class="card kpi"><div class="v">{{ s.t_total|dur }}</div><div class="l">Оплата → подарок (медиана)</div></div>
+</div>
+
+<div class="cols">
+<div class="card"><h2>Снабжение звёздами от StarsBot</h2>
+  {% if not supply.coord %}<p class="c-amber">Нет общего файла координации: запустите TG Gift из Центра рядом со StarsBot — иначе звёзды на аккаунт придётся покупать вручную.</p>{% endif %}
+  <div class="help">Когда свободных звёзд меньше порога, TG Gift оставляет заявку, StarsBot покупает звёзды на Fragment на @{{ account.username or '…' }}. Себестоимость звезды сейчас: <b>{{ supply.rub_per_star }} ₽</b>.</div>
+  {% if supply.request %}<p>Заявка: {{ supply.request.need }} ⭐ {% if not supply.request.need %}(не нужна){% endif %} · {{ supply.request.updated_at|ts }}</p>{% endif %}
+  <table><tr><th>Поставка</th><th>⭐</th><th>Статус</th><th>₽</th><th>Когда</th></tr>
+  {% for r in supply.history %}<tr><td>{{ r.order_id }}</td><td>{{ r.stars }}</td><td>{{ {'pending': 'покупается', 'done': 'получено', 'manual': 'у продавца', 'cancelled': 'отменена'}.get(r.state, r.state) }}</td><td>{{ r.cost_rub|money }}</td><td>{{ r.created_at|ts }}</td></tr>
+  {% else %}<tr><td colspan="5" class="muted">Поставок ещё не было</td></tr>{% endfor %}</table>
+</div>
+<div class="card"><h2>Лоты</h2><div class="tw"><table><tr><th>Подарок</th><th>Лот</th><th>Наличие</th><th>Цена</th><th>Место</th></tr>
+  {% for r in rows %}{% if r.sell %}<tr><td>{{ r.title }} <span class="muted">{{ r.stars }}⭐</span></td><td>{{ r.offer_id or '—' }}</td><td>{{ r.amount if r.amount is not none else '—' }}{% if not r.available %} <span class="c-red">нет в каталоге</span>{% endif %}</td><td>{{ r.price|money }}</td><td>{{ r.rank or '—' }}</td></tr>{% endif %}{% endfor %}
+  </table></div><a href="/shop">Управление лотами →</a></div>
+</div>
+
+<div class="cols">
+  <div class="card"><h2>Активные заказы</h2><div class="tw"><table>
+  <tr><th>Заказ</th><th>Покупатель</th><th>Шт.</th><th>Получатель</th><th>Статус</th><th>Оплачен</th></tr>
+  {% for o in active %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{{o.quantity}}</td>
+  <td>{{ ('@' ~ o.tg_username) if o.tg_username else '—' }}</td><td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{{o.paid_at|ts}}</td></tr>
+  {% else %}<tr><td colspan="6" class="muted">Нет активных заказов</td></tr>{% endfor %}</table></div></div>
+  <div class="card"><h2>Лента событий</h2><div style="max-height:330px;overflow:auto;font-size:13px">
+  {% for e in feed %}<div><span class="muted">{{e.ts|ts}}</span> <a href="/orders/{{e.order_id}}">#{{e.order_id}}</a> {{e.kind}}</div>{% endfor %}</div></div>
+</div>
+<script>window.onLive(ev=>{if(ev.type==='order'||ev.type==='resync'){clearTimeout(window._rt);window._rt=setTimeout(()=>location.reload(),2000)}})</script>
+{% endblock %}

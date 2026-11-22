@@ -51,7 +51,7 @@ class Channel:
         gifts = sorted(shop.gifts(), key=lambda g: g["stars"])
         if gifts and shop.rtba.is_open("buy.gift"):
             try:
-                q = await shop.suppliers["gifts"].quote("gift", int(gifts[0]["stars"]))
+                q = await shop.suppliers["gifts"].quote("gift", int(gifts[0]["stars"]), gift=gifts[0])
                 if q.get("available"):
                     price, _ = shop_price(self.cfg, "gift", float(q["cost_rub"]), int(gifts[0]["stars"]))
                     rows.append(f"🎁 Подарки — от <b>{price:.0f} ₽</b>")

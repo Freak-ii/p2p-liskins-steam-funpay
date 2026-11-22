@@ -128,7 +128,20 @@ class Database:
                 if col not in have:
                     self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_channel ON orders(channel)")
+        # Скорость: WAL + NORMAL не делает fsync на каждую запись (каждая fsync на Windows — миллисекунды
+        # простоя цикла событий); индексы — для страниц «Цены» и счётчика алертов в шапке каждой страницы.
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA busy_timeout=3000")
+        for idx in ("CREATE INDEX IF NOT EXISTS idx_snap_stars ON competitor_snapshots(stars, id)",
+                    "CREATE INDEX IF NOT EXISTS idx_price_stars ON price_history(stars, id)",
+                    "CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(acknowledged, level)",
+                    "CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at)"):
+            self.conn.execute(idx)
         self._lock = threading.RLock()
+        try:
+            self.prune()
+        except sqlite3.Error:                      # чистка не должна мешать запуску
+            pass
         self.listeners: list[Callable[[dict], None]] = []   # realtime: панель подписывается на события
 
     # ------------------------------------------------------------ helpers
@@ -164,6 +177,10 @@ class Database:
         dest = folder / f"{Path(self.path).stem}-{time.strftime('%Y%m%d')}.sqlite3"
         if dest.exists():
             return dest
+        try:
+            self.prune()
+        except sqlite3.Error:
+            pass
         tmp = dest.with_suffix(".tmp")
         target = sqlite3.connect(str(tmp))
         try:
@@ -175,6 +192,27 @@ class Database:
         for old in sorted(folder.glob(f"{Path(self.path).stem}-*.sqlite3"))[:-keep]:
             old.unlink(missing_ok=True)
         return dest
+
+    SNAPSHOT_KEEP_DAYS = 1
+
+    def prune(self, snapshot_days: float | None = None) -> int:
+        """Снимки конкурентов (весь топ страницы, ~8 КБ на номинал каждые несколько минут) раздували базу
+        на ~15 МБ в сутки. Для страницы «Цены» нужен только последний снимок, для истории — price_history.
+        Храним снимки за последние сутки (последний по каждому номиналу — всегда) и сжимаем файл,
+        если после чистки больше половины страниц пустые."""
+        if self.path == ":memory:":
+            return 0
+        days = self.SNAPSHOT_KEEP_DAYS if snapshot_days is None else snapshot_days
+        cutoff = time.time() - days * 86400
+        with self._lock:
+            n = self.conn.execute(
+                "DELETE FROM competitor_snapshots WHERE ts<? AND id NOT IN "
+                "(SELECT MAX(id) FROM competitor_snapshots GROUP BY stars)", (cutoff,)).rowcount
+            pages = self.conn.execute("PRAGMA page_count").fetchone()[0]
+            free = self.conn.execute("PRAGMA freelist_count").fetchone()[0]
+            if pages > 2000 and free * 2 > pages:
+                self.conn.execute("VACUUM")
+        return n
 
     # ------------------------------------------------------------ kv
     def kv_get(self, key: str, default: Any = None) -> Any:

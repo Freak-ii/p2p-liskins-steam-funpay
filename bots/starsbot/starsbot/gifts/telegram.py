@@ -203,7 +203,9 @@ class TelegramGifts:
                 emoji = getattr(a, "alt", "") or emoji
             out.append(Gift(int(g.id), int(g.stars), int(g.convert_stars or 0), str(getattr(g, "title", "") or ""),
                             limited=bool(g.limited), sold_out=bool(g.sold_out),
-                            require_premium=bool(getattr(g, "require_premium", False)), emoji=emoji))
+                            require_premium=bool(getattr(g, "require_premium", False)), emoji=emoji,
+                            resale=int(getattr(g, "availability_resale", 0) or 0),
+                            resell_min=int(getattr(g, "resell_min_stars", 0) or 0)))
         if out:
             self._catalog = (time.time(), out)
         return out
@@ -257,6 +259,60 @@ class TelegramGifts:
                 raise GiftError(f"подарок не отправлен: {e}", "rejected" if code == "unknown" else code) from e
         return {"ok": True, "ts": time.time()}
 
+    # ------------------------------------------------------------------ рынок улучшенных подарков Telegram
+    async def resale_listings(self, gift_id: int, limit: int = 5) -> list[dict]:
+        """Самые дешёвые улучшенные (NFT) экземпляры подарка на рынке Telegram за звёзды:
+        [{'slug': 'LolPop-236254', 'stars': 640, 'title': 'Lol Pop'}] по возрастанию цены."""
+        from telethon.tl import functions
+        c = await self._client()
+        try:
+            res = await c(functions.payments.GetResaleStarGiftsRequest(gift_id=int(gift_id), offset="",
+                                                                       limit=int(limit), sort_by_price=True))
+        except Exception as e:  # noqa: BLE001
+            raise GiftError(f"рынок подарков Telegram недоступен: {e}", _rpc_code(e)) from e
+        out = []
+        for g in getattr(res, "gifts", None) or []:
+            if getattr(g, "resale_ton_only", False):
+                continue
+            stars = 0
+            for a in getattr(g, "resell_amount", None) or []:
+                if type(a).__name__ == "StarsAmount":
+                    stars = int(getattr(a, "amount", 0) or 0)
+            if stars > 0 and getattr(g, "slug", ""):
+                out.append({"slug": str(g.slug), "stars": stars, "title": str(getattr(g, "title", "") or "")})
+        out.sort(key=lambda x: x["stars"])
+        return out
+
+    async def buy_resale(self, user: TgUser, slug: str, max_stars: int) -> dict:
+        """Покупает улучшенный подарок на рынке Telegram сразу на аккаунт получателя. Цена из формы оплаты
+        проверяется до оплаты: дороже max_stars — отказ без списания. code 'unknown'/'network' — исход неясен."""
+        if self.dry_run:
+            log.info("[DRY-RUN] NFT %s → @%s не куплен", slug, user.username)
+            return {"ok": True, "ts": time.time(), "dry": True, "stars": 0}
+        from telethon.tl import functions, types
+        c = await self._client()
+        peer = types.InputPeerUser(user_id=int(user.user_id), access_hash=int(user.access_hash))
+        invoice = types.InputInvoiceStarGiftResale(slug=str(slug), to_id=peer)
+        async with self._lock:
+            try:
+                form = await c(functions.payments.GetPaymentFormRequest(invoice=invoice))
+            except Exception as e:  # noqa: BLE001
+                code = _rpc_code(e)
+                raise GiftError(f"подарок {slug} не оформлен: {e}", "rejected" if code == "unknown" else code) from e
+            price = 0
+            for p in getattr(getattr(form, "invoice", None), "prices", None) or []:
+                price += int(getattr(p, "amount", 0) or 0)
+            if not price or price > int(max_stars):
+                raise GiftError(f"цена {slug} в форме оплаты {price} ⭐ — выше лимита {max_stars} ⭐", "price_changed")
+            try:
+                await c(functions.payments.SendStarsFormRequest(form_id=form.form_id, invoice=invoice))
+            except (OSError, ConnectionError, asyncio.TimeoutError) as e:
+                raise GiftError(f"обрыв связи во время оплаты подарка: {e}", "unknown") from e
+            except Exception as e:  # noqa: BLE001
+                code = _rpc_code(e)
+                raise GiftError(f"подарок {slug} не куплен: {e}", "rejected" if code == "unknown" else code) from e
+        return {"ok": True, "ts": time.time(), "stars": price}
+
     async def find_sent(self, user_id: int, stars: int, since: float) -> bool:
         """Есть ли в истории звёзд аккаунта исходящая оплата подарка этому пользователю после since."""
         from telethon.tl import functions, types
@@ -287,6 +343,9 @@ class FakeTelegramGifts:
                          G(1003, 50, 43, "Торт", emoji="🎂"), G(1004, 100, 85, "Кубок", emoji="🏆"),
                          G(1999, 2500, 2000, "Лимитка", limited=True)]
         self.has_session = True
+        # рынок улучшенных подарков: gift_id → [{'slug', 'stars'}]
+        self.resale: dict[int, list[dict]] = {}
+        self.bought: list[tuple[str, str, int]] = []
 
     async def whoami(self):
         return self.me
@@ -315,6 +374,26 @@ class FakeTelegramGifts:
         self.balance -= g.stars
         self.sent.append((user.username, gift_id, g.stars))
         return {"ok": True, "ts": time.time()}
+
+    async def resale_listings(self, gift_id: int, limit: int = 5) -> list[dict]:
+        return sorted(self.resale.get(int(gift_id), []), key=lambda x: x["stars"])[:limit]
+
+    async def buy_resale(self, user: TgUser, slug: str, max_stars: int) -> dict:
+        if self.fail_next:
+            code, self.fail_next = self.fail_next, None
+            raise GiftError("эмуляция сбоя", code)
+        for rows in self.resale.values():
+            for x in list(rows):
+                if x["slug"] == slug:
+                    if x["stars"] > max_stars:
+                        raise GiftError("цена выросла", "price_changed")
+                    if self.balance < x["stars"]:
+                        raise GiftError("BALANCE_TOO_LOW", "no_stars")
+                    self.balance -= x["stars"]
+                    rows.remove(x)
+                    self.bought.append((user.username, slug, x["stars"]))
+                    return {"ok": True, "ts": time.time(), "stars": x["stars"]}
+        raise GiftError(f"{slug} уже купили", "rejected")
 
     async def find_sent(self, user_id: int, stars: int, since: float) -> bool:
         return False
