@@ -73,6 +73,9 @@ class GiftShopEngine(Engine):
     def presale_hello(self, text: str) -> bool:
         return False            # на «здравствуйте / вы тут?» отвечает StarsBot — два ответа подряд выглядят как спам
 
+    def presale_any(self, text: str) -> bool:
+        return False            # на прочие сообщения без заказа шаблоном отвечает StarsBot (тот же аккаунт FunPay)
+
     def presale_text(self, lang: str, about_topic: bool, text: str) -> str:
         out = M.render(lang, "presale_shop" if about_topic else "presale_hello_shop",
                        denominations=", ".join(self._denominations()))
