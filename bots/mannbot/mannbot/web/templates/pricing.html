@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block title %}Цены / RTBA{% endblock %}
+{% block body %}<h1>Цены и RTBA</h1>
+<div class="card"><h2>Настройки</h2><div class="row">
+<span class="chip {{ 'c-green' if rtba.enabled else 'c-red' }}">RTBA {{ 'включён' if rtba.enabled else 'выключен' }}</span>
+<span class="chip">стратегия: {{rtba.strategy}}</span><span class="chip">шаг: {{rtba.undercut_abs}} / {{rtba.undercut_pct}}%</span>
+<span class="chip">себестоимость: {{rtba.cost_per_key}}</span><span class="chip">маржа ≥ {{rtba.min_margin_pct}}%</span>
+<span class="chip">потолок: {{rtba.ceiling_price}}</span><span class="chip">коэф. цены покупателя: {{markup}}</span></div></div>
+<div class="cols"><div class="card"><h2>Наша цена и лидер рынка</h2>{{ charts.lines(series|map(attribute='ts')|map('hm')|list, [('Наша цена (лот)', series|map(attribute='new_price')|list, 'var(--accent)'), ('Лидер рынка', series|map(attribute='best_competitor')|list, 'var(--blue)')])|safe }}</div>
+<div class="card"><h2>Склад</h2>{{ charts.lines(stock|map(attribute='ts')|map('hm')|list, [('Свободно ключей', stock|map(attribute='available')|list, 'var(--green)')])|safe }}</div></div>
+<div class="cols"><div class="card tw"><h2>Конкуренты {{snap_ts|ts}}</h2><table><tr><th>Продавец</th><th>Цена</th><th>Наличие</th><th>Онлайн</th></tr>
+{% for c in comps|sort(attribute='price') %}<tr><td>{{c.seller}}</td><td>{{c.price}}</td><td>{{c.amount}}</td><td>{{'●' if c.online else '○'}}</td></tr>{% else %}<tr><td colspan=4 class="muted">Нет данных</td></tr>{% endfor %}</table></div>
+<div class="card tw"><h2>Решения RTBA</h2><table><tr><th>Время</th><th>Было</th><th>Стало</th><th>Лидер</th><th>Поз.</th><th>Причина</th></tr>
+{% for h in history %}<tr><td>{{h.ts|ts}}</td><td>{{h.old_price}}</td><td>{{h.new_price}}{% if h.applied %} ✔{% endif %}</td><td>{{h.best_competitor}}</td><td>{{h.position}}</td><td class="muted">{{h.reason}}</td></tr>{% endfor %}</table></div></div>
+{% endblock %}

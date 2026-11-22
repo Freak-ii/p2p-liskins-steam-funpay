@@ -1,0 +1,42 @@
+{% extends "base.html" %}{% block title %}#{{o.order_id}}{% endblock %}
+{% block body %}
+<h1>Заказ #{{o.order_id}} <span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></h1>
+<div class="cols">
+<div class="card"><h2>Детали</h2><table>
+<tr><td>Покупатель</td><td>{{o.buyer_username}} (id {{o.buyer_id}}){% if customer %} · заказов {{customer.orders_count}}, LTV {{customer.total_spent|round(2)}}{% if customer.blacklisted %} <span class="chip c-red">ЧС</span>{% endif %}{% endif %}</td></tr>
+<tr><td>Товар</td><td>{{o.description}}</td></tr>
+<tr><td>Количество</td><td>{{o.quantity}} ед. → {{o.keys_qty}} ключ(ей)</td></tr>
+<tr><td>Сумма</td><td>{{o.price}} {{o.currency}}</td></tr>
+<tr><td>Статус FunPay</td><td>{{o.fp_status}}</td></tr>
+<tr><td>Ссылка на обмен</td><td style="word-break:break-all">{{o.trade_url or '—'}}</td></tr>
+<tr><td>Steam</td><td>{{o.partner_name or ''}} {% if o.steam_id64 %}<a href="https://steamcommunity.com/profiles/{{o.steam_id64}}" target="_blank" rel="noopener">{{o.steam_id64}}</a>{% endif %}</td></tr>
+<tr><td>Задержка обмена</td><td>{{o.escrow_days}} дн.</td></tr>
+<tr><td>Трейд</td><td>{% if o.offer_id %}<a href="https://steamcommunity.com/tradeoffer/{{o.offer_id}}/" target="_blank" rel="noopener">{{o.offer_id}}</a>{% else %}—{% endif %}</td></tr>
+<tr><td>Попыток данных / повторов</td><td>{{o.link_attempts}} / {{o.resends}}</td></tr>
+<tr><td>Риск</td><td>{{o.risk_score}}{% for r in risk %}<div class="muted">{{r}}</div>{% endfor %}</td></tr>
+<tr><td>Причина сбоя</td><td>{{o.fail_reason or '—'}}</td></tr>
+<tr><td>Хронология</td><td>оплачен {{o.paid_at|ts}}<br>ссылка {{o.link_received_at|ts}}<br>трейд {{o.offer_sent_at|ts}}<br>выдан {{o.delivered_at|ts}}<br>закрыт {{o.completed_at|ts}}</td></tr>
+<tr><td>Отзыв</td><td>{{ (o.review_stars ~ '★') if o.review_stars else '—' }}</td></tr>
+</table>
+<p><a href="https://funpay.com/orders/{{o.order_id}}/" target="_blank" rel="noopener">Открыть на FunPay ↗</a></p></div>
+<div class="card"><h2>Действия</h2>
+<form method="post" class="row" style="margin-bottom:10px">
+<button class="primary" name="action" value="approve" title="Одобрить / передать боту">✔ Одобрить</button>
+<button name="action" value="resend">↻ Переотправить трейд</button>
+<button name="action" value="delivered" onclick="return confirm('Отметить выданным и отправить покупателю благодарность?')">✅ Выдан вручную</button>
+<button name="action" value="reject">✋ В ручную</button>
+<button class="danger" name="action" value="refund" onclick="return confirm('Оформить ВОЗВРАТ денег покупателю?')">💸 Возврат</button>
+</form>
+<form method="post"><input type="hidden" name="action" value="message"><textarea name="text" placeholder="Сообщение покупателю в чат FunPay (без контактов и сторонних ссылок!)"></textarea>
+<button>Отправить в чат</button></form>
+<form method="post" style="margin-top:10px"><input type="hidden" name="action" value="note"><textarea name="text" placeholder="Заметка CRM">{{o.notes}}</textarea><button>Сохранить заметку</button></form>
+</div></div>
+<div class="cols">
+<div class="card"><h2>События</h2><div class="tw"><table>{% for e in events %}<tr><td class="muted" style="white-space:nowrap">{{e.ts|ts}}</td><td><b>{{e.kind}}</b>
+{% set d = e.data|jsonload %}{% if d %}<div class="muted">{% for k,v in d.items() if v not in (none,'') %}{{k}}={{ v|ts if k.endswith('_at') else v }} {% endfor %}</div>{% endif %}</td></tr>{% endfor %}</table></div></div>
+<div class="card"><h2>Переписка</h2>{% for m in msgs %}<div style="margin:6px 0;padding:6px 8px;border-radius:8px;background:var(--chip);{% if m.direction=='out' %}margin-left:30px{% else %}margin-right:30px{% endif %}">
+<div class="muted" style="font-size:11px">{{ 'бот' if m.direction=='out' else 'покупатель' }} · {{m.ts|ts}}</div><pre>{{m.text}}</pre></div>{% else %}<span class="muted">Нет сообщений</span>{% endfor %}</div>
+</div>
+{% if offers %}<div class="card"><h2>Трейды</h2><table><tr><th>ID</th><th>Статус</th><th>Создан</th><th>Обновлён</th></tr>
+{% for f in offers %}<tr><td>{{f.offer_id}}</td><td>{{ offer_states.get(f.state, f.state) }}</td><td>{{f.created_at|ts}}</td><td>{{f.updated_at|ts}}</td></tr>{% endfor %}</table></div>{% endif %}
+{% endblock %}

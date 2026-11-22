@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}Клиенты{% endblock %}
+{% block body %}<h1>Клиенты</h1><div class="card tw"><table>
+<tr><th>Покупатель</th><th>Заказов</th><th>Завершено</th><th>Возвратов</th><th>Ключей</th><th>LTV</th><th>Steam</th><th>Последний визит</th><th>ЧС</th></tr>
+{% for c in rows %}<tr><td><a href="https://funpay.com/users/{{c.funpay_id}}/" target="_blank" rel="noopener">{{c.username}}</a> <a class="muted" href="/orders?q={{c.username}}">заказы</a></td>
+<td>{{c.orders_count}}</td><td>{{c.completed_count}}</td><td>{{c.refunded_count}}</td><td>{{c.keys_bought}}</td><td>{{c.total_spent|round(2)}}</td>
+<td style="font-size:12px">{{ (c.steam_ids|jsonload)|join(', ') if c.steam_ids != '[]' else '—' }}</td><td>{{c.last_seen|ts}}</td>
+<td><form method="post" action="/customers/{{c.funpay_id}}" class="row">{% if c.blacklisted %}<span class="chip c-red">да</span><button name="action" value="unblock">снять</button>
+{% else %}<input name="note" placeholder="причина" style="width:110px"><button class="danger" name="action" value="blacklist">в ЧС</button>{% endif %}</form></td></tr>
+{% else %}<tr><td colspan="9" class="muted">Клиентов пока нет</td></tr>{% endfor %}</table></div>{% endblock %}

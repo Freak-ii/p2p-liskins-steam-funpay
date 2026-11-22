@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block body %}<div class="card"><form style="margin-bottom:10px"><input name="q" value="{{ q }}" placeholder="@, имя или id"> <button>Найти</button></form>
+<div class="scroll"><table><tr><th>Клиент</th><th>С нами с</th><th>Заказов</th><th>Потратил</th><th>Продал нам</th><th>Баланс ₽ / бонус / ⭐</th><th>Пригласил его</th><th>Метки</th></tr>
+{% for u in rows %}<tr><td><a href="/customers/{{ u.id }}">{{ '@' ~ u.username if u.username else u.id }}</a> {{ u.first_name }}{% if u.blocked %} <span class="pill closed">блок</span>{% endif %}</td>
+<td class="mute">{{ u.created_at|ts }}</td><td>{{ u.orders_count }}</td><td>{{ u.spent_rub|round(2) }} ₽</td><td>{{ u.sold_usdt|round(2) }} $</td><td>{{ u.balance_rub|round(2) }} / {{ u.bonus_rub|round(2) }} / {{ u.stars_credit }}</td>
+<td>{{ u.referred_by or '' }}</td><td>{{ u.tags }}</td></tr>{% endfor %}</table></div></div>{% endblock %}

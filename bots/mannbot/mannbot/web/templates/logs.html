@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block title %}Журнал{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>Журнал работы</h1>
+<label class="muted"><input type="checkbox" id="onlywarn"> только предупреждения и ошибки</label></div>
+<div class="card"><pre id="log" style="max-height:70vh;overflow:auto;font-size:12px"></pre></div>
+<script>
+let last=0;const box=document.getElementById('log'),only=document.getElementById('onlywarn');
+const colors={WARNING:'var(--amber)',ERROR:'var(--red)',CRITICAL:'var(--red)'};
+async function tick(){try{const r=await (await fetch('/api/logs?after='+last)).json();
+ const stick=box.scrollTop+box.clientHeight>=box.scrollHeight-20;
+ for(const l of r.lines){last=l.n;const d=document.createElement('div');d.textContent=l.text;d.dataset.level=l.level;
+  if(colors[l.level])d.style.color=colors[l.level];if(only.checked&&!colors[l.level])d.style.display='none';box.appendChild(d)}
+ if(stick)box.scrollTop=box.scrollHeight}catch(e){}}
+only.onchange=()=>{for(const d of box.children)d.style.display=(only.checked&&!colors[d.dataset.level])?'none':''};
+tick();setInterval(tick,2000);
+</script>
+{% endblock %}

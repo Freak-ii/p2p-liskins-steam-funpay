@@ -1,0 +1,11 @@
+# Запуск на VPS:  docker compose up -d   →  панель: http://127.0.0.1:8083 (через SSH-туннель)
+# Ссылка для входа с токеном: docker compose logs starsbot | grep login
+services:
+  starsbot:
+    build: .
+    container_name: starsbot
+    restart: unless-stopped
+    volumes:
+      - ./starsbot-data:/data          # настройки, база заказов, журнал
+    ports:
+      - "127.0.0.1:8083:8083"         # панель НЕ публикуется в интернет; заходите через ssh -L 8083:127.0.0.1:8083

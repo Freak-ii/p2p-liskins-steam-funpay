@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Центр перепродажи — вход</title>
+<link rel="stylesheet" href="/static/center.css">
+</head>
+<body>
+<main class="login card">
+  <h1>Центр перепродажи</h1>
+  <p class="muted">Ссылка со входом печатается в окне центра при запуске. Или введите токен из <code>center.yaml</code>.</p>
+  <form method="post" action="/login" class="row">
+    <input name="token" type="password" placeholder="токен" autofocus>
+    <button class="btn primary">Войти</button>
+  </form>
+</main>
+</body>
+</html>

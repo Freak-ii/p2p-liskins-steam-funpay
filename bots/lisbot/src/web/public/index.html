@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIS→Steam бот</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262a33;--text:#e6e8ec;--muted:#8b93a3;--accent:#4f8cff;--ok:#2fbf71;--warn:#e0a526;--bad:#e5484d}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+h1{font-size:16px;margin:0}nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button,.btn{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer;font:inherit}
+nav button.active{border-color:var(--accent);color:var(--accent)}.btn.danger{border-color:var(--bad);color:var(--bad)}.btn.ok{border-color:var(--ok);color:var(--ok)}
+main{padding:16px;max-width:1400px;margin:0 auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+.card .k{color:var(--muted);font-size:12px}.card .v{font-size:20px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
+.pos{color:var(--ok)}.neg{color:var(--bad)}.muted{color:var(--muted)}
+.banner{padding:10px 12px;border-radius:8px;margin-bottom:12px;border:1px solid}
+.banner.bad{border-color:var(--bad);background:#e5484d1a}.banner.warn{border-color:var(--warn);background:#e0a5261a}.banner.info{border-color:var(--accent);background:#4f8cff14}
+.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{color:var(--muted);font-weight:500;font-size:12px;position:sticky;top:0;background:var(--panel)}tr:hover td{background:#ffffff06}td.wrap{white-space:normal;min-width:220px}
+.pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;border:1px solid var(--line)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+input,select,textarea{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit}
+.chart{width:100%;height:220px}.section{margin-bottom:20px}h2{font-size:14px;color:var(--muted);font-weight:500;margin:0 0 8px}
+dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;max-width:720px;width:calc(100% - 32px)}
+dialog::backdrop{background:#0009}.timeline{max-height:260px;overflow:auto;font-size:12px}
+#login{max-width:360px;margin:15vh auto}.hidden{display:none}
+@media (max-width:600px){main{padding:12px}.card .v{font-size:17px}}
+</style>
+</head>
+<body>
+<div id="login" class="card hidden">
+  <h1>Вход в панель</h1><p class="muted">Введите DASHBOARD_TOKEN из .env</p>
+  <div class="row"><input id="tok" type="password" style="flex:1" placeholder="токен"><button class="btn ok" id="loginBtn">Войти</button></div>
+</div>
+<div id="app" class="hidden">
+<header>
+  <h1>LIS-SKINS → Steam <span id="mode" class="pill"></span> <span id="state" class="pill"></span></h1>
+  <nav id="tabs"></nav>
+  <div class="row" style="margin:0">
+    <button class="btn" data-act="pause">Пауза</button>
+    <button class="btn ok" data-act="resume">Запуск</button>
+    <button class="btn danger" data-act="stop">Стоп</button>
+  </div>
+</header>
+<main id="view"></main>
+</div>
+<dialog id="dlg"><div id="dlgBody"></div><div class="row" style="justify-content:flex-end;margin:12px 0 0"><button class="btn" onclick="dlg.close()">Закрыть</button></div></dialog>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const usd = (x) => (x == null || !isFinite(x) ? '—' : (x < 0 ? '-$' : '$') + Math.abs(x).toFixed(2));
+const pct = (x) => (x == null || !isFinite(x) ? '—' : (x * 100).toFixed(1) + '%');
+const dt = (t) => (t ? new Date(t).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const cls = (x) => (x > 0 ? 'pos' : x < 0 ? 'neg' : '');
+let S = null, STATUS = {};
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { showLogin(); throw new Error('auth'); }
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('json') ? r.json() : r.text();
+}
+function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+// Вход по ссылке из центра: /#token=… — токен уходит в cookie через /login и сразу убирается из адреса
+async function hashLogin() {
+  const m = /[#&]token=([^&]+)/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: decodeURIComponent(m[1]) }) });
+}
+$('#loginBtn').onclick = async () => {
+  const r = await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: $('#tok').value }) });
+  if (r.ok) { $('#login').classList.add('hidden'); boot(); } else alert('Неверный токен');
+};
+document.querySelectorAll('[data-act]').forEach((b) => (b.onclick = async () => {
+  if (b.dataset.act === 'stop' && !confirm('Аварийно остановить бота?')) return;
+  await api('/api/control', { action: b.dataset.act }); refresh();
+}));
+
+const TABS = { overview: 'Обзор', items: 'Предметы (CRM)', watch: 'Вотчлист', alerts: 'Тревоги', money: 'Баланс', partners: 'Контрагенты', system: 'Система', settings: 'Настройки' };
+let tab = location.hash.slice(1) || 'overview';
+function renderTabs() {
+  $('#tabs').innerHTML = Object.entries(TABS).map(([k, v]) => `<button class="${k === tab ? 'active' : ''}" data-tab="${k}">${v}${k === 'alerts' && S?.alerts?.length ? ` (${S.alerts.length})` : ''}</button>`).join('');
+  document.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => { tab = b.dataset.tab; location.hash = tab; refresh(); }));
+}
+
+function lineChart(rows, keys, colors) {
+  const W = 800, H = 220, P = 28;
+  const vals = rows.flatMap((r) => keys.map((k) => r[k]));
+  const max = Math.max(1, ...vals), min = Math.min(0, ...vals);
+  const x = (i) => P + (i * (W - 2 * P)) / Math.max(1, rows.length - 1);
+  const y = (v) => H - P - ((v - min) * (H - 2 * P)) / (max - min || 1);
+  const paths = keys.map((k, j) => `<path d="${rows.map((r, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(r[k]).toFixed(1)}`).join('')}" fill="none" stroke="${colors[j]}" stroke-width="2"/>`).join('');
+  const zero = `<line x1="${P}" x2="${W - P}" y1="${y(0)}" y2="${y(0)}" stroke="#ffffff22"/>`;
+  const labels = rows.map((r, i) => (i % Math.ceil(rows.length / 8) === 0 ? `<text x="${x(i)}" y="${H - 8}" fill="#8b93a3" font-size="10" text-anchor="middle">${r.day.slice(5)}</text>` : '')).join('');
+  const axis = `<text x="4" y="${y(max) + 4}" fill="#8b93a3" font-size="10">${max.toFixed(0)}</text><text x="4" y="${y(min) + 4}" fill="#8b93a3" font-size="10">${min.toFixed(0)}</text>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${zero}${paths}${labels}${axis}</svg>`;
+}
+
+async function overview() {
+  const daily = await api('/api/daily?days=30');
+  const s = S, f = s.funnel, c = (k) => f[k]?.count || 0;
+  const g = s.guard;
+  const banner = g.halted ? `<div class="banner bad">🛑 <b>Бот остановлен:</b> ${esc(g.haltReason)} <span class="muted">(${dt(g.haltAt)})</span></div>`
+    : g.paused ? `<div class="banner warn">⏸ Бот на паузе</div>` : '';
+  return `${banner}${s.dryRun ? `<div class="banner info">Режим <b>DRY-RUN</b>: покупки и продажи только моделируются. Смоделировано покупок: ${s.dryRunStats.n} на ${usd(s.dryRunStats.spent)}, ожидаемая прибыль ${usd(s.dryRunStats.exp)} (вкладка «Предметы» → «симуляция»).</div>` : ''}
+  <div class="grid">
+    ${card('Баланс LIS', usd(s.balance))}${card('В товаре (себест.)', usd(s.exposure))}${card('Капитал', usd(s.capital))}
+    ${card('Прибыль сегодня', usd(s.today.profit), cls(s.today.profit))}${card('Куплено сегодня', `${s.today.bought} · ${usd(s.today.spent)}`)}
+    ${card('Реализ. прибыль', usd(s.sold.profit), cls(s.sold.profit))}${card('ROI продаж', pct(s.sold.roi))}
+    ${card('Ожид. прибыль (открытые)', usd(s.expectedOpenProfit))}${card('Ср. удержание', s.sold.hold ? s.sold.hold.toFixed(1) + ' дн' : '—')}
+    ${card('Точность оценки', s.forecastAccuracy?.n ? pct(s.forecastAccuracy.r) + ` (n=${s.forecastAccuracy.n})` : '—')}
+    ${card('RTBA задержка', s.rtbaLatency?.n ? Math.round(s.rtbaLatency.avg) + ' мс' : '—')}${card('Курс USD→' + S.currency, s.fx ? s.fx.toFixed(2) : '—')}
+  </div>
+  <div class="section card"><h2>30 дней: траты (синий), выручка (зелёный), прибыль (жёлтый), $</h2>${lineChart(daily, ['spent', 'revenue', 'profit'], ['#4f8cff', '#2fbf71', '#e0a526'])}</div>
+  <div class="section"><h2>Воронка</h2><div class="grid">
+    ${['bought', 'locked_on_lis', 'trade_sent', 'protected', 'ready', 'listing', 'listed', 'sold', 'failed', 'reversed'].map((k) => card(STATUS[k] || k, `${c(k)} <span class="muted" style="font-size:13px">${usd(f[k]?.usd)}</span>`)).join('')}
+  </div></div>
+  <div class="section"><h2>Скан vs RTBA</h2>${table(s.byMode, [['mode', 'Режим'], ['n', 'Куплено'], ['spent', 'Потрачено', usd], ['sold', 'Продано'], ['profit', 'Прибыль', usd]])}</div>
+  <div class="section"><h2>Ошибки за 24ч</h2>${s.errors24.length ? table(s.errors24, [['scope', 'Модуль'], ['n', 'Ошибок']]) : '<p class="muted">Ошибок нет</p>'}</div>`;
+}
+const card = (k, v, c = '') => `<div class="card"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`;
+function table(rows, cols, onclick) {
+  if (!rows?.length) return '<p class="muted">Нет данных</p>';
+  return `<div class="tablewrap"><table><thead><tr>${cols.map((c) => `<th>${c[1]}</th>`).join('')}</tr></thead><tbody>${rows.map((r, i) => `<tr ${onclick ? `style="cursor:pointer" data-i="${i}"` : ''}>${cols.map(([k, , fmt, td]) => `<td class="${td || ''}">${fmt ? fmt(r[k], r) : esc(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+let itemFilter = { status: '', q: '', dry: '0' };
+async function items() {
+  const qs = new URLSearchParams(Object.entries(itemFilter).filter(([, v]) => v)).toString();
+  const rows = await api('/api/items?' + qs);
+  window._rows = rows;
+  const opts = ['', ...Object.keys(STATUS)].map((k) => `<option value="${k}" ${k === itemFilter.status ? 'selected' : ''}>${k ? STATUS[k] : 'Все статусы'}</option>`).join('');
+  setTimeout(() => {
+    $('#fs').onchange = (e) => { itemFilter.status = e.target.value; refresh(); };
+    $('#fq').onchange = (e) => { itemFilter.q = e.target.value; refresh(); };
+    $('#fd').onchange = (e) => { itemFilter.dry = e.target.checked ? '1' : '0'; refresh(); };
+    document.querySelectorAll('tr[data-i]').forEach((tr) => (tr.onclick = () => openItem(rows[tr.dataset.i].id)));
+  });
+  return `<div class="row"><select id="fs">${opts}</select><input id="fq" placeholder="поиск: название, заметки, теги" value="${esc(itemFilter.q)}"><label><input id="fd" type="checkbox" ${itemFilter.dry === '1' ? 'checked' : ''}> симуляция</label><a class="btn" href="/api/export/items.csv">Экспорт CSV</a></div>
+  ${table(rows, [['id', '#'], ['name', 'Предмет', null, 'wrap'], ['status', 'Статус', (v) => `<span class="pill">${STATUS[v] || v}</span>`], ['mode', 'Источник'], ['buy_price_usd', 'Куплен', usd], ['expected_profit_usd', 'Ожид.', usd],
+    ['tradable_after', 'Trade Protection до', dt], ['list_price_cents', 'Цена ТП', (v) => (v ? (v / 100).toFixed(2) : '—')], ['profit_usd', 'Прибыль', (v) => `<span class="${cls(v)}">${usd(v)}</span>`], ['tags', 'Теги'], ['created_at', 'Создан', dt]], true)}`;
+}
+async function openItem(id) {
+  const { item: it, events } = await api('/api/item?id=' + id);
+  $('#dlgBody').innerHTML = `<h1>${esc(it.name)}</h1><p class="muted">#${it.id} · ${STATUS[it.status] || it.status} · LIS id ${esc(it.lis_item_id)} · asset ${esc(it.asset_id || '—')} · оффер ${esc(it.trade_offer_id || '—')}</p>
+  <div class="grid">${card('Куплен', usd(it.buy_price_usd))}${card('Оценка нетто', usd(it.expected_net_usd))}${card('Продан', usd(it.sold_usd))}${card('Прибыль', usd(it.profit_usd), cls(it.profit_usd))}</div>
+  <div class="row"><input id="eTags" placeholder="теги" value="${esc(it.tags || '')}" style="flex:1"><select id="eStatus"><option value="">статус без изменений</option>${['manual', 'ready', 'protected', 'failed', 'sold'].map((s) => `<option value="${s}">${STATUS[s]}</option>`).join('')}</select></div>
+  <textarea id="eNotes" rows="3" style="width:100%" placeholder="заметки">${esc(it.notes || '')}</textarea>
+  <div class="row" style="margin-top:8px"><button class="btn ok" id="eSave">Сохранить</button><span class="muted">«Вручную» — бот больше не трогает предмет</span></div>
+  <h2>История</h2><div class="timeline">${events.map((e) => `<div>${dt(e.ts)} — <b>${esc(e.type)}</b> <span class="muted">${esc(e.data || '')}</span></div>`).join('')}</div>`;
+  $('#eSave').onclick = async () => { await api('/api/item', { id, notes: $('#eNotes').value, tags: $('#eTags').value, status: $('#eStatus').value || undefined }); dlg.close(); refresh(); };
+  dlg.showModal();
+}
+
+async function watch() {
+  const rows = await api('/api/watchlist');
+  setTimeout(() => {
+    $('#wAdd').onclick = async () => {
+      const v = (id) => $(id).value;
+      if (!v('#wName')) return;
+      await api('/api/watchlist', { name: v('#wName'), max_held: v('#wHeld'), max_per_day: v('#wDay'), min_roi: v('#wRoi') ? Number(v('#wRoi')) / 100 : '', max_price_usd: v('#wMax') });
+      refresh();
+    };
+    document.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => { if (confirm('Удалить ' + b.dataset.del + '?')) { await api('/api/watchlist/delete', { name: b.dataset.del }); refresh(); } }));
+    document.querySelectorAll('[data-tog]').forEach((b) => (b.onclick = async () => { const w = rows[b.dataset.tog]; await api('/api/watchlist', { ...w, enabled: !w.enabled }); refresh(); }));
+  });
+  return `<div class="row"><input id="wName" placeholder="market_hash_name, напр. AK-47 | Redline (Field-Tested)" style="flex:1;min-width:260px"><input id="wHeld" placeholder="макс. держать" size="10"><input id="wDay" placeholder="макс. в день" size="10"><input id="wRoi" placeholder="мин. ROI %" size="9"><input id="wMax" placeholder="макс. цена $" size="10"><button class="btn ok" id="wAdd">Добавить</button></div>
+  ${table(rows.map((r, i) => ({ ...r, i })), [['name', 'Предмет', null, 'wrap'], ['enabled', 'Вкл', (v, r) => `<button class="btn" data-tog="${r.i}">${v ? 'вкл' : 'выкл'}</button>`], ['held', 'Держим'],
+    ['valuation', 'Оценка нетто', (v) => (v?.ok ? usd(v.net_usd) : `<span class="muted">${esc(v?.reason || 'нет')}</span>`)], ['valuation', 'Макс. покупка', (v) => (v?.ok ? usd(v.max_buy_usd) : '—')],
+    ['valuation', 'Объём/день', (v) => (v ? Number(v.daily_volume).toFixed(0) : '—')], ['valuation', 'Тренд', (v) => (v ? `<span class="${cls(v.trend)}">${pct(v.trend)}</span>` : '—')],
+    ['decision', 'Последнее решение', (v) => (v ? `<span class="muted">${dt(v.ts)}</span> ${esc(v.reason)}` : '—'), 'wrap'], ['name', '', (v) => `<button class="btn danger" data-del="${esc(v)}">✕</button>`]])}`;
+}
+
+async function alerts() {
+  const rows = await api('/api/alerts');
+  setTimeout(() => ($('#ackAll').onclick = async () => { await api('/api/alerts/ack', { all: true }); refresh(); }));
+  return `<div class="row"><button class="btn" id="ackAll">Отметить все прочитанными</button></div>${table(rows, [['ts', 'Время', dt], ['level', 'Уровень', (v) => `<span class="pill ${v === 'critical' ? 'neg' : ''}">${v}</span>`], ['code', 'Код'], ['message', 'Сообщение', null, 'wrap'], ['acked', 'Прочит.', (v) => (v ? '✓' : '')]])}`;
+}
+async function money() {
+  const rows = await api('/api/balance');
+  const KIND = { init: 'старт', ok: '—', topup: '💰 пополнение', unknown_spend: '🚨 неизвестная трата', deferred: 'ожидание' };
+  return `<div class="section"><h2>Пополнения</h2>${table(S.topups, [['ts', 'Время', dt], ['amount', 'Сумма', usd]])}</div><h2>Снимки баланса</h2>${table(rows, [['ts', 'Время', dt], ['balance_usd', 'Баланс', usd], ['delta', 'Изменение', (v) => `<span class="${cls(v)}">${usd(v)}</span>`], ['unexplained', 'Вне покупок', usd], ['kind', 'Тип', (v) => KIND[v] || v]])}`;
+}
+async function partners() {
+  const rows = await api('/api/counterparties');
+  return table(rows, [['steamid', 'SteamID', (v) => `<a href="https://steamcommunity.com/profiles/${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>`], ['offers_accepted', 'Принято'], ['offers_declined', 'Отклонено'], ['items_received', 'Предметов'], ['first_seen', 'Впервые', dt], ['last_seen', 'Последний', dt]]);
+}
+async function system() {
+  const r = S.runtime;
+  const loops = Object.values(r.loops || {});
+  return `<div class="grid">${card('Steam', r.steam?.ready ? 'онлайн' : 'нет сессии', r.steam?.ready ? 'pos' : 'neg')}${card('WS LIS', r.ws?.connected ? 'онлайн' : 'нет', r.ws?.connected ? 'pos' : 'neg')}
+  ${card('Steam запросов/час', r.steam?.web?.lastHour ?? '—')}${card('Steam цен/час', r.steam?.price?.lastHour ?? '—')}${card('LIS запросов/час', r.lis?.lastHour ?? '—')}
+  ${card('Сканов', r.buyer?.scans ?? 0)}${card('WS событий', r.ws?.listings ?? 0)}${card('Покупок RTBA / скан', `${r.buyer?.rtbaBuys ?? 0} / ${r.buyer?.scanBuys ?? 0}`)}</div>
+  <h2>Фоновые задачи</h2>${table(loops, [['name', 'Задача'], ['runs', 'Запусков'], ['lastOk', 'Успех', dt], ['lastError', 'Ошибка', null, 'wrap']])}
+  <h2 style="margin-top:16px">Пропуски закупки (с запуска)</h2>${table(Object.entries(r.buyer?.skips || {}).map(([k, n]) => ({ k, n })), [['k', 'Причина'], ['n', 'Раз']])}
+  <div class="row" style="margin-top:16px"><button class="btn" onclick="api('/api/control',{action:'buyPause'}).then(refresh)">Пауза закупок</button><button class="btn" onclick="api('/api/control',{action:'buyResume'}).then(refresh)">Возобновить закупки</button><button class="btn" onclick="api('/api/control',{action:'sellPause'}).then(refresh)">Пауза продаж</button><button class="btn" onclick="api('/api/control',{action:'sellResume'}).then(refresh)">Возобновить продажи</button></div>
+  <p class="muted">Закупки: ${S.guard.buyPaused ? 'на паузе' : 'активны'} · Продажи: ${S.guard.sellPaused ? 'на паузе' : 'активны'}</p>`;
+}
+
+async function settings() {
+  const { fields, canRestart } = await api('/api/settings');
+  const input = (f) => {
+    const id = 'set_' + f.key.replace(/\./g, '_');
+    if (f.type === 'bool') return `<input type="checkbox" id="${id}" ${f.value ? 'checked' : ''}>`;
+    if (f.type === 'enum') return `<select id="${id}">${f.values.map((v) => `<option ${v === f.value ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
+    const v = f.pct ? +(f.value * 100).toFixed(4) : f.value;
+    return `<input id="${id}" value="${esc(v)}" size="12" ${f.type === 'str' ? '' : 'inputmode="decimal"'}>${f.pct ? ' %' : ''}`;
+  };
+  setTimeout(() => {
+    const collect = () => {
+      const changes = {};
+      for (const f of fields) {
+        const el = $('#set_' + f.key.replace(/\./g, '_'));
+        let v = f.type === 'bool' ? el.checked : el.value.trim().replace(',', '.');
+        if (f.type === 'num' || f.type === 'int') v = Number(v) / (f.pct ? 100 : 1);
+        if (f.pct && f.type === 'num') v = +v.toFixed(6);
+        if (v !== f.value) changes[f.key] = v;
+      }
+      return changes;
+    };
+    $('#setSave').onclick = async () => {
+      const changes = collect();
+      if (!Object.keys(changes).length) return alert('Изменений нет');
+      if ('dryRun' in changes && changes.dryRun === false && !confirm('Отключить симуляцию? Бот начнёт РЕАЛЬНО покупать и продавать.')) return;
+      const r = await api('/api/settings', { changes, restart: canRestart });
+      if (r.error) return alert(r.error);
+      $('#setMsg').textContent = r.restarting ? 'Сохранено. Бот перезапускается…' : 'Сохранено. Перезапустите бота, чтобы применить.';
+      if (r.restarting) setTimeout(() => location.reload(), 8000);
+    };
+  });
+  return `<div class="banner info">Изменения сохраняются в конфиг и применяются после перезапуска бота${canRestart ? ' (произойдёт автоматически)' : ''}. Ключи доступа меняются в меню приложения «Подключения».</div>
+  ${table(fields, [['label', 'Параметр', null, 'wrap'], ['key', 'Значение', (v, f) => input(f)], ['key', 'Ключ', (v) => `<span class="muted">${esc(v)}</span>`]])}
+  <div class="row" style="margin-top:12px"><button class="btn ok" id="setSave">Сохранить</button><span id="setMsg" class="muted"></span></div>`;
+}
+
+const VIEWS = { overview, items, watch, alerts, money, partners, system, settings };
+async function refresh() {
+  try {
+    S = await api('/api/summary');
+    STATUS = S.statusNames;
+    $('#mode').textContent = S.dryRun ? 'DRY-RUN' : 'БОЕВОЙ';
+    const g = S.guard;
+    $('#state').textContent = g.halted ? 'ОСТАНОВЛЕН' : g.paused ? 'ПАУЗА' : 'РАБОТАЕТ';
+    $('#state').className = 'pill ' + (g.halted ? 'neg' : g.paused ? '' : 'pos');
+    renderTabs();
+    $('#view').innerHTML = await VIEWS[tab]();
+  } catch (e) { if (e.message !== 'auth') $('#view').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; }
+}
+function boot() { $('#app').classList.remove('hidden'); refresh(); setInterval(() => { if (tab !== 'settings' && !dlg.open) refresh(); }, 15000); }
+hashLogin().catch(() => {}).then(() => api('/api/summary')).then(boot).catch(() => {});
+</script>
+</body>
+</html>

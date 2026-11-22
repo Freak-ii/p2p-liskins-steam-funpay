@@ -1,0 +1,72 @@
+{% extends "base.html" %}{% block title %}Мастер настройки{% endblock %}
+{% block body %}
+<h1>Мастер настройки</h1>
+<p class="muted">Заполните 3 шага. Всё хранится только у вас на компьютере в файле <code>config.yaml</code>. Начните в тестовом режиме — бот ничего не отправит, пока вы не включите боевой.</p>
+{% if problems %}<div class="card" style="border-left:4px solid var(--amber)"><b>Осталось заполнить:</b><ul>{% for p in problems %}<li>{{p}}</li>{% endfor %}</ul></div>{% endif %}
+<form method="post" autocomplete="off">
+<div class="card">
+  <h2>Шаг 1 · FunPay</h2>
+  <label class="f">golden_key</label>
+  <input type="password" name="golden_key" id="golden_key" placeholder="{{ '•••••••• (задан, оставьте пустым чтобы не менять)' if secret('funpay','golden_key') else 'вставьте значение cookie golden_key' }}">
+  <div class="help">Откройте funpay.com в браузере (вы должны быть залогинены) → F12 → Application (Приложение) → Cookies → https://funpay.com → строка <b>golden_key</b> → скопируйте Value. Никому его не показывайте.</div>
+  <button type="button" onclick="testFunpay()" style="margin-top:8px">Проверить вход</button><div id="r_fp" class="result"></div>
+
+  <label class="f">Лоты с ключами</label>
+  <div class="help">ID лота — число из ссылки на ваш лот: funpay.com/lots/offer?id=<b>12345</b>. Подкатегория TF2 «Предметы» = 1808, игра = 435.</div>
+  <div class="tw"><table><tr><th>ID лота</th><th>Подкатегория</th><th>ID игры</th><th>Ключей в 1 шт.</th></tr>
+  {% for l in lots %}<tr><td><input type="number" name="lot_offer_{{loop.index0}}" value="{{ l.offer_id or '' }}" placeholder="12345"></td>
+  <td><input type="number" name="lot_node_{{loop.index0}}" value="{{ l.node_id or 1808 }}"></td>
+  <td><input type="number" name="lot_game_{{loop.index0}}" value="{{ l.game_id or 435 }}"></td>
+  <td><input type="number" name="lot_kpu_{{loop.index0}}" value="{{ l.keys_per_unit or 1 }}" min="1"></td></tr>{% endfor %}</table></div>
+</div>
+
+<div class="card">
+  <h2>Шаг 2 · Steam</h2>
+  <label class="f">maFile (Steam Desktop Authenticator)</label>
+  <input type="file" id="mafile" accept=".maFile,.json,application/json" onchange="uploadMafile(this)">
+  <div class="help">Файл из папки <code>maFiles</code> SDA. Шифрование в SDA должно быть отключено. Из файла возьмём shared_secret, identity_secret, логин и SteamID.</div>
+  <div id="r_ma" class="result"></div>
+  <div class="cols">
+    <div><label class="f">Логин Steam</label><input type="text" name="username" id="st_username" value="{{ cfg.steam.username }}"></div>
+    <div><label class="f">Пароль Steam</label><input type="password" name="password" id="st_password" placeholder="{{ '•••••••• (задан)' if secret('steam','password') else '' }}"></div>
+    <div><label class="f">shared_secret</label><input type="password" name="shared_secret" id="st_shared" placeholder="{{ '•••••••• (задан)' if secret('steam','shared_secret') else 'из maFile' }}"></div>
+    <div><label class="f">identity_secret</label><input type="password" name="identity_secret" id="st_identity" placeholder="{{ '•••••••• (задан)' if secret('steam','identity_secret') else 'из maFile' }}"></div>
+    <div><label class="f">SteamID64 бота</label><input type="text" name="steam_id" id="st_sid" value="{{ cfg.steam.steam_id }}"></div>
+    <div><label class="f">или cookie steamLoginSecure</label><input type="password" name="login_secure_cookie" id="st_cookie" placeholder="{{ '•••••••• (задана)' if secret('steam','login_secure_cookie') else 'необязательно' }}"></div>
+  </div>
+  <button type="button" onclick="testSteam()" style="margin-top:10px">Проверить Steam</button><div id="r_st" class="result"></div>
+  <label class="f">Себестоимость одного ключа, ₽ (для аналитики прибыли и автоцены)</label>
+  <input type="number" step="0.01" name="cost_per_key" value="{{ cfg.rtba.cost_per_key or '' }}" placeholder="например 150">
+</div>
+
+<div class="card">
+  <h2>Шаг 3 · Уведомления в Telegram (необязательно)</h2>
+  <div class="cols">
+    <div><label class="f">Токен бота от @BotFather</label><input type="password" name="tg_token" id="tg_token" placeholder="{{ '•••••••• (задан)' if secret('notifications.telegram','bot_token') else '123456:ABC...' }}"></div>
+    <div><label class="f">Ваш chat_id</label><input type="text" name="tg_chat_ids" id="tg_ids" value="{{ cfg.notifications.telegram.admin_chat_ids|join(' ') }}" placeholder="узнать: @userinfobot"></div>
+  </div>
+  <div class="help">Сначала напишите своему боту /start, иначе он не сможет вам написать.</div>
+  <button type="button" onclick="testTg()" style="margin-top:8px">Отправить тестовое сообщение</button><div id="r_tg" class="result"></div>
+</div>
+
+<div class="card">
+  <h2>Режим работы</h2>
+  <label><input type="checkbox" name="dry_run" {{ 'checked' if cfg.general.dry_run }}> Тестовый режим (рекомендуется для первого запуска)</label><br>
+  <label><input type="checkbox" name="autostart" {{ 'checked' if cfg.general.autostart }}> Запускать бота автоматически при открытии приложения</label>
+  <label class="f">Язык сообщений покупателю</label>
+  <select name="language"><option value="ru" {{ 'selected' if cfg.general.language=='ru' }}>Русский</option><option value="en" {{ 'selected' if cfg.general.language=='en' }}>English</option></select>
+</div>
+<button class="primary" style="font-size:16px;padding:10px 22px">Сохранить настройки</button>
+</form>
+<script>
+const v=id=>document.getElementById(id).value;
+async function testFunpay(){const el=document.getElementById('r_fp');el.textContent='Проверяю…';el.className='result';showResult(el,await postJSON('/api/test/funpay',{golden_key:v('golden_key')}))}
+async function testSteam(){const el=document.getElementById('r_st');el.textContent='Вход в Steam, до 30 секунд…';el.className='result';
+  showResult(el,await postJSON('/api/test/steam',{username:v('st_username'),password:v('st_password'),shared_secret:v('st_shared'),identity_secret:v('st_identity'),steam_id:v('st_sid'),login_secure_cookie:v('st_cookie')}))}
+async function testTg(){const el=document.getElementById('r_tg');el.textContent='Отправляю…';el.className='result';showResult(el,await postJSON('/api/test/telegram',{token:v('tg_token'),chat_ids:v('tg_ids')}))}
+async function uploadMafile(inp){const el=document.getElementById('r_ma');if(!inp.files.length)return;const fd=new FormData();fd.append('file',inp.files[0]);
+  const res=await (await fetch('/setup/mafile',{method:'POST',body:fd})).json();showResult(el,res);
+  if(res.ok){if(res.fields.username)document.getElementById('st_username').value=res.fields.username;if(res.fields.steam_id)document.getElementById('st_sid').value=res.fields.steam_id;
+  document.getElementById('st_shared').placeholder='•••••••• (из maFile)';document.getElementById('st_identity').placeholder='•••••••• (из maFile)'}}
+</script>
+{% endblock %}

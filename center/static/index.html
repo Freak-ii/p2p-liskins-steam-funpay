@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Центр перепродажи</title>
+<link rel="stylesheet" href="/static/center.css">
+</head>
+<body>
+<header>
+  <h1>Центр перепродажи</h1>
+  <span id="hdr" class="muted small"></span>
+  <span class="spacer"></span>
+  <a class="btn" href="/rtba">RTBA и лимиты</a>
+  <span id="alertsBadge"></span>
+  <button class="btn danger" id="quitBtn" title="Остановить ботов и закрыть центр">⏻ Выход</button>
+</header>
+<main>
+  <div id="flash"></div>
+  <div class="grid" id="bots"></div>
+  <div id="update"></div>
+  <div id="readiness"></div>
+
+  <h2>ИИ-координатор</h2>
+  <div id="coordinator"></div>
+
+  <section id="analytics">
+    <div class="row"><h2>Аналитика перепродажи</h2><span class="spacer" style="flex:1"></span>
+      <span class="tabs" id="anDays"></span><span class="tabs" id="anCur"></span>
+      <a class="btn" id="anCsv" href="/api/analytics/export.csv">CSV</a><a class="btn" id="anXlsx" href="/api/analytics/export.xlsx">XLSX</a>
+    </div>
+    <div id="anWarn"></div>
+    <div class="card"><div id="anPnl"></div></div>
+    <div class="card" style="margin-top:14px">
+      <div class="row"><h3 id="anChartTitle">По дням</h3><span class="spacer" style="flex:1"></span><span class="tabs" id="anMetric"></span></div>
+      <div id="anLegend" class="legend"></div>
+      <div id="anChart" class="chart"></div>
+    </div>
+    <div class="grid" style="margin-top:14px">
+      <div class="card" id="anLis"></div>
+      <div class="card" id="anMann"></div>
+    </div>
+  </section>
+
+  <section id="crm">
+    <div class="row"><h2>CRM</h2><span class="spacer" style="flex:1"></span><span class="tabs" id="crmView"></span></div>
+    <div class="card" id="crmDeals">
+      <div class="row filters">
+        <input id="crmSearch" type="search" placeholder="Поиск: предмет, ID, покупатель, Steam ID, заметка, тег">
+        <select id="crmBot"><option value="">Оба бота</option><option value="lisbot">LisBot</option><option value="mannbot">MannBot</option></select>
+        <select id="crmDays"><option value="all">За всё время</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option></select>
+        <label class="check small"><input type="checkbox" id="crmDry"> тестовые сделки</label>
+        <span class="spacer" style="flex:1"></span><a class="btn" id="crmCsv" href="/api/crm/deals.csv">CSV</a>
+      </div>
+      <div class="tabs" id="crmGroups"></div>
+      <div class="muted small" id="crmTotals"></div>
+      <div class="tablewrap"><table id="crmTable" class="crm"></table></div>
+      <div class="row" id="crmPager" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="crmCust" hidden>
+      <div class="row filters">
+        <input id="crmCustSearch" type="search" placeholder="Поиск: ник FunPay, ID, Steam ID, заметка, тег">
+        <select id="crmTag"><option value="">все теги</option></select>
+        <select id="crmCsort"><option value="last_order">Сначала недавние</option><option value="spent">Больше потратил</option>
+          <option value="orders">Больше заказов</option><option value="risk">Выше риск</option></select>
+        <span class="spacer" style="flex:1"></span><a class="btn" id="crmCustCsv" href="/api/crm/customers.csv">CSV</a>
+      </div>
+      <div class="tabs" id="crmSeg"></div>
+      <div class="tabs" id="crmRisk"></div>
+      <div class="tablewrap"><table id="crmCustTable" class="crm"></table></div>
+      <div class="muted small" style="margin-top:6px">Риск-скоринг центра считается по всей истории покупателя: возвраты, блокировки антифродом,
+        общие Steam-аккаунты, неподтверждённые заказы, низкие отзывы. Наведите на значок, чтобы увидеть причины.
+        Сегмент: VIP и постоянные — берегите; «Уснул» — давно не покупал, стоит написать; сроки и пороги — раздел <code>crm</code> в center.yaml.</div>
+    </div>
+    <div class="card" id="crmCoh" hidden>
+      <div class="small" id="crmCohGap" style="margin-bottom:8px"></div>
+      <div class="tablewrap"><table id="crmCohTable" class="crm"></table></div>
+      <div class="muted small" style="margin-top:6px">Когорта — покупатели FunPay, впервые купившие ключи в этом месяце. «Через N мес» — сколько из них
+        купили снова в N-й месяц после первого; «Вернулись» — купили хотя бы ещё раз; «Принёс» — средняя выручка с покупателя за всё время, в ₽.</div>
+    </div>
+  </section>
+
+
+  <h2>Мониторинг</h2>
+  <div id="monitor"></div>
+
+  <h2>Резервные копии</h2>
+  <div id="backup"></div>
+
+  <h2>Тревоги ботов <button class="btn small" onclick="ackAll()">Подтвердить все</button></h2>
+  <div class="card tablewrap"><table><thead><tr><th>Время</th><th>Бот</th><th>Уровень</th><th>Сообщение</th><th></th></tr></thead><tbody id="alerts"></tbody></table></div>
+
+  <h2>Журнал работы ботов</h2>
+  <div class="card">
+    <div class="tabs" id="logTabs"></div>
+    <pre class="log" id="log"></pre>
+  </div>
+
+  <h2>События центра</h2>
+  <div class="row filters" style="margin-bottom:8px">
+    <input id="evSearch" type="search" placeholder="Поиск по событиям">
+    <select id="evSource"><option value="">все источники</option><option value="center">центр</option><option value="lisbot">LisBot</option><option value="mannbot">MannBot</option></select>
+    <select id="evLevel"><option value="">все</option><option value="important">только предупреждения и ошибки</option></select>
+  </div>
+  <div class="card tablewrap"><table><thead><tr><th>Время</th><th>Источник</th><th>Событие</th></tr></thead><tbody id="events"></tbody></table></div>
+</main>
+
+<dialog id="crmDlg" class="wide">
+  <form method="dialog" class="row" style="justify-content:flex-end"><button class="btn" value="close" aria-label="Закрыть">✕</button></form>
+  <div id="crmBody"></div>
+</dialog>
+
+<dialog id="lisDlg">
+  <form method="dialog" id="lisForm">
+    <h3>Подключения LisBot</h3>
+    <p class="muted small">Хранятся только на этом компьютере, в папке данных центра, в зашифрованном виде (secrets.dat).</p>
+    <label>Ключ API LIS-SKINS</label><input name="LIS_API_KEY" autocomplete="off">
+    <label>maFile из Steam Desktop Authenticator (заполнит логин, shared_secret и identity_secret)</label>
+    <input type="file" id="lisMaFile" accept=".maFile,.json,application/json">
+    <div class="small" id="lisMaRes"></div>
+    <label>Логин Steam</label><input name="STEAM_ACCOUNT_NAME" autocomplete="off">
+    <label>Пароль Steam <span class="muted small" id="pwHint"></span></label><input name="STEAM_PASSWORD" type="password" autocomplete="new-password">
+    <label>shared_secret (из maFile)</label><input name="STEAM_SHARED_SECRET" autocomplete="off">
+    <label>identity_secret (из maFile)</label><input name="STEAM_IDENTITY_SECRET" autocomplete="off">
+    <label>Трейд-ссылка Steam</label><input name="STEAM_TRADE_URL" autocomplete="off">
+    <div class="row" style="margin-top:6px"><button class="btn" type="button" onclick="lisSteamTest()">Проверить Steam</button></div>
+    <div class="small" id="lisSteamRes"></div>
+    <label>Telegram: токен бота (необязательно)</label><input name="TELEGRAM_BOT_TOKEN" autocomplete="off">
+    <label>Telegram: chat id — ваш id, его пришлёт @userinfobot (не id бота)</label><input name="TELEGRAM_CHAT_ID" autocomplete="off">
+    <p class="muted small" style="margin:4px 0 0">Перед проверкой откройте своего бота в Telegram и нажмите Start. У MannBot должен быть другой бот.</p>
+    <div class="row" style="margin-top:6px"><button class="btn" type="button" onclick="lisTgTest()">Проверить Telegram</button></div>
+    <div class="small" id="lisTgRes"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" value="save">Сохранить и перезапустить</button>
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtTs = (t) => t ? new Date(t * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+const fmtDur = (s) => !s ? '' : s < 3600 ? `${Math.round(s / 60)} мин` : s < 86400 ? `${(s / 3600).toFixed(1)} ч` : `${(s / 86400).toFixed(1)} д`;
+const fmtNum = (v) => v == null ? '—' : typeof v === 'number' ? v.toLocaleString('ru-RU', { maximumFractionDigits: 2 }) : esc(v);
+let state = null, logBot = 'lisbot', logAfter = 0;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.status === 401) { location.href = '/login'; throw new Error('auth'); }
+  return r.json();
+}
+function flash(msg, bad) { $('#flash').innerHTML = msg ? `<div class="banner" style="${bad ? 'color:var(--bad)' : ''}">${esc(msg)}</div>` : ''; }
+
+async function act(name, action) {
+  if (action === 'halt' && !confirm('Аварийная остановка LisBot: закупки и продажи прекратятся. Продолжить?')) return;
+  flash('Выполняю…');
+  const r = await api(`/api/workers/${name}/${action}`, {});
+  flash(r.message, !r.ok);
+  if (action === 'install') logAfter = 0;
+  setTimeout(refresh, 800);
+}
+
+function botCard(b) {
+  const s = b.summary;
+  const running = b.state === 'running';
+  const proc = running || ['starting', 'backoff'].includes(b.state)
+    ? `<button class="btn" onclick="act('${b.name}','restart')">Перезапустить</button><button class="btn" onclick="act('${b.name}','stop')">Остановить процесс</button>`
+    : `<button class="btn primary" onclick="act('${b.name}','start')">Запустить</button>`;
+  const extra = [];
+  if (b.name === 'lisbot') {
+    extra.push(`<button class="btn" onclick="openLis()">Подключения</button>`);
+    if (b.state === 'missing_deps') extra.push(`<button class="btn primary" onclick="act('lisbot','install')">Установить зависимости</button>`);
+  }
+  extra.push(`<button class="btn" title="Запускать этого бота вместе с центром" onclick="act('${b.name}','${b.autostart ? 'autostart_off' : 'autostart_on'}')">Автозапуск: ${b.autostart ? 'вкл' : 'выкл'}</button>`);
+  if (b.name === 'mannbot' && running) extra.push(`<button class="btn" onclick="openMann()">Настройки</button>`);
+  if (running) extra.push(`<a class="btn" href="/open/${b.name}" target="_blank" rel="noopener">Открыть панель бота ↗</a>`);
+  const botActs = running && s ? Object.entries(b.actions).map(([k, v]) => `<button class="btn ${k === 'halt' ? 'danger' : ''}" onclick="act('${b.name}','${k}')">${esc(v)}</button>`).join('') : '';
+  const kpi = s?.kpi ? `<div class="kpi">${Object.entries(s.kpi).map(([k, v]) => `<div><b>${fmtNum(v)}</b><span>${esc(k)}</span></div>`).join('')}</div>` : '';
+  const botState = s ? `<div class="small">Торговля: <b>${esc({ running: 'работает', paused: 'на паузе', halted: 'аварийная остановка', stopped: 'остановлена', starting: 'запускается', error: 'ошибка' }[s.bot_state] || s.bot_state || '—')}</b>${s.paused ? ' · пауза' : ''}${(s.flags || []).map((f) => ' · ' + esc(f)).join('')} · ${s.dry_run ? 'тестовый режим (ничего не покупает и не продаёт)' : '<b style="color:var(--bad)">боевой режим</b>'}${s.demo ? ' · демо' : ''}</div>${s.error ? `<div class="detail">${esc(s.error)}</div>` : ''}` : '';
+  return `<div class="card">
+    <div class="row"><h3>${esc(b.title)}</h3><span class="spacer" style="flex:1"></span><span class="badge s-${b.state}">${esc(b.state_text)}</span></div>
+    <div class="muted small">порт ${b.port}${b.pid ? ` · pid ${b.pid}` : ''}${b.uptime ? ` · работает ${fmtDur(b.uptime)}` : ''}${b.restarts ? ` · перезапусков ${b.restarts}` : ''}</div>
+    ${b.detail ? `<div class="detail">${esc(b.detail)}</div>` : ''}
+    ${botState}${kpi}
+    <div class="row" style="margin-top:8px">${proc}${extra.join('')}</div>
+    ${botActs ? `<div class="row" style="margin-top:8px">${botActs}</div>` : ''}
+  </div>`;
+}
+
+// журнал событий: без фильтров — последние 30 из /api/overview, с фильтрами — поиск по всему журналу
+const evFiltered = () => $('#evSearch').value.trim() || $('#evSource').value || $('#evLevel').value;
+function renderEvents(list) {
+  $('#events').innerHTML = list.map((e) => `<tr><td>${fmtTs(e.ts)}</td><td>${esc(e.source)}</td><td class="lv-${esc(e.level)}">${esc(e.message)}</td></tr>`).join('')
+    || `<tr><td colspan="3" class="muted">${evFiltered() ? 'Ничего не найдено' : 'Событий пока нет'}</td></tr>`;
+}
+let evTimer = null;
+async function loadEvents() {
+  if (!evFiltered()) return renderEvents(state?.events || []);
+  const p = new URLSearchParams({ q: $('#evSearch').value.trim(), source: $('#evSource').value, level: $('#evLevel').value, limit: 200 });
+  try { renderEvents(await api(`/api/events?${p}`)); } catch { /* сеть */ }
+}
+for (const id of ['#evSource', '#evLevel']) $(id).addEventListener('change', loadEvents);
+$('#evSearch').addEventListener('input', () => { clearTimeout(evTimer); evTimer = setTimeout(loadEvents, 300); });
+
+async function refresh() {
+  try { state = await api('/api/overview'); } catch { return; }
+  $('#hdr').textContent = `работает ${fmtDur(state.uptime) || 'меньше минуты'}${state.demo ? ' · демо' : ''}`;
+  $('#alertsBadge').innerHTML = state.open_alerts ? `<span class="badge s-crashed">тревог: ${state.open_alerts}</span>` : '';
+  $('#bots').innerHTML = state.bots.map(botCard).join('');
+  $('#alerts').innerHTML = state.alerts.map((a) => `<tr style="${a.acked ? 'opacity:.55' : ''}"><td>${fmtTs(a.ts)}</td><td>${esc(a.source)}</td><td class="lv-${esc(a.level)}">${esc(a.level)}</td><td>${esc(a.message)}</td><td>${a.acked ? '' : `<button class="btn small" title="Подтвердить тревогу в боте" onclick="ackAlert('${esc(a.source)}',${Number(a.id)})">✓</button>`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Тревог нет</td></tr>';
+  if (!evFiltered()) renderEvents(state.events);
+  $('#logTabs').innerHTML = state.bots.map((b) => `<button class="btn ${b.name === logBot ? 'on' : ''}" onclick="switchLog('${b.name}')">${esc(b.title)}</button>`).join('');
+}
+
+async function pollLog() {
+  try {
+    const lines = await api(`/api/workers/${logBot}/logs?after=${logAfter}`);
+    if (lines.length) {
+      const el = $('#log');
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+      el.textContent += lines.map((l) => l.text).join('\n') + '\n';
+      if (el.textContent.length > 300000) el.textContent = el.textContent.slice(-200000);
+      logAfter = lines[lines.length - 1].n;
+      if (atBottom) el.scrollTop = el.scrollHeight;
+    }
+  } catch { /* центр перезапускается */ }
+}
+function switchLog(name) { logBot = name; logAfter = 0; $('#log').textContent = ''; refresh(); pollLog(); }
+
+async function openLis() {
+  const s = await api('/api/lisbot/secrets');
+  for (const el of $('#lisForm').elements) if (el.name) el.value = s[el.name] ?? '';
+  $('#lisTgRes').textContent = ''; $('#lisSteamRes').textContent = ''; $('#lisMaRes').textContent = ''; $('#lisMaFile').value = '';
+  $('#pwHint').textContent = s.STEAM_PASSWORD_SET ? '(сохранён — оставьте пустым, чтобы не менять)' : '';
+  $('#lisDlg').showModal();
+}
+async function lisTgTest() {
+  const f = $('#lisForm').elements;
+  const out = $('#lisTgRes');
+  out.style.color = ''; out.textContent = 'Проверяю…';
+  const r = await api('/api/lisbot/telegram-test', { TELEGRAM_BOT_TOKEN: f.TELEGRAM_BOT_TOKEN.value, TELEGRAM_CHAT_ID: f.TELEGRAM_CHAT_ID.value });
+  out.style.color = r.ok ? 'var(--ok)' : 'var(--bad)'; out.textContent = r.message || r.error || '';
+}
+async function lisSteamTest() {
+  const f = $('#lisForm').elements;
+  const out = $('#lisSteamRes');
+  out.style.color = ''; out.textContent = 'Проверяю…';
+  const r = await api('/api/lisbot/steam-test', { STEAM_SHARED_SECRET: f.STEAM_SHARED_SECRET.value, STEAM_IDENTITY_SECRET: f.STEAM_IDENTITY_SECRET.value });
+  out.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+  out.innerHTML = esc(r.message || r.error || '') + (r.lines || []).map((l) => '<br>' + esc(l)).join('');
+}
+// maFile читается прямо в браузере: файл никуда не отправляется, поля заполняются и сохраняются кнопкой «Сохранить»
+$('#lisMaFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0]; const out = $('#lisMaRes'); const f = $('#lisForm').elements;
+  if (!file) return;
+  try {
+    const d = JSON.parse(await file.text());
+    if (!d.shared_secret || !d.identity_secret) throw new Error('в файле нет shared_secret/identity_secret — maFile зашифрован? Снимите шифрование в SDA');
+    f.STEAM_SHARED_SECRET.value = d.shared_secret; f.STEAM_IDENTITY_SECRET.value = d.identity_secret;
+    if (d.account_name) f.STEAM_ACCOUNT_NAME.value = d.account_name;
+    out.style.color = 'var(--ok)'; out.textContent = `maFile ${d.account_name || ''} прочитан. Нажмите «Проверить Steam», затем «Сохранить».`;
+  } catch (err) {
+    out.style.color = 'var(--bad)'; out.textContent = 'maFile не распознан: ' + (err.message || err);
+  }
+});
+$('#lisDlg').addEventListener('close', async () => {
+  if ($('#lisDlg').returnValue !== 'save') return;
+  const data = { restart: true };
+  for (const el of $('#lisForm').elements) if (el.name) data[el.name] = el.value;
+  const r = await api('/api/lisbot/secrets', data);
+  flash(r.message, !r.ok);
+  setTimeout(refresh, 1500);
+});
+$('#quitBtn').onclick = async () => {
+  if (!confirm('Остановить обоих ботов и закрыть центр?')) return;
+  await api('/api/quit', {});
+  document.body.innerHTML = '<main><div class="card">Центр закрыт. Это окно можно закрыть.</div></main>';
+};
+const msg = new URLSearchParams(location.search).get('msg');
+if (msg) { flash(msg, true); history.replaceState(null, '', '/'); }
+refresh(); pollLog();
+setInterval(refresh, 5000); setInterval(pollLog, 2000);
+</script>
+<script src="/static/mannbot.js"></script>
+<script src="/static/analytics.js"></script>
+<script src="/static/inventory.js"></script>
+<script src="/static/crm.js"></script>
+<script src="/static/monitor.js"></script>
+<script src="/static/readiness.js"></script>
+<script src="/static/backup.js"></script>
+<script src="/static/coordinator.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{% extends "base.html" %}{% block title %}Дашборд{% endblock %}
+{% block body %}
+<div class="row" style="justify-content:space-between"><h1>Дашборд</h1>
+<div class="row">{% for d in [1,7,30] %}<a class="chip {% if days==d %}c-blue{% endif %}" href="/?days={{d}}">{{d}} дн.</a>{% endfor %}</div></div>
+<div class="grid">
+  <div class="card kpi"><div class="v">{{ s.revenue|money }}</div><div class="l">Выручка</div></div>
+  <div class="card kpi"><div class="v">{{ s.profit|money }}</div><div class="l">Прибыль (оценка)</div></div>
+  <div class="card kpi"><div class="v">{{ s.orders }}</div><div class="l">Заказов · ср. чек {{ s.avg_check|money }}</div></div>
+  <div class="card kpi"><div class="v">{{ s.keys_sold }}</div><div class="l">Ключей выдано</div></div>
+  <div class="card kpi"><div class="v">{{ s.delivery_rate }}%</div><div class="l">Выдано · авто {{ s.auto_rate }}%</div></div>
+  <div class="card kpi"><div class="v">{{ s.confirm_rate }}%</div><div class="l">Подтверждают</div></div>
+  <div class="card kpi"><div class="v">{{ s.t_total|dur }}</div><div class="l">Оплата → ключи (медиана)</div></div>
+  <div class="card kpi"><div class="v">{{ s.stock if s.stock is not none else '—' }}</div><div class="l">Свободно ключей</div></div>
+  <div class="card kpi"><div class="v">{{ s.refund_rate }}%</div><div class="l">Возвраты</div></div>
+  <div class="card kpi"><div class="v">{{ s.avg_review|round(2) if s.avg_review else '—' }}</div><div class="l">Средний отзыв ★</div></div>
+</div>
+{% if recs %}<div class="card"><h2>💡 Рекомендации</h2>
+{% for r in recs %}<div class="{{r.severity}}" style="margin:4px 0">• {{ r.text }}</div>{% endfor %}</div>{% endif %}
+<div class="cols">
+  <div class="card"><h2>Выручка и заказы, 30 дней</h2>{{ charts.bar_line(series|map(attribute='date')|map('md')|list, series|map(attribute='revenue')|list, series|map(attribute='orders')|list, bar_name='Выручка', line_name='Заказы', every=5)|safe }}</div>
+  <div class="card"><h2>Воронка</h2>
+  {% set top = funnel[0][1] or 1 %}
+  {% for name, n in funnel %}<div style="margin:6px 0"><div class="row" style="justify-content:space-between"><span>{{name}}</span><b>{{n}}</b></div>
+  <div class="bar" style="width:{{ (n/top*100)|round(1) }}%"></div></div>{% endfor %}
+  <h2 style="margin-top:14px">Время этапов (медиана)</h2>
+  <table><tr><td>Оплата → ссылка</td><td>{{s.t_link|dur}}</td></tr><tr><td>Ссылка → трейд</td><td>{{s.t_offer|dur}}</td></tr>
+  <tr><td>Трейд → принят</td><td>{{s.t_accept|dur}}</td></tr><tr><td>Выдача → подтверждение</td><td>{{s.t_confirm|dur}}</td></tr></table></div>
+</div>
+<div class="cols">
+  <div class="card"><h2>Заказы по часам (30 дн.)</h2>{{ charts.bar_line(range(24)|map('string')|list, heat, bar_name='Заказы', every=3)|safe }}</div>
+  <div class="card"><h2>Причины сбоев (30 дн.)</h2>
+  {% if fails %}<table>{% for k,n in fails %}<tr><td>{{k}}</td><td>{{n}}</td></tr>{% endfor %}</table>{% else %}<span class="muted">Сбоев нет</span>{% endif %}</div>
+</div>
+<div class="card"><h2>Активные заказы</h2><div class="tw"><table>
+<tr><th>Заказ</th><th>Покупатель</th><th>Ключей</th><th>Статус</th><th>Оплачен</th></tr>
+{% for o in active %}<tr><td><a href="/orders/{{o.order_id}}">#{{o.order_id}}</a></td><td>{{o.buyer_username}}</td><td>{{o.keys_qty}}</td>
+<td><span class="chip c-{{colors[o.status]}}">{{o.status|st}}</span></td><td>{{o.paid_at|ts}}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">Нет активных заказов</td></tr>{% endfor %}</table></div></div>
+<div class="card"><h2>Состояние бота</h2><pre>{{ status }}</pre></div>
+{% endblock %}

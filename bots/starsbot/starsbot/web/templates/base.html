@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ 'TG Gift' if shop else 'StarsBot' }}{% endblock %} · {{ 'TG Gift' if shop else 'StarsBot' }}</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1b1f24;--muted:#677283;--line:#e3e6eb;--accent:#c4552b;
+--blue:#2f6fde;--green:#1f8a4c;--amber:#b7791f;--red:#c53030;--gray:#718096;--chip:#eef1f5}
+@media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e23;--text:#e7e9ec;--muted:#98a2b3;--line:#2a2f37;
+--chip:#252a31;--blue:#6b9cf3;--green:#4cc184;--amber:#e0a84a;--red:#f07171;--gray:#9aa5b5}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:5}
+header .logo{font-weight:700;color:var(--accent)}header nav{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.navgroup{display:inline-flex;gap:10px;align-items:center;padding:2px 8px;border-radius:8px}.navgroup:has(.navlabel){background:var(--chip)}
+.navlabel{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}header nav a.active{color:var(--text);font-weight:600}
+.btn-mini{padding:2px 10px;margin-left:8px;background:#fff;color:#222;border:0;border-radius:6px;cursor:pointer;font:inherit;font-size:13px}
+.flash{max-width:1200px;margin:12px auto 0;padding:10px 16px;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px}
+label.f{display:block;margin:10px 0 3px;font-weight:600}.help{color:var(--muted);font-size:12px;margin-top:2px}
+.result{margin-top:6px;font-size:13px}.result.ok{color:var(--green)}.result.bad{color:var(--red)}
+input[type=text],input[type=password],input[type=number],select{width:100%}
+main{max-width:1200px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+h1{font-size:20px;margin:4px 0 14px}h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}
+.kpi .v{font-size:22px;font-weight:700}.kpi .l{color:var(--muted);font-size:12px}
+.cols{display:grid;gap:14px;grid-template-columns:1fr 1fr}.cols>*,.grid>*{min-width:0}@media(max-width:800px){.cols{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse}th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12px}.tw{overflow-x:auto}
+.chip{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;background:var(--chip);border:1px solid var(--line)}
+.c-blue{color:var(--blue)}.c-green{color:var(--green)}.c-amber{color:var(--amber)}.c-red{color:var(--red)}.c-gray{color:var(--gray)}
+.CRITICAL{color:var(--red);font-weight:600}.WARNING{color:var(--amber)}.INFO{color:var(--muted)}
+button,.btn{background:var(--chip);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 12px;cursor:pointer;font:inherit}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}button.danger{color:var(--red)}
+input,textarea,select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 8px;font:inherit;max-width:100%}
+textarea{width:100%;min-height:70px}.muted{color:var(--muted)}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.banner{padding:8px 16px;background:var(--amber);color:#fff;text-align:center;font-weight:600}
+pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
+.bar{height:8px;background:var(--accent);border-radius:4px}
+.grid .card{margin:0}.grid{margin-bottom:14px}
+.toast{position:fixed;right:16px;bottom:16px;max-width:380px;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:8px;padding:10px 14px;box-shadow:0 4px 18px rgba(0,0,0,.15);z-index:9}
+.toast.CRITICAL{border-left-color:var(--red)}.hl{animation:hl 2s}@keyframes hl{from{background:rgba(196,85,43,.18)}to{background:transparent}}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-bottom:4px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+</style>
+<script>window.liveHandlers=[];window.onLive=fn=>window.liveHandlers.push(fn);</script>
+<link rel="icon" href="data:,">
+</head>
+<body>
+{% if path != '/login' %}
+{% if app.demo %}<div class="banner" style="background:var(--blue)">ДЕМО: эмуляция FunPay, {{ 'Telegram' if shop else 'Fragment и TON-кошелька' }} — реальные аккаунты и деньги не используются</div>
+{% elif dry_run %}<div class="banner">Тестовый режим (dry-run): бот не отправляет сообщения и {{ 'подарки' if shop else 'не платит TON' }}
+  {% if is_admin %}<form method="post" action="/control" style="display:inline"><button name="action" value="dry_off" class="btn-mini" onclick="return confirm('{{ 'Включить боевой режим? Бот начнёт отвечать покупателям и отправлять подарки со звёзд аккаунта.' if shop else 'Включить боевой режим? Бот начнёт отвечать покупателям и оплачивать звёзды TON с кошелька.' }}')">Включить боевой режим</button></form>{% endif %}</div>{% endif %}
+{% if paused %}<div class="banner" style="background:var(--red)">⏸ Бот на паузе — заказы фиксируются, но не обрабатываются</div>{% endif %}
+{% if app.restart_required %}<div class="banner" style="background:var(--blue)">Настройки изменены —
+  <form method="post" action="/control" style="display:inline"><button name="action" value="restart" class="btn-mini">перезапустить бота</button></form></div>{% endif %}
+<header>
+  <span class="logo">{{ '🎁 TG Gift' if shop else '⭐ StarsBot' }}</span>
+  <nav>
+    {% if shop %}{% set groups = [('', [('/', 'Главная'), ('/orders', 'Заказы'), ('/customers', 'Покупатели'), ('/analytics', 'Статистика')]),
+                     ('Продажи', [('/shop', 'Подарки и лоты'), ('/messages', 'Сообщения')]),
+                     ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал')])] %}
+    {% else %}{% set groups = [('', [('/', 'Главная'), ('/orders', 'Заказы'), ('/customers', 'Покупатели'), ('/analytics', 'Статистика')]),
+                     ('Продажи', [('/funpay', 'Лоты'), ('/pricing', 'Цены'), ('/messages', 'Сообщения')] + ([('/ozon', 'Ozon')] if ozon_on else []) + ([('/ggsel', 'GGSEL')] if ggsel_on else []) + ([('/avito', 'Авито')] if avito_on else []) + ([('/wb', 'WB')] if wb_on else [])),
+                     ('Выдача', ([] if gifts_moved else [('/gifts', 'Подарки')]) + [('/premium', 'Premium')]),
+                     ('Финансы', [('/treasury', 'Казначейство'), ('/crypto', 'Кошелёк и автопилот'), ('/money', 'Деньги')]),
+                     ('', ([('/settings', 'Настройки')] if is_admin else []) + [('/logs', 'Журнал'), ('/help', 'Справка')])] %}{% endif %}
+    {% for gname, items in groups %}<span class="navgroup">{% if gname %}<span class="navlabel">{{gname}}</span>{% endif %}
+    {% for href, name in items %}<a href="{{href}}" class="{{ 'active' if path == href else '' }}">{{name}}</a>{% endfor %}</span>{% endfor %}
+  </nav>
+  <div class="row" style="margin-left:auto">
+    {% set st = state_text[app.state] %}
+    <span class="chip c-{{st[1]}}" id="botstate" title="{{ app.error }}">● {{ st[0] }}</span>
+    <span class="chip" id="live" title="Обновления в реальном времени">○ live</span>
+    {% if can_op %}<form method="post" action="/control" class="row">
+      {% if app.state in ('running', 'starting') %}
+        {% if paused %}<button name="action" value="resume">▶ Снять паузу</button>{% else %}<button name="action" value="pause">⏸ Пауза</button>{% endif %}
+        <button name="action" value="stop" onclick="return confirm('Остановить бота?')">■ Остановить</button>
+      {% else %}
+        <button class="primary" name="action" value="start">▶ Запустить бота</button>
+      {% endif %}
+      {% if is_admin %}<button name="action" value="quit" title="Закрыть приложение" onclick="return confirm('Закрыть {{ 'TG Gift' if shop else 'StarsBot' }}? Бот перестанет работать.')">⏻</button>{% endif %}
+    </form>{% endif %}
+    <form method="post" action="/logout" class="row"><span class="chip muted" title="Ваша роль">{{ role_titles.get(role, '') }}</span><button title="Выйти">⎋</button></form>
+  </div>
+</header>
+{% if app.state == 'error' and app.error %}<div class="banner" style="background:var(--red)">Ошибка: {{ app.error }}</div>{% endif %}
+{% endif %}
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+<main>{% block body %}{% endblock %}</main>
+<script>
+async function postJSON(url, data){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data||{})});return r.json()}
+function showResult(el,res){el.textContent=res.text;el.className='result '+(res.ok?'ok':'bad')}
+{% if path != '/login' %}
+// realtime: события бота приходят по SSE; страницы подписываются через window.onLive(fn)
+// Поток держит одно соединение браузера; на один адрес браузер даёт всего 6. Поэтому поток открыт только
+// во вкладке, которую видно, и закрывается при уходе со страницы — иначе 6 открытых вкладок панели
+// «вешают» переход между разделами (новой странице не достаётся соединения).
+(function(){if(!window.EventSource)return;const live=document.getElementById('live');
+ const st=document.getElementById('botstate'),names={{ state_text|tojson|safe }};
+ let es=null,hideTimer=null,wasClosed=false;
+ function open(){if(es)return;es=new EventSource('/api/stream'+(window.wantLogs?'?logs=1':''));window.liveSource=es;
+  es.onopen=()=>{if(live){live.textContent='● live';live.className='chip c-green'}};
+  es.onerror=()=>{if(live){live.textContent='○ offline';live.className='chip c-gray'}};
+  es.addEventListener('status',e=>{const d=JSON.parse(e.data);if(st&&names[d.state]){st.textContent='● '+names[d.state][0];st.className='chip c-'+names[d.state][1]}});
+  es.addEventListener('log',e=>{for(const fn of window.liveHandlers)fn({type:'log',lines:JSON.parse(e.data)})});
+  es.onmessage=e=>{const ev=JSON.parse(e.data);for(const fn of window.liveHandlers)fn(ev);
+   if(ev.type==='alert'&&ev.level!=='INFO'){const t=document.createElement('div');t.className='toast '+ev.level;t.textContent=ev.text;document.body.appendChild(t);setTimeout(()=>t.remove(),9000)}};
+  if(wasClosed){wasClosed=false;for(const fn of window.liveHandlers)fn({type:'resync'})}}
+ function close(){clearTimeout(hideTimer);if(!es)return;es.close();es=null;window.liveSource=null;wasClosed=true;
+  if(live){live.textContent='○ пауза';live.className='chip c-gray'}}
+ document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(hideTimer);hideTimer=setTimeout(close,5000)}
+  else{clearTimeout(hideTimer);open()}});
+ window.addEventListener('pagehide',close);window.addEventListener('beforeunload',close);
+ window.addEventListener('pageshow',e=>{if(e.persisted&&!document.hidden)open()});
+ if(!document.hidden)open()})();
+{% endif %}
+</script>
+</body>
+</html>

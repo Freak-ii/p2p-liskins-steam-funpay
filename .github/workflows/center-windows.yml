@@ -1,0 +1,112 @@
+# Портативная сборка центра для Windows и её проверка на настоящей Windows (windows-latest):
+# тесты центра (DPAPI, мягкая остановка), запуск собранного zip в демо-режиме, значок в трее, выход.
+# Запуск: вкладка Actions → Center Windows → Run workflow, пуш тега center-v* или пуш коммита с пометкой [выпуск].
+# Минуты Windows в Actions считаются вдвое, поэтому на обычные пуши и PR эта сборка не запускается:
+# их проверяет «Tests» на Linux.
+name: Center Windows
+# Выпуски center-v* собирает «Build Windows» (packaging/windows, установщик StarsCenter); эта старая
+# портативная сборка запускается только вручную, чтобы два workflow не публиковали один выпуск.
+on:
+  workflow_dispatch:
+concurrency:
+  group: center-windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/center-v') || contains(github.event.head_commit.message, '[выпуск]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: pip install -r requirements.txt pystray Pillow
+      - run: python packaging/build_center_windows.py
+      - uses: actions/upload-artifact@v4
+        with: { name: Center-Windows-x64-portable, path: dist/Center-Windows-x64-portable.zip, retention-days: 3 }
+  windows-tests:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt
+      - name: Тесты центра на Windows
+        run: python -m pytest -q -rs
+  windows-smoke:
+    needs: build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: Center-Windows-x64-portable }
+      - run: Expand-Archive Center-Windows-x64-portable.zip -DestinationPath .
+      - name: better-sqlite3 загружается встроенным Node
+        working-directory: Center/app/bots/lisbot
+        run: ..\..\..\runtime\node\node.exe -e "const D=require('better-sqlite3'); console.log(new D(':memory:').prepare('select sqlite_version() v').get())"
+      - name: Демо-запуск, оба бота, мягкий выход
+        run: |
+          $root = (Resolve-Path Center).Path
+          $env:CENTER_HOME = "$root\data"; $env:CENTER_NODE = "$root\runtime\node\node.exe"; $env:PYTHONPATH = "$root\app"
+          $p = Start-Process "$root\runtime\python\python.exe" -ArgumentList "-m","center","--demo","--no-browser" -WorkingDirectory "$root\app" -PassThru `
+               -RedirectStandardOutput center.out -RedirectStandardError center.err
+          $ok = $false
+          for ($i = 0; $i -lt 40; $i++) { Start-Sleep 2; try { Invoke-RestMethod http://127.0.0.1:8800/api/ping | Out-Null; $ok = $true; break } catch {} }
+          if (-not $ok) { Get-Content center.out, center.err; throw "центр не ответил" }
+          Start-Sleep 20
+          $token = (Select-String -Path "$root\data\demo\center.yaml" -Pattern "token:\s*(\S+)").Matches[0].Groups[1].Value
+          $h = @{ Authorization = "Bearer $token" }
+          $ov = Invoke-RestMethod http://127.0.0.1:8800/api/overview -Headers $h
+          $ov.bots | Format-Table name, state, detail -AutoSize | Out-String -Width 300
+          $mann = $ov.bots | Where-Object name -eq "mannbot"; $lis = $ov.bots | Where-Object name -eq "lisbot"
+          if ($mann.state -ne "running") { throw "MannBot не работает: $($mann.state) $($mann.detail)" }
+          if ($lis.state -ne "running") { throw "LisBot (Node) не работает на эмуляторе LIS-SKINS/Steam: $($lis.state) $($lis.detail)" }
+          $s = Invoke-RestMethod http://127.0.0.1:8800/api/mannbot/settings -Headers $h
+          if (-not $s.sections) { throw "настройки MannBot не пришли" }
+          Invoke-RestMethod http://127.0.0.1:8800/api/quit -Method Post -Headers $h | Out-Null
+          if (-not $p.WaitForExit(60000)) { throw "центр не завершился за 60 с" }
+          $log = Get-Content "$root\data\demo\logs\mannbot.log" -Raw -Encoding utf8
+          $log.Split("`n") | Select-Object -Last 8
+          if ($log -notmatch "мягкая остановка: команда отправлена боту") { throw "мягкой остановки MannBot не было" }
+          if ($log -match "принудительная остановка") { throw "MannBot остановлен принудительно" }
+          $lislog = Get-Content "$root\data\demo\logs\lisbot.log" -Raw -Encoding utf8
+          if ($lislog -notmatch "мягкая остановка: команда отправлена боту") { throw "мягкой остановки LisBot не было" }
+          if (Get-Process node -ErrorAction SilentlyContinue) { throw "после выхода центра остался процесс node" }
+      - name: Значок в трее (pythonw, без консоли) и выход
+        run: |
+          $root = (Resolve-Path Center).Path
+          $env:CENTER_HOME = "$root\data"; $env:CENTER_NODE = "$root\runtime\node\node.exe"; $env:PYTHONPATH = "$root\app"
+          $p = Start-Process "$root\runtime\python\pythonw.exe" -ArgumentList "-m","center","--tray","--demo","--no-browser" -WorkingDirectory "$root\app" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 40; $i++) { Start-Sleep 2; try { Invoke-RestMethod http://127.0.0.1:8800/api/ping | Out-Null; $ok = $true; break } catch {} }
+          if (-not $ok) { Get-Content "$root\data\demo\logs\center.log" -Tail 40; throw "центр в трее не ответил" }
+          Start-Sleep 10
+          $token = (Select-String -Path "$root\data\demo\center.yaml" -Pattern "token:\s*(\S+)").Matches[0].Groups[1].Value
+          Invoke-RestMethod http://127.0.0.1:8800/api/quit -Method Post -Headers @{ Authorization = "Bearer $token" } | Out-Null
+          if (-not $p.WaitForExit(60000)) { Get-Content "$root\data\demo\logs\center.log" -Tail 40; throw "центр в трее не завершился" }
+          Get-Content "$root\data\demo\logs\center.log" -Tail 15 -Encoding utf8
+          if (Select-String -Path "$root\data\demo\logs\center.log" -Pattern "Traceback|pystray не установлен" -Quiet) { throw "ошибка значка в трее" }
+  # Тег center-v* или пуш коммита с пометкой [выпуск] → после сборки и всех проверок на Windows публикуется
+  # GitHub Release с портативным zip. Без тега номер версии берётся из center/__init__.py, тег создаётся на этом коммите.
+  release:
+    if: startsWith(github.ref, 'refs/tags/center-v') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[выпуск]'))
+    needs: [build, windows-tests, windows-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: Center-Windows-x64-portable }
+      - name: Выпуск
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then TAG="$GITHUB_REF_NAME"
+          else TAG="center-v$(python3 -c 'import center; print(center.__version__)')"; fi
+          gh release create "$TAG" Center-Windows-x64-portable.zip --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Центр перепродажи ${TAG#center-v}" --notes-file packaging/release-notes.md --prerelease

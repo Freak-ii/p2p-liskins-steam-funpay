@@ -1,0 +1,55 @@
+# Сборка приложения в GitHub Actions: MannBot.exe (Windows), бинарник Linux и портативный zip.
+# Запуск: вкладка Actions → Build MannBot → Run workflow, или пуш тега mannbot-v*.
+# Исходники MannBot лежат в bots/mannbot, поэтому все шаги работают из этой папки.
+name: Build MannBot
+on:
+  workflow_dispatch:
+  push:
+    tags: ["mannbot-v*"]
+defaults:
+  run:
+    working-directory: bots/mannbot
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+  windows-exe:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install aiohttp beautifulsoup4 lxml PyYAML Jinja2 cryptography anthropic pyinstaller
+      - run: pyinstaller --noconfirm --clean --distpath dist/windows --workpath build/windows packaging/mannbot.spec
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/windows/MannBot.exe -ArgumentList "--demo","--no-browser","--port","8099" -PassThru
+          Start-Sleep 15
+          (Invoke-WebRequest http://127.0.0.1:8099/api/ping -UseBasicParsing).Content
+          Stop-Process $p
+      - uses: actions/upload-artifact@v4
+        with: { name: MannBot-windows-exe, path: bots/mannbot/dist/windows/MannBot.exe, retention-days: 3 }
+  portable-and-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python packaging/build_windows_portable.py
+      - run: pyinstaller --noconfirm --clean --distpath dist/linux --workpath build/linux packaging/mannbot.spec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MannBot-portable-and-linux
+          retention-days: 3
+          path: |
+            bots/mannbot/dist/MannBot-Windows-x64-portable.zip
+            bots/mannbot/dist/linux/MannBot

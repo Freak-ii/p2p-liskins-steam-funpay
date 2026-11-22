@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block body %}<div class="card">
+<form style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"><input name="q" value="{{ q }}" placeholder="№, @, получатель">
+<select name="kind"><option value="">все</option><option value="buy" {{ 'selected' if kind=='buy' }}>покупки</option><option value="sell" {{ 'selected' if kind=='sell' }}>выкуп</option></select>
+<select name="status"><option value="">любой статус</option>{% for k, v in STATUS.items() %}<option value="{{ k }}" {{ 'selected' if k==status_f }}>{{ v }}</option>{% endfor %}</select><button>Найти</button></form>
+<div class="scroll"><table><tr><th>№</th><th>Когда</th><th>Клиент</th><th>Товар</th><th>Получатель</th><th>Сумма</th><th>Оплата</th><th>Маржа</th><th>Статус</th></tr>
+{% for o in rows %}<tr><td><a href="/orders/{{ o.id }}">{{ o.id }}</a></td><td class="mute">{{ o.created_at|ts }}</td>
+<td><a href="/customers/{{ o.user_id }}">{{ '@' ~ o.username if o.username else o.user_id }}</a></td>
+<td>{{ '💸 ' if o.kind == 'sell' }}{{ PRODUCTS.get(o.product, o.product) }} {{ o.item }} {{ o.amount if o.product != 'premium' }}</td><td>{{ o.recipient[:28] }}</td>
+<td>{% if o.kind == 'buy' %}{{ o.total_rub }} ₽{% else %}→ {{ o.payout_amount }} {{ '⭐' if o.payout_kind == 'stars' else o.payout_asset }}{% endif %}</td>
+<td>{{ METHODS.get(o.pay_method, o.pay_method) }}</td><td>{{ o.margin_rub if o.kind == 'buy' }}</td><td>{{ STATUS.get(o.status, o.status) }}</td></tr>{% else %}<tr><td class="mute">нет заказов</td></tr>{% endfor %}</table></div></div>{% endblock %}

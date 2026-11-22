@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block title %}Покупатели{% endblock %}
+{% block body %}<h1>Покупатели</h1>
+<form class="card row" method="get"><input name="q" value="{{q}}" placeholder="ник FunPay, @username, заметка, тег" style="flex:1">
+<select name="seg" style="width:auto"><option value="">все сегменты</option>{% for code, title, color, _ in segments %}<option value="{{code}}" {{ 'selected' if seg==code }}>{{title}}</option>{% endfor %}</select>
+<button>Найти</button></form>
+<div class="card tw"><table>
+<tr><th>Покупатель</th><th>Сегмент</th><th>Заказов</th><th>Завершено</th><th>Возвратов</th><th>Звёзд</th><th>LTV, ₽</th><th>Получатели</th><th>Последний визит</th><th>Заметка / теги</th></tr>
+{% for c in rows %}<tr><td><a href="/customers/{{c.funpay_id}}"><b>{{c.username}}</b></a></td>
+<td>{% for t, color in segments_of(c) %}<span class="chip c-{{color}}">{{t}}</span> {% endfor %}</td>
+<td>{{c.orders_count}}</td><td>{{c.completed_count}}</td><td>{{c.refunded_count}}</td><td>{{c.stars_bought}}</td><td>{{c.total_spent|money}}</td>
+<td style="font-size:12px">{% set tg = c.tg_usernames|jsonload %}{% for u in tg %}@{{u}} {% else %}—{% endfor %}</td><td>{{c.last_seen|ts}}</td>
+<td>{{c.notes}} <span class="muted">{{c.tags}}</span></td></tr>
+{% else %}<tr><td colspan="10" class="muted">Клиентов не найдено</td></tr>{% endfor %}</table></div>{% endblock %}

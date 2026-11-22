@@ -1,0 +1,295 @@
+# ============================================================================
+#  StarsBot — автопродажа Telegram Stars на FunPay через fragment.com
+#  Обычно всё настраивается в панели (мастер настройки); этот файл — для VPS
+#  и ручной настройки. Скопируйте в config.yaml. Секреты лучше передавать
+#  через переменные окружения: ${ИМЯ} подставляется при загрузке.
+#  Никогда не коммитьте config.yaml с golden_key, cookies Fragment и сид-фразой!
+# ============================================================================
+
+general:
+  # Тестовый режим (dry-run) — Бот читает FunPay и Fragment и ведёт CRM, но ничего не отправляет и не покупает
+  dry_run: true
+  demo: false
+  # Язык сообщений покупателю по умолчанию — Бот переключится на English, если покупатель пишет на английском
+  language: ru
+  database: data/starsbot.sqlite3
+  log_file: data/starsbot.log
+  # Подробность журнала
+  log_level: INFO
+  # Запускать бота при открытии приложения
+  autostart: false
+  # Хранить резервные копии базы, дней — Копия раз в сутки в data/backups
+  backup_keep_days: 14
+
+# Свои тексты сообщений покупателю (обычно меняются в панели → «Сообщения»)
+# messages:
+#   ru:
+#     delivered: "…"
+
+funpay:
+  # golden_key (cookie FunPay) — Браузер → funpay.com → DevTools → Application → Cookies → golden_key
+  golden_key: ${FUNPAY_GOLDEN_KEY}
+  user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36
+  # Опрос FunPay, сек — Не ставьте меньше 4
+  poll_interval: 6
+  # Раздел FunPay (node_id) — Telegram → Звёзды = 2418
+  node_id: 2418
+  # id игры для поднятия лотов — 0 — не поднимать
+  game_id: 0
+  lots:
+    - {offer_id: 0, stars: 50}
+    - {offer_id: 0, stars: 75}
+    - {offer_id: 0, stars: 100}
+    - {offer_id: 0, stars: 150}
+    - {offer_id: 0, stars: 250}
+    - {offer_id: 0, stars: 350}
+    - {offer_id: 0, stars: 500}
+  # Какие заказы обрабатывать (regex по описанию)
+  order_match_regex: (?i)(зв[её]зд|stars|⭐)
+  # Какие заказы не трогать (regex) — Например, «Подарком» и «С заходом на аккаунт»
+  order_exclude_regex: (?i)(подарк|gift|с заходом|вход на аккаунт)
+  # Автоподнятие лотов
+  auto_raise: true
+  # Интервал поднятия, мин
+  raise_interval_minutes: 240
+  # «Наличие» лотов по балансу кошелька — Лот скрывается, когда TON не хватает на номинал
+  stock_sync: true
+  # Максимум показываемого наличия
+  max_display_amount: 200
+  # Скрывать лот, когда баланса не хватает
+  deactivate_when_empty: true
+  # Отвечать тем, кто пишет без заказа — Один шаблонный ответ на чат (до следующего заказа)
+  presale_replies: true
+  coord_db: ''
+
+fragment:
+  # Cookie Fragment — stel_ssid=…; stel_dt=…; stel_token=…; stel_ton_token=… — из браузера, где на fragment.com подключён кошелёк бота и пройден KYC
+  cookies: ${FRAGMENT_COOKIES}
+  # Пауза между запросами к Fragment, сек
+  min_interval: 1.0
+  # Не покупать дороже, TON за звезду — 0 — без ограничения
+  max_ton_per_star: 0.0
+  # Не покупать, если себестоимость больше, % суммы заказа — Защита от продажи в убыток
+  max_cost_share_pct: 100.0
+  # Проверять сессию перед заказом, если прошло больше, мин
+  session_check_minutes: 10
+  # Скрывать лоты, пока сессия истекла или нет KYC
+  hide_lots_when_down: true
+  cookies_set_at: 0
+  session_warn_days: 14
+
+ton:
+  # Сид-фраза (24 слова) — Хранится только в config.yaml на этом компьютере. Используйте отдельный кошелёк только для бота
+  mnemonic: ${TON_MNEMONIC}
+  # Адрес кошелька бота — Тот же кошелёк, что подключён к Fragment
+  address: ${TON_ADDRESS}
+  # Версия кошелька — Tonkeeper: Настройки → Активные адреса (W5 = v5r1)
+  version: v5r1
+  # toncenter API
+  toncenter_endpoint: https://toncenter.com/api/v2
+  # Ключ toncenter API — Необязательно, без ключа — 1 запрос в секунду (@tonapibot)
+  toncenter_api_key: ${TONCENTER_API_KEY}
+  # Предупреждать при балансе меньше, TON
+  low_balance_ton: 3.0
+  # Запас на комиссию сети, TON
+  fee_reserve_ton: 0.1
+
+rates:
+  # Курс TON/RUB — auto — CoinGecko, manual — только значение ниже
+  source: auto
+  # Курс вручную / запасной, ₽
+  ton_rub: 0.0
+  # Обновлять курс, мин
+  refresh_minutes: 15
+
+deal:
+  # Попыток прислать username — После — заказ уходит продавцу
+  max_username_attempts: 3
+  # Напомнить про username через, мин
+  reminder_after_minutes: 10
+  # Позвать продавца, если покупатель молчит, мин
+  admin_alert_after_minutes: 60
+  # Повторов покупки — Только когда транзакция гарантированно не исполнилась
+  purchase_retry_limit: 3
+  # Пауза между покупками, сек
+  purchase_pause_seconds: 3
+  # Ждать подтверждения сети, мин
+  confirm_wait_minutes: 15
+  # Авто-возврат, если username так и не получен
+  auto_refund_bad_recipient: false
+  # Авто-возврат, если не хватает TON
+  auto_refund_no_funds: false
+  # Пауза между сообщениями в чат, сек
+  message_rate_limit_seconds: 2
+  # Напомнить подтвердить заказ через, мин — Одно напоминание после выдачи; 0 — не напоминать
+  confirm_reminder_minutes: 10
+
+risk:
+  # Риск-система включена
+  enabled: true
+  # Порог ручной проверки
+  manual_review_score: 60
+  # Порог блокировки
+  block_score: 90
+  # Крупный заказ — от, звёзд
+  large_order_stars: 1500
+  # Заказов от покупателя в сутки (норма)
+  max_orders_per_buyer_per_day: 6
+  # Разных получателей у покупателя в сутки (норма)
+  max_recipients_per_buyer_per_day: 3
+  # Чёрный список ников FunPay — По одному в строке
+  blacklist_funpay_users: []
+  # Чёрный список username Telegram — По одному в строке
+  blacklist_usernames: []
+
+safety:
+  # Пилот: первые N боевых покупок — с одобрения — Бот готовит покупку и ждёт /approve, пока не пройдут N реальных оплат. 0 — выключено
+  pilot_orders: 3
+  # Лимит трат за сутки, TON — Сверх лимита — только с одобрения. 0 — без лимита
+  daily_ton_limit: 0.0
+  # Заказ дороже, TON — с одобрения — 0 — без ограничения
+  max_order_ton: 0.0
+
+rtba:
+  # RTBA (автоцена) включена
+  enabled: false
+  # Проверять рынок каждые, сек
+  interval_seconds: 300
+  # Стратегия — top1 — дешевле лидера, topN — встать на позицию N, median — медиана
+  strategy: top1
+  # Позиция для topN
+  target_position: 1
+  # Шаг ниже конкурента, ₽
+  undercut_abs: 0.5
+  # Шаг ниже конкурента, %
+  undercut_pct: 0.0
+  # Минимальная маржа над себестоимостью, %
+  min_margin_pct: 8.0
+  # Жёсткий минимум, ₽ за звезду — 0 — только по себестоимости
+  floor_price_per_star: 0.0
+  # Потолок, ₽ за звезду — 0 — без потолка
+  ceiling_price_per_star: 0.0
+  # Не менять цену меньше чем на, ₽
+  min_change: 0.3
+  # Изменений цены лота в час, максимум
+  max_updates_per_hour: 6
+  # Игнорировать продавцов — По одному нику в строке
+  ignore_competitors: []
+  # Игнорировать лоты с наличием меньше
+  competitor_min_amount: 1
+  # Учитывать только продавцов онлайн
+  competitor_only_online: false
+  outlier_iqr_factor: 1.5
+  # Способ получения у конкурентов (regex) — username — сравниваемся только с «По username»
+  method_filter: username
+  raise_gap_pct: 3.0
+  # Цена звезды в TON до первой покупки
+  fallback_ton_per_star: 0.0
+
+economics:
+  # Комиссия FunPay с вашей цены, % — Обычно 0: комиссию платит покупатель сверху
+  funpay_fee_pct: 0.0
+  # Комиссия вывода с FunPay, % — Зависит от способа вывода
+  withdraw_fee_pct: 3.0
+  # Фикс. комиссия за один вывод, ₽
+  withdraw_fee_fixed_rub: 0.0
+  # Покупаете TON дороже биржи на, % — Используется, пока нет записей о пополнениях
+  exchange_spread_pct: 2.0
+  # Комиссия перевода TON на кошелёк, TON
+  deposit_fee_ton: 0.0
+  # Обычное пополнение, TON
+  typical_topup_ton: 50.0
+  # Комиссия сети за покупку, TON
+  gas_per_purchase_ton: 0.006
+  # Тревога при расхождении баланса с учётом, TON
+  balance_mismatch_alert_ton: 1.0
+
+notifications:
+  telegram:
+    # Уведомления в Telegram
+    enabled: false
+    # Токен бота (@BotFather) — Отдельный бот, не тот, что у MannBot: иначе команды будут конфликтовать
+    bot_token: ${STARSBOT_TG_TOKEN}
+    # chat_id администраторов — По одному в строке (узнать: @userinfobot)
+    admin_chat_ids: []
+    # Управление командами из Telegram
+    commands: true
+  # Минимальный уровень уведомлений
+  min_level: INFO
+  # Повторять одинаковый алерт не чаще, сек
+  throttle_seconds: 300
+  # Час ежедневного отчёта
+  daily_report_hour: 10
+
+dashboard:
+  enabled: true
+  host: 127.0.0.1
+  port: 8083
+  token: ${STARSBOT_DASHBOARD_TOKEN}
+  # Токен оператора — Заказы, чат, клиенты, пауза. Без настроек и денег. Не короче 12 символов
+  operator_token: ''
+  # Токен наблюдателя — Только просмотр. Не короче 12 символов
+  viewer_token: ''
+
+sla:
+  # Заказ должен быть выдан за, мин
+  order_total_minutes: 60
+
+# Второй канал продаж: Ozon (кабинет «Цифровые товары» с Seller API). Покупатель получает от Ozon код
+# активации и вводит его с @username в боте активации. Кошелёк, Fragment и CRM — общие с FunPay.
+ozon:
+  enabled: false
+  # Кабинет Ozon → Настройки → Seller API
+  client_id: ${STARSBOT_OZON_CLIENT_ID}
+  api_key: ${STARSBOT_OZON_API_KEY}
+  poll_interval: 30
+  # Артикул (offer_id) карточки Ozon → звёзд в одной штуке. sku — необязательно
+  products:
+    - {stars: 50, offer_id: ''}
+    - {stars: 100, offer_id: ''}
+    - {stars: 250, offer_id: ''}
+    - {stars: 500, offer_id: ''}
+  code_prefix: TGS
+  # Остатки на Ozon = сколько раз хватит баланса кошелька
+  stock_sync: true
+  max_stock: 100
+  # Комиссия Ozon: игровая валюта — 10%, прочие цифровые товары — 15%
+  commission_pct: 10.0
+  withdraw_fee_pct: 0.0
+  # Отдельный Telegram-бот для покупателей (не тот, что для уведомлений)
+  activation_bot:
+    enabled: true
+    bot_token: ${STARSBOT_OZON_BOT_TOKEN}
+  # Публичная страница активации (нужен белый IP/VPS или туннель)
+  activation_web:
+    enabled: false
+    host: 0.0.0.0
+    port: 8084
+    public_url: ''
+
+# Третий канал продаж: маркетплейс GGSEL (ggsel.net, Seller API). Покупатель указывает @username в поле товара
+# при оформлении (или пишет его в чат заказа), бот покупает звёзды на Fragment с того же кошелька, что и для FunPay.
+ggsel:
+  enabled: false
+  # Кабинет GGSEL → Настройки → API
+  seller_id: ${STARSBOT_GGSEL_SELLER_ID}
+  api_key: ${STARSBOT_GGSEL_API_KEY}
+  poll_interval: 20
+  # ID товара на GGSEL → звёзд в одной штуке (stars: 1 — товар «за звезду» с количеством). price — для ручных цен
+  products:
+    - {stars: 50, offer_id: '', price: 0}
+    - {stars: 100, offer_id: '', price: 0}
+    - {stars: 250, offer_id: '', price: 0}
+    - {stars: 500, offer_id: '', price: 0}
+  stock_sync: true
+  max_stock: 100
+  # margin — цена = себестоимость + маржа по курсу TON; manual — цены из products
+  price_mode: margin
+  margin_pct: 6.0
+  # ниже этой маржи товар скрывается (остаток 0) и приходит алерт
+  min_margin_pct: 3.0
+  # комиссия GGSEL и вывода — уточните в кабинете
+  commission_pct: 10.0
+  withdraw_fee_pct: 3.0
+  sla_critical_hours: 6
+  confirm_reminder_hours: 24
