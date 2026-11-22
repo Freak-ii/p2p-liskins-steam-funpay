@@ -132,9 +132,17 @@ class FunPayClient:
                 result["bookmarks"] = P.parse_chat_bookmarks(data["html"])
         return result
 
+    async def get_bookmarks_page(self) -> list:
+        """Список диалогов со страницы /chat/ — запасной путь: на живом аккаунте runner присылает chat_bookmarks
+        только в первом ответе, новые диалоги через него не приходят (то же исправлено в StarsBot)."""
+        _, page = await self._request("GET", "/chat/")
+        return P.parse_chat_bookmarks(page)
+
     # ------------------------------------------------------------------ chat
     async def get_chat_history(self, chat_id: str, last_message: int = 0) -> list[ChatMessage]:
-        _, body = await self._request("GET", f"/chat/history?node={chat_id}&last_message={last_message}",
+        """Последние сообщения чата новее last_message. FunPay /chat/history отдаёт страницу сообщений ДО
+        указанного id (прокрутка вверх), поэтому всегда просим самую свежую страницу и фильтруем сами."""
+        _, body = await self._request("GET", f"/chat/history?node={chat_id}&last_message=99999999999999999999",
                                       ajax=True)
         data = json.loads(body)
         out: list[ChatMessage] = []
@@ -218,6 +226,36 @@ class FunPayClient:
                 fields.pop("active", None)
         await self.save_lot(fields)
         return fields
+
+    async def get_lot_form(self, node_id: int, offer_id: int = 0) -> tuple[dict[str, str], dict]:
+        """Поля и выпадающие списки формы лота. offer_id=0 — пустая форма нового лота."""
+        path = f"/lots/offerEdit?node={node_id}" + (f"&offer={offer_id}" if offer_id else "")
+        _, page = await self._request("GET", path)
+        fields = P.parse_offer_edit_form(page)
+        if not fields:
+            raise FunPayError("не удалось открыть форму лота")
+        return fields, P.parse_offer_selects(page)
+
+    async def create_lot(self, fields: dict[str, str]) -> str:
+        """Создаёт лот (offer_id=0). Возвращает id нового лота, если FunPay его сообщил.
+        Создаётся и в тестовом режиме: движок выставляет такой лот выключенным."""
+        form = dict(fields)
+        form["offer_id"] = "0"
+        form["csrf_token"] = self.csrf
+        _, body = await self._request("POST", "/lots/offerSave", ajax=True, data=form)
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as e:
+            raise FunPayError(f"создание лота: не JSON ({body[:120]!r})") from e
+        if data.get("error") or data.get("errors"):
+            raise FunPayError(f"лот не создан: {data.get('msg') or data.get('errors') or data.get('error')}")
+        import re as _re
+        m = _re.search(r"(?:offer=|id=)(\d+)", str(data.get("url") or data.get("redirect") or ""))
+        return m.group(1) if m else str(data.get("offer_id") or data.get("id") or "")
+
+    async def get_own_lots(self, node_id: int) -> list:
+        _, page = await self._request("GET", f"/lots/{node_id}/trade")
+        return P.parse_own_lots(page)
 
     async def raise_lots(self, game_id: int, node_id: int) -> tuple[bool, str]:
         if self.dry_run:

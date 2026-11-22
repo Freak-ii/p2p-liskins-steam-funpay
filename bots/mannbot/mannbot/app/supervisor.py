@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 from mannbot.analytics.analytics import Analytics
-from mannbot.config import DEFAULTS, Section, load_config, validate_config
+from mannbot.config import DEFAULTS, Section, inherit_shared, load_config, validate_config
 from mannbot.coord import Coordinator
 from mannbot.core import messages as M
 from mannbot.core.engine import Engine
@@ -54,6 +54,7 @@ class Supervisor:
         self.config_path = self.home / "config.yaml"
         self.demo = demo
         self.overrides = overrides or {}
+        self.inherited: list[str] = []   # golden_key / уведомления, взятые у StarsBot
         self.raw: dict = self._read_raw()
         self.cfg: Section = self._load()
         self._apply_patch_file()
@@ -85,6 +86,10 @@ class Supervisor:
         if cfg.general.log_file and not Path(cfg.general.log_file).is_absolute():
             cfg.general.log_file = str(self.home / cfg.general.log_file)
         M.set_overrides(cfg.get("messages"))
+        if not self.demo:
+            self.inherited = inherit_shared(cfg, self.home)
+            if self.inherited:
+                log.info("MannBot: у StarsBot взяты %s", ", ".join(self.inherited))
         return cfg
 
     def _apply_patch_file(self) -> None:
@@ -230,6 +235,7 @@ class Supervisor:
             steam = SteamClient(cfg.steam, dry_run=cfg.general.dry_run)
         self.engine = Engine(cfg, self.db, fp, steam, self.notifier, coord=coord)
         self.engine.external_commands = True
+        self.engine.save_config = self.save
         self.analytics = Analytics(cfg, self.db, self.notifier, self.engine)
         self.engine.analytics = self.analytics
 
