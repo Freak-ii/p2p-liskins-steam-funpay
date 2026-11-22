@@ -23,6 +23,24 @@ DEFAULTS: dict[str, Any] = {
         "auto_raise": True, "raise_interval_minutes": 240, "stock_sync": True,
         "max_display_amount": 500, "deactivate_when_empty": True,
         "coord_db": "",                  # общий файл координации с StarsBot (обычно задаёт Центр)
+        "presale_replies": True,         # вопрос о ключах без заказа — один раз ответить шаблоном
+        # golden_key и Telegram-уведомления берутся у StarsBot (тот же аккаунт FunPay), если свои пусты
+        "share_from": "../starsbot/config.yaml",
+        # лот без offer_id: найти свой лот с ключами в разделе или выставить новый (выключенным в тестовом режиме)
+        "auto_create_lot": True,
+        "lot_title_ru": "🔑 Ключ от ящика Манн Ко | Mann Co. Supply Crate Key | Автовыдача 24/7 🤖",
+        "lot_title_en": "🔑 Mann Co. Supply Crate Key | Instant auto delivery 24/7 🤖",
+        "lot_desc_ru": ("Ключ от ящика Манн Ко (Mann Co. Supply Crate Key), Team Fortress 2.\n"
+                        "Выдача автоматическая через обмен Steam, обычно 1–3 минуты, круглосуточно.\n\n"
+                        "Как получить: оплатите нужное количество и пришлите в чат ссылку на обмен Steam "
+                        "(Steam → Инвентарь → Предложения обмена → «Кто может отправлять мне предложения обмена?»).\n"
+                        "Нужен мобильный Steam Guard не менее 7 дней, иначе Steam задержит обмен.\n"
+                        "Мы никогда не просим ваши предметы, логин, коды или API-ключ. Обмен приходит "
+                        "с комментарием «FunPay заказ #номер»."),
+        "lot_desc_en": ("Mann Co. Supply Crate Key (Team Fortress 2). Automatic delivery via Steam trade offer, "
+                        "usually 1–3 minutes, 24/7. After payment send your Steam trade URL to the chat. "
+                        "We never ask for your items, login, codes or API key."),
+        "lot_start_price": 0,            # цена нового лота, ₽ (0 — пол RTBA или 150)
     },
     "steam": {
         "username": "", "password": "", "shared_secret": "", "identity_secret": "", "steam_id": "",
@@ -127,6 +145,36 @@ def load_config(path: str | Path | None = None, overrides: dict | None = None) -
     return _wrap(merged)
 
 
+def inherit_shared(cfg: Section, home: str | Path) -> list[str]:
+    """Пустые golden_key и Telegram-уведомления берём у StarsBot: тот же аккаунт FunPay и тот же продавец.
+    Команды Telegram при этом выключены: один токен опрашивать двум программам нельзя (ошибка 409)."""
+    src = str(cfg.funpay.get("share_from") or "")
+    if not src or cfg.general.demo:
+        return []
+    path = Path(src) if Path(src).is_absolute() else (Path(home) / src)
+    try:
+        other = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    other = _expand_env(other)
+    taken = []
+    fp = other.get("funpay") or {}
+    if not cfg.funpay.golden_key and fp.get("golden_key"):
+        cfg.funpay.golden_key = str(fp["golden_key"])
+        if fp.get("user_agent"):
+            cfg.funpay.user_agent = str(fp["user_agent"])
+        taken.append("golden_key")
+    tg_other = ((other.get("notifications") or {}).get("telegram") or {})
+    tg = cfg.notifications.telegram
+    if not tg.get("bot_token") and tg_other.get("bot_token"):
+        tg.bot_token = str(tg_other["bot_token"])
+        tg.admin_chat_ids = list(tg_other.get("admin_chat_ids") or [])
+        tg.enabled = bool(tg_other.get("enabled", True))
+        tg.commands = False
+        taken.append("уведомления Telegram")
+    return taken
+
+
 def validate_config(cfg: Section) -> list[str]:
     """Возвращает список проблем конфигурации (пустой — всё ок)."""
     problems: list[str] = []
@@ -134,7 +182,8 @@ def validate_config(cfg: Section) -> list[str]:
         return problems
     if not cfg.funpay.golden_key:
         problems.append("funpay.golden_key не задан")
-    if not cfg.funpay.lots or not any(l.get("offer_id") for l in cfg.funpay.lots):
+    if not cfg.funpay.get("auto_create_lot") and \
+            (not cfg.funpay.lots or not any(l.get("offer_id") for l in cfg.funpay.lots)):
         problems.append("funpay.lots: укажите хотя бы один offer_id лота с ключами")
     st = cfg.steam
     if not st.login_secure_cookie and not (st.username and st.password and st.shared_secret):

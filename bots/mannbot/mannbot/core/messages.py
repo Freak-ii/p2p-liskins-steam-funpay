@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import re
+
 TEMPLATES: dict[str, dict[str, str]] = {
     "ru": {
         "greeting": (
@@ -115,6 +117,12 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "refunded": "💸 По заказу #{order_id} оформлен возврат средств. Обмен Steam по нему отменён.",
         "completed_thanks": "🙏 Спасибо за подтверждение заказа #{order_id}! Хорошей игры и до новых встреч!",
         "review_thanks": "⭐ Спасибо за отзыв! Нам очень приятно 😊",
+        "presale_keys": (
+            "Здравствуйте! 👋 Ключи Mann Co. Supply Crate Key в наличии{stock_hint}, выдача автоматическая "
+            "через обмен Steam, обычно 1–3 минуты, 24/7.\n"
+            "Как купить: выберите количество в лоте и оплатите, затем пришлите в этот чат ссылку на обмен Steam "
+            "(steamcommunity.com/my/tradeoffers/privacy). Если остался вопрос, напишите его здесь: продавец ответит."
+        ),
     },
     "en": {
         "greeting": (
@@ -177,6 +185,9 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "refunded": "💸 Order #{order_id} has been refunded. The Steam offer has been cancelled.",
         "completed_thanks": "🙏 Thank you for confirming order #{order_id}! Have fun!",
         "review_thanks": "⭐ Thank you for the review! 😊",
+        "presale_keys": ("Hi! 👋 Mann Co. Supply Crate Keys are in stock{stock_hint}, delivered automatically via a "
+                         "Steam trade offer, usually in 1–3 minutes, 24/7. Pick the quantity, pay for the offer and "
+                         "send your Steam trade URL here (steamcommunity.com/my/tradeoffers/privacy)."),
     },
 }
 
@@ -304,6 +315,10 @@ COMMANDS = {
 OFF_PLATFORM_HINTS = ("telegram", "телеграм", "телега", "discord", "дискорд", "вк ", "vk.com", "t.me/",
                       "whatsapp", "ватсап", "напрямую", "без фанпей", "без funpay", "мимо фанпей", "в обход",
                       "скинь контакт", "номер телефона", "добавь в друзья")
+
+
+# вопрос о ключах/TF2 в чате без заказа — отвечаем один раз шаблоном (звёзды и подарки ведёт StarsBot/TG Gift)
+KEYS_TOPIC_RE = re.compile(r"ключ|key|манн|mann|tf\s*2|тф\s*2|team\s*fortress", re.I)
 
 
 def detect_command(text: str) -> str | None:

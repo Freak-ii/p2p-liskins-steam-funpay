@@ -358,3 +358,49 @@ def parse_offer_edit_form(page: str) -> dict[str, str]:
         opt = sel.select_one("option[selected]") or sel.select_one("option")
         fields[sel["name"]] = opt.get("value", "") if opt else ""
     return fields
+
+
+def parse_offer_selects(page: str) -> dict[str, list[tuple[str, str]]]:
+    """Выпадающие списки формы лота: {name: [(value, текст)]} — чтобы выставить «количество» и «способ» по тексту."""
+    s = soup(page)
+    form = s.select_one("form.form-offer-editor") or s.select_one("form")
+    out: dict[str, list[tuple[str, str]]] = {}
+    if form is None:
+        return out
+    for sel in form.select("select[name]"):
+        out[sel["name"]] = [(o.get("value", ""), text_of(o)) for o in sel.select("option")]
+    return out
+
+
+@dataclass
+class OwnLot:
+    offer_id: str
+    description: str
+    price: float | None = None
+    amount: int | None = None
+    active: bool = True
+
+
+def parse_own_lots(page: str) -> list[OwnLot]:
+    """Свои лоты раздела (funpay.com/lots/<node>/trade): ссылки на offerEdit?offer=ID или offer?id=ID."""
+    s = soup(page)
+    out: list[OwnLot] = []
+    seen: set[str] = set()
+    for row in s.select("a.tc-item, div.tc-item"):
+        href = row.get("href", "") or row.get("data-href", "")
+        m = re.search(r"(?:offer=|[?&]id=)(\d+)", href)
+        if not m:
+            a = row.select_one("a[href*='offer']")
+            m = re.search(r"(?:offer=|[?&]id=)(\d+)", a.get("href", "")) if a is not None else None
+        if not m or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        desc = text_of(row.select_one(".tc-desc-text") or row.select_one(".tc-desc"))
+        price_node = row.select_one(".tc-price")
+        price = parse_number(price_node.get("data-s") or text_of(price_node)) if price_node is not None else None
+        amount_node = row.select_one(".tc-amount")
+        amount = parse_number(amount_node.get("data-s") or text_of(amount_node)) if amount_node is not None else None
+        classes = " ".join(row.get("class") or [])
+        out.append(OwnLot(m.group(1), desc, price, int(amount) if amount is not None else None,
+                          "warning" not in classes and "inactive" not in classes))
+    return out

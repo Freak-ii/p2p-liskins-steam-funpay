@@ -50,6 +50,10 @@ class Engine:
         self._order_re = re.compile(cfg.funpay.order_match_regex)
         self.started_at = time.time()
         self.last_ok: dict[str, float] = {}
+        self._runner_bm_at = 0.0         # когда runner последний раз прислал список диалогов
+        self._page_bm_at = 0.0           # когда брали список со страницы /chat/
+        self._order_chats_at = 0.0
+        self.save_config = None          # Supervisor.save — записать id выставленного лота в config.yaml
         self.stock_cache: dict[str, Any] = {"total": None, "ts": 0}
         self.ai = AIAgent(cfg, db, notifier, sender=self.say_text)
         self.share = CenterShare.from_env()      # реестр обменов центра: один аккаунт Steam с LisBot
@@ -284,6 +288,36 @@ class Engine:
         elif what == "review":
             asyncio.create_task(self._fetch_review_later(oid, delay=5))
 
+    async def presale_reply(self, chat_id: str, last, msg: ChatMessage) -> bool:
+        """Вопрос о ключах в чате без заказа: один раз отвечаем шаблоном (п. 2.1.4 — не игнорируем), дальше —
+        продавец. Звёзды/подарки — не наши темы (их ведут StarsBot и TG Gift на том же аккаунте)."""
+        text = msg.text or ""
+        if not self.cfg.funpay.get("presale_replies", True) or self.paused or not M.KEYS_TOPIC_RE.search(text):
+            return False
+        if last is not None and S(last["status"]) == S.DELIVERED:
+            return False                     # ключи только что выдали — это не новый покупатель
+        key = f"presale:{chat_id}"
+        prev = self.db.kv_get(key, 0) or 0
+        if last is not None and float(prev) < float(last["created_at"] or 0):
+            prev = 0                         # после прошлого заказа можно ответить снова
+        if prev:
+            return False
+        stock = self.db.kv_get("last_stock", None)
+        if stock is not None and int(stock) <= 0:
+            return False                     # ключей нет — лоты скрыты, обещать нечего
+        if not self.coord.claim_presale(chat_id):
+            return False                     # этому человеку уже отвечает другой бот аккаунта
+        self.db.kv_set(key, time.time())
+        lang = M.detect_lang(text, self.cfg.general.language)
+        hint = (f": {int(stock)} шт." if lang == "ru" else f": {int(stock)} pcs") if stock else ""
+        try:
+            await self.fp.send_message(chat_id, M.render(lang, "presale_keys", stock_hint=hint))
+            self._chat_last_sent[chat_id] = time.time()
+            self.db.log_message(chat_id, None, "out", "presale_keys")
+        except FunPayError as e:
+            log.warning("ответ без заказа в чат %s: %s", chat_id, e)
+        return True
+
     async def on_buyer_message(self, chat_id: str, msg: ChatMessage) -> None:
         o = self.db.active_order_for_chat(chat_id)
         if o is None and self.coord.chat_is_foreign(chat_id):
@@ -298,6 +332,8 @@ class Engine:
                                     (chat_id,))
             if M.is_off_platform_request(msg.text) and delivered:
                 await self.say(delivered, "off_platform")
+            elif await self.presale_reply(chat_id, delivered, msg):
+                pass
             elif await self._ask_ai(chat_id, delivered, msg):
                 return
             # п. 2.1.4 — не игнорируем: пересылаем продавцу
@@ -1142,21 +1178,105 @@ class Engine:
             await self.sync_orders()
             self.db.kv_set("last_orders_sync", time.time())
         init = self.db.kv_get("chats_initialized", False)
-        for bm in upd["bookmarks"]:
+        bookmarks = upd["bookmarks"]
+        now = time.time()
+        if bookmarks:
+            self._runner_bm_at = now
+        elif now - self._runner_bm_at > 60 and now - self._page_bm_at > 20 and \
+                hasattr(self.fp, "get_bookmarks_page"):
+            # runner давно не присылал список диалогов (на живом аккаунте он присылает его только в первый раз) —
+            # берём список со страницы /chat/
+            self._page_bm_at = now
+            try:
+                bookmarks = await self.fp.get_bookmarks_page()
+            except FunPayError as e:
+                log.warning("список диалогов /chat/: %s", e)
+        fetched = 0
+        for bm in bookmarks:
             seen = self.db.last_seen_message(bm.chat_id)
             if not init:
                 self.db.set_last_seen_message(bm.chat_id, bm.last_message_id)
                 continue
             if bm.last_message_id > seen:
-                msgs = await self.fp.get_chat_history(bm.chat_id, seen)
+                if fetched >= 6:         # остальные чаты — в следующем опросе, чтобы опрос не затягивался
+                    break
+                fetched += 1
+                try:
+                    msgs = await self.fp.get_chat_history(bm.chat_id, seen)
+                except FunPayError as e:
+                    log.warning("чат %s: %s", bm.chat_id, e)
+                    continue
+                if seen == 0:
+                    # чат читаем впервые: запоминаем, докуда дочитали, и не отвечаем на старую переписку
+                    self.db.set_last_seen_message(bm.chat_id, max([bm.last_message_id] +
+                                                                  [m.message_id for m in msgs]))
+                    msgs = self._first_read_slice(bm.chat_id, msgs)
                 await self.process_chat(bm.chat_id, msgs)
-        if not init and upd["bookmarks"]:
+        if not init and bookmarks:       # первый опрос: старую переписку не обрабатываем, дальше — всё новое
             self.db.kv_set("chats_initialized", True)
+        elif init:
+            await self.poll_order_chats()
         self.last_ok["funpay_poll"] = time.time()
+
+    def _unanswered_tail(self, msgs: list[ChatMessage]) -> list[ChatMessage]:
+        """Чат, который бот ещё не читал: только то, что пришло после нашего последнего ответа
+        (а если мы там ещё не писали — последние 3 сообщения)."""
+        msgs = sorted(msgs, key=lambda m: m.message_id)
+        own = [i for i, m in enumerate(msgs) if m.author_id == self.fp.user_id]
+        return msgs[own[-1] + 1:] if own else msgs[-3:]
+
+    def _first_read_slice(self, chat_id: str, msgs: list[ChatMessage]) -> list[ChatMessage]:
+        """Что разбирать в чате, который читаем впервые. Если в чате идёт наш заказ — всё после отметки FunPay
+        об оплате этого заказа (покупатель часто присылает ссылку сразу после оплаты, ещё до нашей инструкции,
+        и наша инструкция не должна её «перекрыть»). Иначе — только неотвеченный хвост."""
+        o = self.db.active_order_for_chat(chat_id)
+        if o is not None:
+            start = 0
+            for m in msgs:
+                k = classify_system(m.text) if m.is_system else None
+                if k and k[0] == "paid" and k[1] == o["order_id"]:
+                    start = m.message_id
+            if start:
+                return [m for m in sorted(msgs, key=lambda m: m.message_id) if m.message_id > start]
+        return self._unanswered_tail(msgs)
+
+    async def poll_order_chats(self) -> None:
+        """Чаты заказов, где ждём ответа покупателя (ссылка на обмен, «!повтор»), читаем напрямую,
+        не полагаясь на список диалогов."""
+        now = time.time()
+        if now - self._order_chats_at < 12:
+            return
+        self._order_chats_at = now
+        rows = self.db.orders_by_status(S.AWAITING_LINK, S.OFFER_SENT, S.ESCROW)
+        for o in [r for r in rows if not is_shop(r)][:10]:
+            chat = o["chat_id"]
+            if not chat:
+                continue
+            seen = self.db.last_seen_message(chat)
+            try:
+                msgs = await self.fp.get_chat_history(chat, seen)
+            except FunPayError as e:
+                log.warning("чат заказа #%s: %s", o["order_id"], e)
+                continue
+            if not msgs:
+                continue
+            if seen == 0:
+                # чат ещё не читали: переписку до оплаты этого заказа не разбираем
+                self.db.set_last_seen_message(chat, max(m.message_id for m in msgs))
+                msgs = self._first_read_slice(chat, msgs)
+            await self.process_chat(chat, msgs)
 
     async def start(self) -> None:
         await self.fp.login()
         await self.steam.login()
+        if hasattr(self.fp, "get_lot_form") and not any(l.get("offer_id") for l in (self.cfg.funpay.lots or [])):
+            from mannbot.funpay.lotmaker import ensure_key_lot
+            try:
+                rep = await ensure_key_lot(self)
+                await self.notifier.notify("INFO", "lot_ready", f"🏷 Лот с ключами: {rep}")
+            except FunPayError as e:
+                await self.notifier.notify("CRITICAL", "lot_create_failed", f"Лот с ключами не выставлен: {e}. "
+                                           "Выставьте лот в разделе TF2 → Предметы вручную и укажите его id в настройках.")
         for o in self.db.orders_by_status(S.READY_TO_SEND):
             self.enqueue(o["order_id"])
         await self.notifier.notify("INFO", "started", f"🤖 Бот запущен. FunPay: {self.fp.username}, Steam: "
