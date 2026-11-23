@@ -151,6 +151,46 @@
     }
   },
 
+  "arbitrage": {
+    "enabled": false,
+    "sendSteamToken": false,
+    "saleFeePct": 0.05,
+    "withdrawFeePct": 0.05,
+    "payoutFxLossPct": 0.01,
+    "lisDepositFeePct": 0,
+    "scanIntervalMin": 30,
+    "maxValuationAgeHours": 2,
+    "minLisCount": 3,
+    "minBidCount": 5,
+    "bidDepth": 3,
+    "maxCandidates": 120,
+    "maxPicks": 40,
+    "historyDays": 14,
+    "saleQuantile": 0.35,
+    "minWeeklySales": 10,
+    "maxDownsidePct": 0.07,
+    "undercutPct": 0.005,
+    "sellIntoBidWithinPct": 0.02,
+    "minMarginOverCost": 0.0,
+    "repriceAfterHours": 12,
+    "repriceStepPct": 0.01,
+    "maxRelists": 12,
+    "offerTtlMin": 240,
+    "strategy": {
+      "minRoi": 0.05,
+      "roiPerHoldDay": 0,
+      "maxShareOfDailyVolume": 0.2,
+      "maxPerItemPerDay": 1,
+      "maxHeldPerItem": 2,
+      "maxItemCapitalShare": 0.2,
+      "minItemPriceUsd": 1,
+      "maxItemPriceUsd": 20,
+      "maxSpendPerHourUsd": 20,
+      "maxSpendPerDayUsd": 20,
+      "maxOpenExposureUsd": 20
+    }
+  },
+
   "telegram": {
     "enabled": true,
     "dailyReportHour": 23,

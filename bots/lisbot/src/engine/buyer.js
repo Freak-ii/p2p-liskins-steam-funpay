@@ -63,6 +63,7 @@ export class Buyer {
     const t0 = Date.now();
     const watch = this.watchMap();
     const names = [...watch.keys()];
+    if (this.rank) names.sort((x, y) => this.rank(y) - this.rank(x)); // при нехватке бюджета — сначала самое доходное
     const { lis: lc } = this.cfg;
     for (let i = 0; i < names.length && this.guard.canBuy; i += lc.namesPerSearchRequest) {
       const chunk = names.slice(i, i + lc.namesPerSearchRequest);

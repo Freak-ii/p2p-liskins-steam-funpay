@@ -687,7 +687,7 @@ class TgGiftWorker(StarsBotWorker):
 
 
 # ====================================================================== LisBot
-LIS_SECRET_KEYS = ["LIS_API_KEY", "STEAM_ACCOUNT_NAME", "STEAM_PASSWORD", "STEAM_SHARED_SECRET",
+LIS_SECRET_KEYS = ["LIS_API_KEY", "MARKET_CSGO_API_KEY", "STEAM_ACCOUNT_NAME", "STEAM_PASSWORD", "STEAM_SHARED_SECRET",
                    "STEAM_IDENTITY_SECRET", "STEAM_TRADE_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
 
 
