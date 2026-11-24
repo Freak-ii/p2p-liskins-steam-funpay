@@ -19,6 +19,7 @@ from center.bots import BotWorker, LisBotWorker, MannBotWorker, ShopBotWorker, S
 from center.config import CenterConfig
 from center.crm import Crm
 from center.coordinator import Coordinator
+from center.agents import Agents
 from center.events import EventStore
 from center.vault import SecretStore
 from center.rtba import Rtba
@@ -72,6 +73,7 @@ class Center:
         for level, text in self.cfg.problems:      # ошибки и опечатки center.yaml — в журнал (оттуда в Telegram)
             self.events.add("center", level, "center.config", text)
         self.coordinator = Coordinator(self)
+        self.agents = Agents(self)           # раздел «Агенты»: сами не запускаются (кроме agents.<id>.autostart)
         self.backup = Backup(self)
         self.inventory = Inventory(self)
         self.readiness = Readiness(self)
@@ -85,6 +87,7 @@ class Center:
         self.events.add("center", "info", "center.start", "Центр запущен" + (" (демо)" if self.demo else ""))
         await self.monitor.start()
         await self.coordinator.start()
+        await self.agents.start()
         await self.backup.start()
         await self.inventory.start()
         await self.tg.start()
@@ -112,6 +115,7 @@ class Center:
         await self.inventory.stop()
         await self.tg.stop()
         await self.updates.stop()
+        await self.agents.stop()
         await self.coordinator.stop()
         await self.monitor.stop()
         self.events.add("center", "info", "center.stop", "Центр остановлен")

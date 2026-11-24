@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%F0%9F%A4%96%3C/text%3E%3C/svg%3E">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Агенты центра</title>
+<link rel="stylesheet" href="/static/center.css">
+<style>
+  .ag-item { border-top: 1px solid var(--line); padding: 12px 0; }
+  .ag-item:first-child { border-top: 0; }
+  .ag-text { white-space: pre-wrap; background: var(--bg); border-radius: 8px; padding: 10px 12px; margin: 8px 0; overflow-wrap: anywhere; }
+  .ag-issues { color: var(--bad); margin: 6px 0; padding-left: 18px; }
+  .ag-kind { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .ag-s-draft { color: var(--warn); } .ag-s-approved { color: var(--info); } .ag-s-published { color: var(--ok); }
+  .ag-s-rejected { color: var(--muted); } .ag-s-failed { color: var(--bad); }
+  .ag-up { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+  .ag-form label { display: block; margin: 10px 0 3px; font-size: 13px; }
+  .ag-form textarea { min-height: 70px; }
+  .ag-promo { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr auto; gap: 6px; margin: 4px 0; }
+  @media (max-width: 700px) { .ag-promo { grid-template-columns: 1fr 1fr; } }
+  input[type=datetime-local] { width: auto; }
+</style>
+</head>
+<body>
+<header>
+  <a class="btn" href="/">← Центр</a>
+  <h1>Агенты</h1>
+  <span class="spacer"></span>
+  <span id="hdr" class="muted small"></span>
+</header>
+<main>
+  <div id="flash"></div>
+  <div class="grid" id="agents"></div>
+
+  <section id="channel" hidden>
+    <h2>Очередь постов канала</h2>
+    <div class="card">
+      <div class="row"><span class="tabs" id="chTabs" style="margin:0"></span><span class="spacer" style="flex:1"></span>
+        <button class="btn" id="chNewBtn" type="button">+ Свой пост</button></div>
+      <div id="chNew" hidden style="margin-top:10px">
+        <input id="chNewTitle" placeholder="Название черновика (для себя)">
+        <textarea id="chNewText" rows="5" style="margin-top:6px" placeholder="Текст поста. Можно &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;, &lt;a href=&quot;https://…&quot;&gt;ссылку&lt;/a&gt;"></textarea>
+        <div class="row" style="margin-top:6px"><button class="btn primary" type="button" id="chNewSave">Добавить в черновики</button></div>
+      </div>
+      <div id="chItems" style="margin-top:8px"></div>
+    </div>
+
+    <h2>Партнёры и метки трафика</h2>
+    <div class="card">
+      <div class="muted small">Каждому блогеру или каналу — своя ссылка с меткой. ShopBot запоминает метку при первом запуске
+        бота (30 дней) и считает запуски, покупателей и заказы.</div>
+      <div class="row" style="margin-top:8px"><input id="ptTag" placeholder="метка, например ivan_yt" style="max-width:260px">
+        <button class="btn" type="button" id="ptMake">Сделать ссылки</button></div>
+      <div id="ptLinks" class="small mono" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:12px"><span class="tabs" id="ptDays" style="margin:0"></span></div>
+      <div id="ptTable" class="tablewrap" style="margin-top:6px"></div>
+    </div>
+
+    <h2>Ближайшие поводы</h2>
+    <div class="card"><ul class="ag-up" id="chUpcoming"></ul></div>
+
+    <h2>Настройки агента канала</h2>
+    <form class="card ag-form" id="chForm">
+      <label class="check"><input type="checkbox" id="f_publish_enabled"> Публиковать одобренные посты в канал</label>
+      <div class="muted small">Пока выключено, одобренные посты копятся и никуда не уходят. Канал и бот берутся из настроек ShopBot.</div>
+      <label class="check"><input type="checkbox" id="f_button"> Кнопка «Открыть магазин» под постом</label>
+      <label class="check"><input type="checkbox" id="f_ai"> Тексты пишет Claude (ключ ИИ-координатора), иначе шаблоны</label>
+      <label class="check"><input type="checkbox" id="f_share_milestones"> Посты о круглом числе заказов (без денег)</label>
+      <label class="check"><input type="checkbox" id="f_notify_drafts"> Сообщать в Telegram центра о новых черновиках</label>
+      <label for="f_sources">Каналы-источники новостей (по одному в строке: @name или t.me/name)</label>
+      <textarea id="f_sources" rows="3"></textarea>
+      <label for="f_keywords">Ключевые слова для новостей (по одному в строке; пусто — все посты)</label>
+      <textarea id="f_keywords" rows="3"></textarea>
+      <label for="f_achievements">Новости проекта своими словами (по одному пункту в строке, агент сделает пост на каждый)</label>
+      <textarea id="f_achievements" rows="3" placeholder="Добавили оплату по СБП&#10;Теперь можно подарить Premium другу"></textarea>
+      <label>Акции</label>
+      <div class="muted small">Название, промокод, скидка %, начало и конец (ГГГГ-ММ-ДД). Агент анонсирует акцию и напомнит в последний день.</div>
+      <div id="f_promos"></div>
+      <button class="btn small" type="button" id="addPromo">+ акция</button>
+      <label for="f_forbidden_words">Свои запрещённые слова (по одному в строке)</label>
+      <textarea id="f_forbidden_words" rows="2"></textarea>
+      <div class="row" style="gap:14px">
+        <span><label for="f_interval_minutes">Проход раз в, мин</label><input id="f_interval_minutes" type="number" min="5" style="width:110px"></span>
+        <span><label for="f_chatter_every_days">Обычный пост раз в, дн.</label><input id="f_chatter_every_days" type="number" min="0" style="width:110px"></span>
+        <span><label for="f_season_lead_days">Поводы заранее, дн.</label><input id="f_season_lead_days" type="number" min="0" style="width:110px"></span>
+        <span><label for="f_news_per_day">Новостей в день</label><input id="f_news_per_day" type="number" min="0" style="width:110px"></span>
+      </div>
+      <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Сохранить</button></div>
+    </form>
+  </section>
+</main>
+<script src="/static/agents.js"></script>
+</body>
+</html>
