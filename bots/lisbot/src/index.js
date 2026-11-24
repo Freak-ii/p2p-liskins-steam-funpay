@@ -115,8 +115,8 @@ export class Bot {
     this.buyer = new Buyer({ cfg, db, lis: this.lis, valuator: this.valuator, guard, notify: this.notify, log: log.child('buy'), balanceRef: this.balanceRef });
     if (cfg.arbitrage?.enabled && !this.emu) {
       // арбитраж Lis → Market.CSGO: закупщик тот же, меняются источник оценки, список предметов и лимиты
-      this.mcsgo = new CsgoMarketClient({ apiKey: cfg.secrets.csgoApiKey, log: log.child('mcsgo') });
-      this.arb = new ArbScanner({ cfg, db, client: this.mcsgo, guard, log: log.child('arb') });
+      this.mcsgo = this.hooks.mcsgo || new CsgoMarketClient({ apiKey: cfg.secrets.csgoApiKey, log: log.child('mcsgo') });
+      this.arb = new ArbScanner({ cfg, db, client: this.mcsgo, guard, log: log.child('arb'), ...(this.hooks.lisFeed ? { lisFeed: this.hooks.lisFeed } : {}) });
       this.buyer.cfg = Object.create(cfg, { strategy: { get: () => ({ ...cfg.strategy, ...cfg.arbitrage.strategy }) } });
       this.buyer.valuator = this.arb;
       this.buyer.watchMap = () => this.arb.watchMap();
@@ -142,14 +142,15 @@ export class Bot {
     // после /resume — сразу пробуем восстановить сессию Steam
     guard.on('change', (s) => { if (!s.halted && !this.session.ready) this.ensureSteam(); });
     this.trades.start();
-    if (this.session.ready) await this.fx.refresh();
+    // арбитражу цены ТП Steam не нужны: не тратим запросы, из-за которых Steam отвечает 429
+    if (this.session.ready && !this.arb) await this.fx.refresh();
 
     const st = cfg.strategy;
     const steamReady = () => this.session.ready;
     this.loop('balance', cfg.lis.balancePollSec * 1000, () => this.balanceWatcher.poll(), { initialDelayMs: 30_000 });
     this.loop('purchases', cfg.lis.purchasePollSec * 1000, () => this.tracker.poll(), { initialDelayMs: 5_000 });
     if (this.arb) {
-      this.loop('arb-scan', cfg.arbitrage.scanIntervalMin * 60_000, () => this.arb.scan(), { initialDelayMs: 5_000 });
+      this.loop('arb-scan', cfg.arbitrage.scanIntervalMin * 60_000, () => this.arb.scan(), { initialDelayMs: this.hooks.arbDelayMs ?? 5_000 });
       this.loop('arb-ping', 170_000, () => (steamReady() ? this.seller.ping() : null), { initialDelayMs: 100_000, spread: 0 });
       this.loop('arb-deliver', 45_000, () => (steamReady() ? this.seller.deliver() : null), { initialDelayMs: 110_000 });
     }
@@ -164,8 +165,8 @@ export class Bot {
     this.loop('seller', 180_000, () => (steamReady() ? this.seller.cycle() : null), { initialDelayMs: 90_000, spread: 0.4 });
     this.loop('confirmations', cfg.steam.confirmationsCheckSec * 1000, () => (steamReady() ? this.conf.check() : null), { initialDelayMs: 45_000, spread: 0.3 });
     this.loop('audit-outgoing', 10 * 60_000, () => (steamReady() ? this.trades.auditOutgoing() : null), { initialDelayMs: 120_000 });
-    this.loop('fx', cfg.fx.refreshHours * HOUR, () => (steamReady() ? this.fx.refresh() : null), { initialDelayMs: cfg.fx.refreshHours * HOUR });
-    if (cfg.watchlist.mode === 'auto') this.loop('discover', cfg.watchlist.auto.refreshHours * HOUR, () => this.discoverWatchlist(), { initialDelayMs: 2_000 });
+    this.loop('fx', cfg.fx.refreshHours * HOUR, () => (steamReady() && !this.arb ? this.fx.refresh() : null), { initialDelayMs: cfg.fx.refreshHours * HOUR });
+    if (cfg.watchlist.mode === 'auto' && !this.arb) this.loop('discover', cfg.watchlist.auto.refreshHours * HOUR, () => this.discoverWatchlist(), { initialDelayMs: 2_000 });
     this.loop('key-bridge', (cfg.keyBridge?.checkIntervalMin || 30) * 60_000, () => (steamReady() && !this.emu ? this.bridge.cycle() : null), { initialDelayMs: 150_000 });
     this.loop('housekeeping', 15 * 60_000, () => this.housekeeping(), { initialDelayMs: 60_000 });
 
@@ -247,7 +248,7 @@ export class Bot {
     this.notify.stop();
     this.session?.stop();
     this.lis.sched.stop();
-    this.mcsgo?.sched.stop();
+    this.mcsgo?.sched?.stop();
     await new Promise((r) => (this.dashboard ? this.dashboard.close(() => r()) : r()));
     this.dashboard?.closeAllConnections?.();
     await Promise.race([this.notify.send('info', `Бот остановлен (${reason})`), sleep(5000)]);

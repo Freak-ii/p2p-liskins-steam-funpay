@@ -269,3 +269,28 @@ test('настройки: ключ нужен в боевом режиме, по
   assert.deepEqual(saveSettings(cfg, { 'arbitrage.strategy.minRoi': 0.08 }), []);
   assert.equal(cfg.arbitrage.strategy.minRoi, 0.08);
 });
+
+test('бот целиком в dry-run: ищет связки без Steam и ключа, записывает симуляцию, ничего не покупает', async () => {
+  const { Bot } = await import('../src/index.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsb-arbbot-'));
+  const cfg = loadConfig({ configPath: path.join(dir, 'c.json'), env: {}, dataDir: dir });
+  cfg.arbitrage.enabled = true;
+  cfg.telegram.enabled = false;
+  cfg.dashboard.enabled = false;
+  cfg.strategy.rtbaEnabled = false;
+  cfg.trade = { partner: '1', token: 't' };
+  Object.assign(cfg.secrets, { lisApiKey: 'k', sharedSecret: 'ZGVtby1kZW1vLWRlbW8tZGVtbzE=', identitySecret: 'ZGVtby1kZW1vLWRlbW8tZGVtbzE=' });
+  const bot = new Bot(cfg, { mcsgo: feeds(), lisFeed, arbDelayMs: 0 });
+  bot.ensureSteam = async () => {};
+  let bought = 0;
+  bot.lis = { balance: async () => 114, search: async () => ({ items: [{ id: '1', name: NAME, price: 5.57, unlockAt: null }], nextCursor: null }), buy: async () => { bought++; }, sched: { stats: {}, stop() {} } };
+  await bot.start();
+  for (let i = 0; i < 50 && !bot.arb.lastScanAt; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(bot.arb.picks.length, 1);
+  bot.lis.balance && (bot.balanceRef.value = 114);
+  await bot.buyer.scan();
+  assert.equal(bought, 0);
+  assert.equal(bot.db.db.prepare('SELECT COUNT(*) c FROM items WHERE dry_run=1').get().c, 1);
+  assert.equal(bot.runtimeStats().arbitrage.picks.length, 1);
+  await bot.stop('тест');
+});

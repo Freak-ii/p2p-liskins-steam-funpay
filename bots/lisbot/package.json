@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "check": "node src/index.js --check",
-    "test": "node --test test/*.test.js",
+    "test": "node --test --test-force-exit test/*.test.js",
     "arb": "node src/arb/report.js",
     "app": "electron .",
     "build:win": "node build/build-win.mjs",
