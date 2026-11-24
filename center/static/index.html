@@ -172,7 +172,7 @@ function botCard(b) {
     extra.push(`<button class="btn" onclick="openLis()">Подключения</button>`);
     if (b.state === 'missing_deps') extra.push(`<button class="btn primary" onclick="act('lisbot','install')">Установить зависимости</button>`);
   }
-  extra.push(`<button class="btn" title="Запускать этого бота вместе с центром" onclick="act('${b.name}','${b.autostart ? 'autostart_off' : 'autostart_on'}')">Автозапуск: ${b.autostart ? 'вкл' : 'выкл'}</button>`);
+  if (b.autostart_allowed) extra.push(`<button class="btn" title="Запускать этого бота вместе с центром" onclick="act('${b.name}','${b.autostart ? 'autostart_off' : 'autostart_on'}')">Автозапуск: ${b.autostart ? 'вкл' : 'выкл'}</button>`);
   if (b.name === 'mannbot' && running) extra.push(`<button class="btn" onclick="openMann()">Настройки</button>`);
   if (running) extra.push(`<a class="btn" href="/open/${b.name}" target="_blank" rel="noopener">Открыть панель бота ↗</a>`);
   const botActs = running && s ? Object.entries(b.actions).map(([k, v]) => `<button class="btn ${k === 'halt' ? 'danger' : ''}" onclick="act('${b.name}','${k}')">${esc(v)}</button>`).join('') : '';
