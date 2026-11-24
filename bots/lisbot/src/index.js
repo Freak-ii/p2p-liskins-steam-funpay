@@ -18,6 +18,9 @@ import { Seller } from './engine/seller.js';
 import { BalanceWatcher } from './engine/balanceWatcher.js';
 import { KeyBridge } from './engine/keyBridge.js';
 import { SharedSteam } from './engine/sharedSteam.js';
+import { CsgoMarketClient } from './arb/csgoClient.js';
+import { ArbScanner } from './arb/scanner.js';
+import { ArbSeller } from './arb/seller.js';
 import { summary, textReport, perItem } from './analytics.js';
 import { startDashboard } from './web/server.js';
 import { startDemo } from './emu/demo.js';
@@ -84,7 +87,7 @@ export class Bot {
   runtimeStats() {
     return {
       steam: this.session?.stats, lis: this.lis.sched.stats, ws: this.ws ? { connected: this.ws.connected, ...this.ws.stats } : null,
-      buyer: this.buyer?.stats, keyBridge: this.bridge?.stats, fx: this.fx ? { rate: this.fx.rate, updatedAt: this.fx.updatedAt } : null,
+      buyer: this.buyer?.stats, keyBridge: this.bridge?.stats, arbitrage: this.arb ? { ...this.arb.stats, seller: this.seller?.stats } : null, fx: this.fx ? { rate: this.fx.rate, updatedAt: this.fx.updatedAt } : null,
       loops: Object.fromEntries([...this.loops].map(([k, v]) => [k, v])),
     };
   }
@@ -110,6 +113,15 @@ export class Bot {
     this.fx = new FxService({ cfg, market: this.market, db, guard, log: log.child('fx') });
     this.valuator = new Valuator({ cfg, market: this.market, db, fx: this.fx, log: log.child('val') });
     this.buyer = new Buyer({ cfg, db, lis: this.lis, valuator: this.valuator, guard, notify: this.notify, log: log.child('buy'), balanceRef: this.balanceRef });
+    if (cfg.arbitrage?.enabled && !this.emu) {
+      // арбитраж Lis → Market.CSGO: закупщик тот же, меняются источник оценки, список предметов и лимиты
+      this.mcsgo = this.hooks.mcsgo || new CsgoMarketClient({ apiKey: cfg.secrets.csgoApiKey, log: log.child('mcsgo') });
+      this.arb = new ArbScanner({ cfg, db, client: this.mcsgo, guard, log: log.child('arb'), ...(this.hooks.lisFeed ? { lisFeed: this.hooks.lisFeed } : {}) });
+      this.buyer.cfg = Object.create(cfg, { strategy: { get: () => ({ ...cfg.strategy, ...cfg.arbitrage.strategy }) } });
+      this.buyer.valuator = this.arb;
+      this.buyer.watchMap = () => this.arb.watchMap();
+      this.buyer.rank = (name) => this.arb.roi(name);
+    }
     this.balanceWatcher.lock = this.buyer.lock;
     this.tracker = new PurchaseTracker({ cfg, db, lis: this.lis, guard, log: log.child('track'), notify: this.notify });
     this.trades = new TradeHandler({ cfg, db, session: this.session, guard, notify: this.notify, log: log.child('trade') });
@@ -118,7 +130,9 @@ export class Bot {
     if (this.shared.enabled) log.info('Steam: общий аккаунт с MannBot, его обмены сверяются с реестром центра');
     this.trades.shared = this.shared;
     this.conf = new ConfirmationWatcher({ session: this.session, db, guard, log: log.child('conf'), strict: cfg.risk.strictConfirmations, shared: this.shared });
-    this.seller = new Seller({ cfg, db, session: this.session, market: this.market, conf: this.conf, valuator: this.valuator, fx: this.fx, guard, notify: this.notify, log: log.child('sell') });
+    const sellerDeps = { cfg, db, session: this.session, market: this.market, conf: this.conf, valuator: this.valuator, fx: this.fx, guard, notify: this.notify, log: log.child('sell') };
+    this.seller = this.arb ? new ArbSeller({ ...sellerDeps, client: this.mcsgo }) : new Seller(sellerDeps);
+    if (this.arb) this.trades.arb = this.seller;
     this.bridge = new KeyBridge({ cfg, db, session: this.session, market: this.market, conf: this.conf, guard, notify: this.notify, log: log.child('keys') });
     this.trades.bridge = this.bridge;
 
@@ -128,14 +142,20 @@ export class Bot {
     // после /resume — сразу пробуем восстановить сессию Steam
     guard.on('change', (s) => { if (!s.halted && !this.session.ready) this.ensureSteam(); });
     this.trades.start();
-    if (this.session.ready) await this.fx.refresh();
+    // арбитражу цены ТП Steam не нужны: не тратим запросы, из-за которых Steam отвечает 429
+    if (this.session.ready && !this.arb) await this.fx.refresh();
 
     const st = cfg.strategy;
     const steamReady = () => this.session.ready;
     this.loop('balance', cfg.lis.balancePollSec * 1000, () => this.balanceWatcher.poll(), { initialDelayMs: 30_000 });
     this.loop('purchases', cfg.lis.purchasePollSec * 1000, () => this.tracker.poll(), { initialDelayMs: 5_000 });
+    if (this.arb) {
+      this.loop('arb-scan', cfg.arbitrage.scanIntervalMin * 60_000, () => this.arb.scan(), { initialDelayMs: this.hooks.arbDelayMs ?? 5_000 });
+      this.loop('arb-ping', 170_000, () => (steamReady() ? this.seller.ping() : null), { initialDelayMs: 100_000, spread: 0 });
+      this.loop('arb-deliver', 45_000, () => (steamReady() ? this.seller.deliver() : null), { initialDelayMs: 110_000 });
+    }
     this.loop('valuations', 60_000, async () => {
-      if (!steamReady()) return;
+      if (!steamReady() || this.arb) return;
       const stale = db.watchlist().map((w) => ({ w, v: db.valuation(w.name) })).filter(({ v }) => !v || Date.now() - v.ts > st.valuationTtlHours * HOUR).sort((a, b) => (a.v?.ts || 0) - (b.v?.ts || 0)).slice(0, 8);
       for (const { w } of stale) {
         try { await this.valuator.refresh(w.name); this.guard.recordSuccess('valuation'); } catch (e) { if (this.guard.recordError('valuation', e)) return; }
@@ -145,8 +165,8 @@ export class Bot {
     this.loop('seller', 180_000, () => (steamReady() ? this.seller.cycle() : null), { initialDelayMs: 90_000, spread: 0.4 });
     this.loop('confirmations', cfg.steam.confirmationsCheckSec * 1000, () => (steamReady() ? this.conf.check() : null), { initialDelayMs: 45_000, spread: 0.3 });
     this.loop('audit-outgoing', 10 * 60_000, () => (steamReady() ? this.trades.auditOutgoing() : null), { initialDelayMs: 120_000 });
-    this.loop('fx', cfg.fx.refreshHours * HOUR, () => (steamReady() ? this.fx.refresh() : null), { initialDelayMs: cfg.fx.refreshHours * HOUR });
-    if (cfg.watchlist.mode === 'auto') this.loop('discover', cfg.watchlist.auto.refreshHours * HOUR, () => this.discoverWatchlist(), { initialDelayMs: 2_000 });
+    this.loop('fx', cfg.fx.refreshHours * HOUR, () => (steamReady() && !this.arb ? this.fx.refresh() : null), { initialDelayMs: cfg.fx.refreshHours * HOUR });
+    if (cfg.watchlist.mode === 'auto' && !this.arb) this.loop('discover', cfg.watchlist.auto.refreshHours * HOUR, () => this.discoverWatchlist(), { initialDelayMs: 2_000 });
     this.loop('key-bridge', (cfg.keyBridge?.checkIntervalMin || 30) * 60_000, () => (steamReady() && !this.emu ? this.bridge.cycle() : null), { initialDelayMs: 150_000 });
     this.loop('housekeeping', 15 * 60_000, () => this.housekeeping(), { initialDelayMs: 60_000 });
 
@@ -228,6 +248,7 @@ export class Bot {
     this.notify.stop();
     this.session?.stop();
     this.lis.sched.stop();
+    this.mcsgo?.sched?.stop();
     await new Promise((r) => (this.dashboard ? this.dashboard.close(() => r()) : r()));
     this.dashboard?.closeAllConnections?.();
     await Promise.race([this.notify.send('info', `Бот остановлен (${reason})`), sleep(5000)]);

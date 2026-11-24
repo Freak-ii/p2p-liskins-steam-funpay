@@ -81,7 +81,7 @@ document.querySelectorAll('[data-act]').forEach((b) => (b.onclick = async () => 
   await api('/api/control', { action: b.dataset.act }); refresh();
 }));
 
-const TABS = { overview: 'Обзор', items: 'Предметы (CRM)', watch: 'Вотчлист', alerts: 'Тревоги', money: 'Баланс', partners: 'Контрагенты', system: 'Система', settings: 'Настройки' };
+const TABS = { overview: 'Обзор', arb: 'Арбитраж', items: 'Предметы (CRM)', watch: 'Вотчлист', alerts: 'Тревоги', money: 'Баланс', partners: 'Контрагенты', system: 'Система', settings: 'Настройки' };
 let tab = location.hash.slice(1) || 'overview';
 function renderTabs() {
   $('#tabs').innerHTML = Object.entries(TABS).map(([k, v]) => `<button class="${k === tab ? 'active' : ''}" data-tab="${k}">${v}${k === 'alerts' && S?.alerts?.length ? ` (${S.alerts.length})` : ''}</button>`).join('');
@@ -238,7 +238,16 @@ async function settings() {
   <div class="row" style="margin-top:12px"><button class="btn ok" id="setSave">Сохранить</button><span id="setMsg" class="muted"></span></div>`;
 }
 
-const VIEWS = { overview, items, watch, alerts, money, partners, system, settings };
+async function arb() {
+  const a = await api('/api/arbitrage');
+  if (!a.enabled) return '<div class="banner info">Арбитраж Lis → Market.CSGO выключен. Включить: «Настройки» → «Арбитраж Lis → Market.CSGO».</div>';
+  const p = (x) => (x * 100).toFixed(1) + '%';
+  return `${a.dryRun ? '<div class="banner info">Режим <b>DRY-RUN</b>: бот только ищет связки и записывает, что купил бы.</div>' : ''}
+  ${a.hasKey ? '' : '<div class="banner warn">Нет ключа Market.CSGO: доход считается по верхней заявке и завышен. Ключ добавляется в «Подключениях» LisBot.</div>'}
+  <div class="grid">${card('Последний поиск', a.lastScanAt ? dt(a.lastScanAt) : 'ещё не было')}${card('Кандидатов', a.candidates ?? 0)}${card('Проходят цель', (a.picks || []).length)}${card('Валюта аккаунта', a.currency || '—')}</div>
+  <div class="section"><h2>Связки</h2>${table(a.picks, [['name', 'Предмет', null, 'wrap'], ['lis', 'Lis', usd], ['expectedSell', 'Продажа', usd], ['roi', 'Доход после комиссий', p], ['bidRoi', 'Худший случай', p], ['weeklySales', 'Продаж/нед'], ['mode', 'Оценка', (m) => (m === 'list' ? 'по продажам' : 'в заявку')]])}</div>`;
+}
+const VIEWS = { overview, arb, items, watch, alerts, money, partners, system, settings };
 async function refresh() {
   try {
     S = await api('/api/summary');

@@ -19,7 +19,7 @@ export function summary(db, { tz = 'UTC', fx } = {}) {
   const spentToday = db.spentSince(sod);
   const boughtToday = q("SELECT COUNT(*) n FROM items WHERE dry_run=0 AND created_at>=? AND status<>'failed'", sod).n;
   const exposure = db.exposureUsd();
-  const expectedOpen = q(`SELECT COALESCE(SUM(expected_profit_usd),0) s FROM items WHERE dry_run=0 AND status IN ('bought','locked_on_lis','trade_sent','protected','ready','listing','listed')`).s;
+  const expectedOpen = q(`SELECT COALESCE(SUM(expected_profit_usd),0) s FROM items WHERE dry_run=0 AND status IN ('bought','locked_on_lis','trade_sent','protected','ready','listing','listed','delivering','settling')`).s;
   const bal = db.get('balance.last');
 
   // прогноз vs факт: насколько оценка совпала с реальной продажей
@@ -64,7 +64,7 @@ export function perItem(db) {
       COALESCE(SUM(buy_price_usd),0) spent, COALESCE(SUM(CASE WHEN status='sold' THEN profit_usd END),0) profit,
       AVG(CASE WHEN status='sold' THEN profit_usd / buy_price_usd END) roi,
       AVG(CASE WHEN status='sold' THEN (sold_at - received_at) / 86400000.0 END) holdDays,
-      SUM(status IN ('bought','locked_on_lis','trade_sent','protected','ready','listing','listed')) open
+      SUM(status IN ('bought','locked_on_lis','trade_sent','protected','ready','listing','listed','delivering','settling')) open
     FROM items WHERE dry_run=0 AND status<>'failed' GROUP BY name ORDER BY profit DESC`).all();
 }
 

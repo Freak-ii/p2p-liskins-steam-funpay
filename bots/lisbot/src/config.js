@@ -52,6 +52,7 @@ export function loadConfig({ configPath, env, dataDir } = {}) {
 
   cfg.secrets = {
     lisApiKey: env.LIS_API_KEY || '',
+    csgoApiKey: (env.MARKET_CSGO_API_KEY || '').trim(),
     steamAccountName: (env.STEAM_ACCOUNT_NAME || '').trim(),
     steamPassword: env.STEAM_PASSWORD || '',
     sharedSecret: (env.STEAM_SHARED_SECRET || '').trim(),
@@ -88,7 +89,14 @@ export function validateConfig(cfg) {
   if (st.valuationQuantile <= 0 || st.valuationQuantile >= 1) errs.push('strategy.valuationQuantile должен быть в (0;1)');
   if (st.balanceReservePct < 0 || st.balanceReservePct >= 1) errs.push('strategy.balanceReservePct должен быть в [0;1)');
   if (cfg.lis.allowLockedDays < 0 || cfg.lis.allowLockedDays > 8) errs.push('lis.allowLockedDays должен быть 0..8');
-  if (cfg.watchlist.mode === 'list' && !(cfg.watchlist.items || []).length) errs.push('watchlist.items пуст');
+  const a = cfg.arbitrage;
+  if (a?.enabled) {
+    if (!cfg.dryRun && !s.csgoApiKey) errs.push('MARKET_CSGO_API_KEY не задан (нужен для продажи в боевом режиме арбитража)');
+    for (const k of ['saleFeePct', 'withdrawFeePct', 'payoutFxLossPct', 'lisDepositFeePct']) if (!(a[k] >= 0 && a[k] < 0.5)) errs.push(`arbitrage.${k} должен быть в [0;0.5)`);
+    if ((a.strategy?.minRoi ?? 0) < 0.02) errs.push('arbitrage.strategy.minRoi слишком мал (< 2%)');
+    if (!(a.maxDownsidePct >= 0 && a.maxDownsidePct < 0.5)) errs.push('arbitrage.maxDownsidePct должен быть в [0;0.5)');
+  }
+  if (!a?.enabled && cfg.watchlist.mode === 'list' && !(cfg.watchlist.items || []).length) errs.push('watchlist.items пуст');
   // пустая ссылка — MannBot на этом же аккаунте Steam: ключи остаются в общем инвентаре
   if (cfg.keyBridge?.enabled && String(cfg.keyBridge.tradeUrl || '').trim() && !parseTradeUrl(cfg.keyBridge.tradeUrl)) errs.push('keyBridge.tradeUrl: нужна трейд-ссылка аккаунта MannBot или пусто, если MannBot на этом же аккаунте');
   return errs;
@@ -136,6 +144,18 @@ export const EDITABLE_SETTINGS = {
   'watchlist.auto.minPriceUsd': { type: 'num', min: 0, max: 1e5, label: 'Автовотчлист: цена от, $' },
   'watchlist.auto.maxPriceUsd': { type: 'num', min: 0, max: 1e5, label: 'Автовотчлист: цена до, $' },
   'watchlist.auto.maxItems': { type: 'int', min: 1, max: 1000, label: 'Автовотчлист: макс. предметов' },
+  'arbitrage.enabled': { type: 'bool', label: 'Арбитраж Lis → Market.CSGO (вместо ТП Steam), после перезапуска' },
+  'arbitrage.sendSteamToken': { type: 'bool', label: 'Арбитраж: держать продажи онлайн (web-токен Steam уходит Market.CSGO)' },
+  'arbitrage.strategy.minRoi': { type: 'num', min: 0.02, max: 1, pct: true, label: 'Арбитраж: мин. доходность круга после всех комиссий' },
+  'arbitrage.maxDownsidePct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: худший случай (продажа в заявку), потеря не больше' },
+  'arbitrage.minWeeklySales': { type: 'int', min: 1, max: 1000, label: 'Арбитраж: мин. продаж в неделю на Market.CSGO' },
+  'arbitrage.saleFeePct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: комиссия продажи' },
+  'arbitrage.withdrawFeePct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: комиссия вывода' },
+  'arbitrage.payoutFxLossPct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: потеря на курсе и сети при возврате в Lis' },
+  'arbitrage.lisDepositFeePct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: комиссия пополнения Lis' },
+  'arbitrage.strategy.maxItemPriceUsd': { type: 'num', min: 0.1, max: 100000, label: 'Арбитраж: макс. цена предмета, $' },
+  'arbitrage.strategy.maxSpendPerDayUsd': { type: 'num', min: 0, max: 1e7, label: 'Арбитраж: лимит трат в день, $' },
+  'arbitrage.strategy.maxOpenExposureUsd': { type: 'num', min: 0, max: 1e8, label: 'Арбитраж: макс. сумма в товаре, $' },
   'keyBridge.enabled': { type: 'bool', label: 'Мост ключей: ключи Mann Co. для MannBot' },
   'keyBridge.tradeUrl': { type: 'str', optional: true, label: 'Мост ключей: трейд-ссылка аккаунта MannBot (пусто — MannBot на этом же аккаунте)' },
   'keyBridge.minKeysToSend': { type: 'int', min: 1, max: 1000, label: 'Мост ключей: отправлять от, ключей' },
