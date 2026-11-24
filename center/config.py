@@ -141,6 +141,37 @@ DEFAULTS: dict = {
             "cooldown_hours": 6,     # одна и та же аномалия не чаще
         },
     },
+    "agents": {                      # раздел «Агенты» (center/agents/): при старте центра агенты сами не запускаются
+        "channel": {                 # center/agents/channel.py — посты для Telegram-канала магазина через одобрение
+            "enabled": True,
+            "autostart": False,      # true — запускать вместе с центром (по умолчанию только кнопкой)
+            "interval_minutes": 60,  # как часто делать проход, пока агент запущен
+            "publish_enabled": False,     # без этого одобренные посты в канал не уходят
+            "chat_id": "",           # пусто — channel.chat_id из настроек ShopBot (@DPBFastchange)
+            "bot_token": "",         # пусто — токен бота ShopBot (бот должен быть админом канала)
+            "bot_username": "",      # пусто — из ShopBot; нужен для кнопки «Открыть магазин»
+            "shop_name": "",         # пусто — general.shop_name из ShopBot
+            "button": True,          # кнопка «Открыть магазин» под постом
+            "ai": True,              # тексты пишет Claude (ключ координатора); без ключа — шаблоны
+            "sources": [],           # публичные каналы для новостей: @name или t.me/name
+            "keywords": ["звёзд", "звезд", "stars", "premium", "премиум", "подар", "gift", "nft", "steam", "telegram",
+                         "телеграм", "обновлен"],
+            "news_max_age_hours": 24,
+            "news_per_run": 2,
+            "news_per_day": 4,
+            "season_lead_days": 3,   # за сколько дней до праздника готовить черновик (у некоторых поводов своё)
+            "seasons_off": [],       # id поводов, которые не нужны (см. center/agents/seasons.py)
+            "promo_lead_days": 1,    # анонс акции за столько дней до начала
+            "promos": [],            # [{title, text, code, discount_pct, start: ГГГГ-ММ-ДД, end: ГГГГ-ММ-ДД}]
+            "achievements": [],      # новости проекта своими словами: «добавили оплату по СБП» — по посту на пункт
+            "share_milestones": True,     # пост на круглое число выполненных заказов (без денег)
+            "milestones": [100, 500, 1000, 2500, 5000, 10000],
+            "chatter_every_days": 3, # обычный пост (советы, безопасность, вопросы), если других постов не было; 0 — нет
+            "allow_prices": False,   # суммы и цены в постах агента (по умолчанию нельзя)
+            "forbidden_words": [],   # свои запрещённые слова в дополнение к встроенным
+            "notify_drafts": True,   # сообщать в Telegram центра о новых черновиках
+        },
+    },
 }
 
 
