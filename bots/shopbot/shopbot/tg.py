@@ -13,6 +13,7 @@ from typing import Any
 
 import aiohttp
 
+from shopbot import economy as E
 from shopbot import texts as T
 from shopbot.engine import STATUS_TITLES, parse_trade_url, parse_username
 from shopbot.pricing import METHOD_TITLES, apply_method
@@ -194,19 +195,24 @@ class ShopTelegram:
     async def on_text(self, uid: int, username: str, first_name: str, text: str, lang: str = "ru") -> None:
         text = text.strip()
         if text.startswith("/start"):
-            arg = text.split(maxsplit=1)[1] if " " in text else ""
+            raw = text.split(maxsplit=1)[1] if " " in text else ""
+            ref_code, src, arg = E.parse_start(raw)
             ref = None
-            if arg.startswith("ref_"):
-                r = self.db.user_by_ref(arg[4:])
+            if ref_code:
+                r = self.db.user_by_ref(ref_code)
                 ref = r["id"] if r else None
             user, new = self.db.touch_user(uid, username, first_name, lang, referred_by=ref)
+            if src:
+                self.db.set_source(uid, src, float(self.cfg.get("sources.window_days") or 30))
+            elif new and ref:
+                self.db.set_source(uid, "ref", float(self.cfg.get("sources.window_days") or 30))
             if new and user["referred_by"]:
                 await self.send(user["referred_by"], "🤝 По вашей ссылке пришёл новый друг!")
             self.db.set_session(uid, "")
             await self.menu(uid)
             if arg in ("stars", "gift", "premium", "steam_keys"):
                 await self.on_callback(uid, f"buy:{arg}")
-            elif arg in ("sell", "ref", "fees"):
+            elif arg in ("sell", "ref", "fees", "level"):
                 await self.on_callback(uid, arg)
             return
         self.db.touch_user(uid, username, first_name, lang)
@@ -218,6 +224,14 @@ class ShopTelegram:
             await self.on_callback(uid, "balance")
             return
         state, data = self.db.session(uid)
+        if state == "review_text":
+            self.db.set_session(uid, "")
+            o = self.db.order(data.get("order", ""))
+            r = self.db.one("SELECT rating FROM reviews WHERE order_id=?", (data.get("order", ""),))
+            if o is not None and r is not None:
+                await self.send(uid, await self.shop.add_review(uid, o["id"], int(r["rating"]), text),
+                                [("◀️ В меню", "menu")])
+                return
         if state == "stars_amount" or state == "sell_stars_amount" or state == "keys_qty":
             try:
                 n = int(text.replace(" ", ""))
@@ -372,6 +386,14 @@ class ShopTelegram:
             await self.send(uid, await shop.withdraw_stars(uid))
         elif head == "ref":
             await self.referral(uid)
+        elif head == "level":
+            await self.level(uid)
+        elif head == "rv" and len(parts) == 3:
+            oid, n = parts[1], int(parts[2]) if parts[2].isdigit() else 5
+            msg = await shop.add_review(uid, oid, n)
+            if "пару слов" in msg:
+                self.db.set_session(uid, "review_text", {"order": oid})
+            await self.send(uid, msg, [("◀️ В меню", "menu")])
         elif head == "fees":
             r = shop.rates.snapshot()
             await self.send(uid, self.fees_text(r), [("◀️ В меню", "menu")])
@@ -576,6 +598,23 @@ class ShopTelegram:
                                           disc=c.get("referral.friend_discount_pct"),
                                           dmax=c.get("referral.friend_discount_max_rub"), n=n, earned=earned),
                         [[("📤 Поделиться", {"url": f"https://t.me/share/url?url={link}"})], [("◀️ В меню", "menu")]])
+
+    async def level(self, uid: int) -> None:
+        u = self.db.user(uid)
+        t = E.tier_for(self.cfg, self.db, u)
+        tiers = sorted(self.cfg.get("loyalty.tiers") or [], key=lambda x: float(x.get("min_rub") or 0))
+        table = "\n".join(f"{'▶️' if x['id'] == t.id else '▫️'} <b>{x.get('title')}</b> от {float(x.get('min_rub') or 0):,.0f} ₽: "
+                          f"−{x.get('discount_pct', 0):g}% к покупкам, +{x.get('buyback_bonus_pct', 0):g}% к выкупу"
+                          .replace(",", " ") for x in tiers)
+        nxt = (f"\nДо уровня «{t.next_title}» осталось <b>{max(0.0, t.next_rub - t.turnover):,.0f} ₽</b>."
+               .replace(",", " ") if t.next_title else "\nУ вас максимальный уровень 🐳")
+        rv = E.review_stats(self.db)
+        await self.send(uid, f"🏅 <b>Ваш уровень: {t.title}</b>\nОборот за "
+                             f"{self.cfg.get('loyalty.window_days') or 30} дн.: <b>{t.turnover:,.0f} ₽</b>"
+                             .replace(",", " ") + nxt + "\n\n" + table +
+                        (f"\n\n⭐ Рейтинг магазина: <b>{rv['avg']:g}</b> ({rv['count']} отзывов)" if rv["count"] else "")
+                        + "\n\nКрупный объём? Напишите в поддержку — обсудим персональные условия.",
+                        [("◀️ В меню", "menu")])
 
     async def orders(self, uid: int) -> None:
         rows = self.db.q("SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 10", (uid,))

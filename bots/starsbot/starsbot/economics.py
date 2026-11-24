@@ -99,7 +99,18 @@ class Economics:
         return None
 
     def rate_warning(self, threshold_pct: float = 4.0) -> str:
-        """Ручной курс разошёлся с реальной ценой закупки — полы цен неверны."""
+        """Ручной курс разошёлся с реальной ценой закупки или не учтён вывод с FunPay — полы цен неверны."""
+        out = [w for w in (self._fx_warning(threshold_pct), self.fee_warning()) if w]
+        return ". ".join(out)
+
+    def fee_warning(self) -> str:
+        """Выручка FunPay возвращается в круг только через вывод (карта 3%, USDT 6%): без него пол цены занижен."""
+        if float(self.e.withdraw_fee_pct or 0) > 0:
+            return ""
+        return ("Комиссия вывода с FunPay стоит 0%, а деньги на закупку TON выводятся на карту (3%) или в USDT (6%): "
+                "пол цены занижен на 3–6%. Укажите комиссию вывода в «Деньги»")
+
+    def _fx_warning(self, threshold_pct: float) -> str:
         fixed = self._fixed_rate()
         if not fixed or not getattr(self.rates, "is_p2p", False):
             return ""

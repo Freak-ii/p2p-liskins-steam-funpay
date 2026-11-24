@@ -45,9 +45,9 @@ def test_demo_scenario_all_branches(tmp_path):
     assert prem["discount_rub"] > 0 and prem["referrer_id"] == ALICE
     assert 0 < prem["ref_reward_rub"] <= prem["margin_rub"] * 0.4 + 0.01
     assert db.user(ALICE)["bonus_rub"] == prem["ref_reward_rub"]
-    # выкуп: 800 ⭐ × 0.0115 $ − 3%
+    # выкуп (auto): 700 ⭐ × 0.013 $ × 1.01 (на 1% выше вывода Telegram), без отдельной комиссии
     small = db.order(res["sell_small"])
-    assert small["payout_amount"] == 8.92 and shop.providers["crypto"].transfers[0]["user_id"] == BOB
+    assert small["payout_amount"] == 9.19 and shop.providers["crypto"].transfers[0]["user_id"] == BOB
     # подарок 🏆 (85 ⭐ продажи) − 3% → 82 ⭐ на звёздный баланс
     assert db.user(CAROL)["stars_credit"] == 82
     # возврат: деньги Евы пришли на баланс и потрачены на ключи

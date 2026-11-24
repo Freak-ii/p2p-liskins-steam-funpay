@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from shopbot.payments import CANCELED, PAID, PaymentError, build_providers
+from shopbot import economy as E
 from shopbot.loop import MoneyLoop
 from shopbot.pricing import METHODS, PRODUCT_TITLES, Quote, apply_method, referral_discount, sell_quote, shop_price
 from shopbot.rates import Rates
@@ -140,7 +141,10 @@ class Shop:
         cost = float(q["cost_rub"])
         price, _ = shop_price(self.cfg, product, cost, sup_amount if product in ("stars", "gift") else 1)
         disc = referral_discount(self.cfg, user, price, cost, product)
-        return Quote(product, self.product_title(product, item, amount), sup_amount, cost, price, disc)
+        tier = E.tier_for(self.cfg, self.db, user)
+        loyal = E.loyalty_discount(self.cfg, tier, price, cost, product, disc)
+        return Quote(product, self.product_title(product, item, amount), sup_amount, cost, price, round(disc + loyal, 2),
+                     loyalty_rub=loyal, tier=tier.title if loyal else "")
 
     def validate_amount(self, product: str, amount: int) -> str:
         if product == "stars":
@@ -163,7 +167,9 @@ class Shop:
             raise ValueError("звёзды нельзя оплатить звёздами")
         q = await self.quote_buy(user, product, item, amount)
         q = apply_method(self.cfg, q, method, self.rates, asset)
-        chk = self.rtba.check_order(user, product, q.total_rub, method)
+        tier = E.tier_for(self.cfg, self.db, user)
+        chk = self.rtba.check_order(user, product, q.total_rub, method, limit_mult=tier.limit_mult,
+                                    recipient=recipient)
         if not chk.ok:
             self.rtba.log(f"buy.{product}", "order_denied", chk.reason, user=uid, total=q.total_rub)
             raise ValueError(chk.reason)
@@ -178,7 +184,8 @@ class Shop:
             status="awaiting_payment", price_rub=q.price_rub, cost_rub=q.cost_rub, discount_rub=q.discount_rub,
             fee_rub=q.fee_rub, total_rub=q.total_rub, margin_rub=q.margin_rub, pay_method=method,
             pay_currency=q.asset, pay_amount=q.pay_amount, rate=q.rate, breakdown=q.lines,
-            supplier=PRODUCT_SUPPLIER[product], referrer_id=user["referred_by"], expires_at=time.time() + ttl)
+            supplier=PRODUCT_SUPPLIER[product], referrer_id=user["referred_by"], expires_at=time.time() + ttl,
+            source=str(user["source"] or ""), loyalty_rub=q.loyalty_rub, tier=tier.id)
         if method == "balance":
             await self._pay_from_balance(o)
             return self.db.order(oid), {"id": "balance", "url": ""}
@@ -231,13 +238,14 @@ class Shop:
     async def _pay_from_balance(self, o) -> None:
         u = self.db.user(o["user_id"])
         total = float(o["total_rub"])
-        bonus = min(float(u["bonus_rub"] or 0), total)
+        bonus = E.bonus_usable(self.cfg, u, total)          # бонусы — скидка до N% заказа, не деньги
         rub = round(total - bonus, 2)
         if rub > float(u["balance_rub"] or 0) + 1e-9:
             self.db.update_order(o["id"], status="cancelled", fail_reason="мало средств на балансе")
             raise ValueError(f"На балансе {float(u['balance_rub']) + float(u['bonus_rub']):.2f} ₽, нужно {total:.2f} ₽")
         if bonus:
             self.db.credit(u["id"], "bonus", -bonus, "purchase", o["id"], "оплата заказа бонусами")
+            self.db.update_order(o["id"], bonus_rub=bonus)
         if rub:
             self.db.credit(u["id"], "rub", -rub, "purchase", o["id"], "оплата заказа с баланса")
         await self.on_paid(o["id"])
@@ -360,8 +368,16 @@ class Shop:
         u = self.db.user(o["user_id"])
         self.db.exec("UPDATE users SET orders_count=orders_count+1, spent_rub=spent_rub+?, "
                      "first_order_at=COALESCE(first_order_at, ?) WHERE id=?", (o["total_rub"], time.time(), u["id"]))
-        if o["referrer_id"] and self.db.user(o["referrer_id"]):
+        ref_user = self.db.user(o["referrer_id"]) if o["referrer_id"] else None
+        if ref_user is not None:
             reward = self.rtba.referral_reward(float(o["price_rub"]) - float(o["discount_rub"]), float(o["margin_rub"]))
+            fraud = E.self_referral(self.db, o, ref_user)
+            if fraud:
+                reward = 0.0
+                self.db.event(oid, "ref_denied", reason=fraud)
+                await self.notify("WARNING", "ref_self", f"#{oid}: награда пригласившему {ref_user['id']} не "
+                                                         f"начислена — {fraud}")
+            reward = round(min(reward, E.referral_day_cap_left(self.cfg, self.db, ref_user["id"])), 2)
             if reward > 0:
                 self.db.credit(o["referrer_id"], "bonus", reward, "ref_reward", oid,
                                f"{self.cfg.get('referral.reward_pct')}% от покупки друга")
@@ -369,6 +385,45 @@ class Shop:
                 await self.tell(o["referrer_id"], f"🤝 Ваш друг оформил заказ — <b>+{reward:.2f} ₽</b> на бонусный "
                                 "баланс.")
         await self.tell(o["user_id"], self.receipt(self.db.order(oid)))
+        await self.ask_review(self.db.order(oid))
+
+    # ------------------------------------------------------------------ отзывы
+    async def ask_review(self, o) -> None:
+        if not self.cfg.get("reviews.enabled") or o is None or o["kind"] != "buy":
+            return
+        if self.db.one("SELECT 1 FROM reviews WHERE order_id=?", (o["id"],)):
+            return
+        bonus = float(self.cfg.get("reviews.bonus_rub") or 0)
+        extra = (f" За отзыв — <b>+{bonus:g} ₽</b> бонусов." if bonus and float(o["total_rub"] or 0) >=
+                 float(self.cfg.get("reviews.bonus_min_order_rub") or 0) else "")
+        await self.tell(o["user_id"], f"⭐ Оцените заказ <b>#{o['id']}</b>, это займёт секунду.{extra}",
+                        [[(f"{'⭐' * n}", f"rv:{o['id']}:{n}") for n in (5, 4, 3)],
+                         [(f"{'⭐' * n}", f"rv:{o['id']}:{n}") for n in (2, 1)]])
+
+    async def add_review(self, uid: int, oid: str, rating: int, text: str = "") -> str:
+        o = self.db.order(oid)
+        if o is None or o["user_id"] != uid or o["kind"] != "buy" or o["status"] != "delivered":
+            return "Отзыв можно оставить только к своему выданному заказу."
+        rating = max(1, min(5, int(rating)))
+        now = time.time()
+        old = self.db.one("SELECT * FROM reviews WHERE order_id=?", (oid,))
+        if old is None:
+            bonus = float(self.cfg.get("reviews.bonus_rub") or 0)
+            if float(o["total_rub"] or 0) < float(self.cfg.get("reviews.bonus_min_order_rub") or 0):
+                bonus = 0.0
+            self.db.exec("INSERT INTO reviews(order_id,user_id,rating,text,product,status,bonus_rub,created_at,"
+                         "updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (oid, uid, rating, text[:500], o["product"],
+                                                                   "new", bonus, now, now))
+            if bonus > 0:
+                self.db.credit(uid, "bonus", bonus, "review", oid, "бонус за отзыв")
+        else:
+            self.db.exec("UPDATE reviews SET rating=?, text=CASE WHEN ?<>'' THEN ? ELSE text END, updated_at=? "
+                         "WHERE order_id=?", (rating, text[:500], text[:500], now, oid))
+        if rating <= 3:
+            await self.notify("WARNING", "review_low", f"Отзыв {rating}⭐ к #{oid} от {uid}: {text[:200] or '—'}",
+                              [("💬 Открыть заказ", f"adm:order:{oid}")])
+        return "Спасибо за оценку!" + (" Напишите пару слов о заказе — это поможет другим покупателям."
+                                        if not text else "")
 
     def receipt(self, o) -> str:
         lines = json.loads(o["breakdown"] or "[]")
@@ -427,9 +482,15 @@ class Shop:
                 self.db.update_order(o["id"], status="paid_out", delivered_at=time.time())
 
     # ------------------------------------------------------------------ выкуп у клиентов
-    def quote_sell(self, product: str, amount: int, payout: str, gift_id: str = ""):
+    def xtr_stock(self) -> int | None:
+        """Звёзды на балансе бота (getMyStarBalance, обновляет RTBA)."""
+        v = self.db.kv_get("xtr_balance")
+        return int(v["stars"]) if isinstance(v, dict) and "stars" in v else None
+
+    def quote_sell(self, product: str, amount: int, payout: str, gift_id: str = "", user=None):
         if product == "stars":
-            return sell_quote(self.cfg, "stars", amount, "usdt")
+            return sell_quote(self.cfg, "stars", amount, "usdt", tier=E.tier_for(self.cfg, self.db, user),
+                              xtr_stock=self.xtr_stock())
         g = self.gift(gift_id) or {}
         title = f"{g.get('emoji', '🎁')} {g.get('title', gift_id)}"
         return sell_quote(self.cfg, "gift", int(g.get("convert") or amount), payout, title)
@@ -449,11 +510,12 @@ class Shop:
             raise ValueError("Выплата звёздами сейчас недоступна — выберите крипту")
         elif payout == "usdt" and not self.rtba.is_open("payout.crypto"):
             raise ValueError("Выплата криптой сейчас недоступна")
-        sq = self.quote_sell(product, amount, payout, gift_id)
+        sq = self.quote_sell(product, amount, payout, gift_id, user=user)
         oid = self.db.new_order_id("sell")
         o = self.db.create_order(
             oid, user_id=uid, kind="sell", product=product, item=gift_id, amount=sq.amount, status="awaiting_asset",
             payout_kind=payout, payout_amount=sq.net, payout_asset=sq.asset, fee_rub=0, breakdown=sq.lines,
+            source=str(user["source"] or ""),
             expires_at=time.time() + float(self.cfg.get("payments.order_ttl_minutes") or 30) * 60)
         if product == "stars":
             prov = self.providers["stars"]
@@ -497,6 +559,9 @@ class Shop:
         amount = float(o["payout_amount"])
         if not approved_by:
             chk = self.rtba.payout_decision(u, amount)
+            risk = E.sell_risk(self.cfg, self.db, u, amount, exclude=oid)
+            if chk.ok and risk.review:
+                chk = type(chk)(False, risk.reason)
             if not chk.ok:
                 self.db.update_order(oid, status="payout_pending", fail_reason=chk.reason)
                 await self.notify("WARNING", "payout_review", f"Выплата #{oid}: {amount:.2f} USDT клиенту "

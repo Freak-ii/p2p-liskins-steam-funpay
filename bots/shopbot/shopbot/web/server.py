@@ -112,7 +112,7 @@ def make_app(app_state) -> web.Application:
     async def auth(request, handler):
         if request.path in ("/login", "/api/ping", "/app", "/app/"):   # /app — публичная витрина мини-приложения
             return await handler(request)
-        role = role_for(request.cookies.get(COOKIE, ""))
+        role = role_for(request.cookies.get(COOKIE, "") or request.headers.get("X-Dashboard-Token", ""))
         if not role:
             if request.path.startswith("/api/"):
                 raise web.HTTPUnauthorized(text="login required")
@@ -152,6 +152,36 @@ def make_app(app_state) -> web.Application:
                                   "state": "running", "summary": s1, "rates": sh.rates.snapshot(),
                                   "treasury_usdt": tre.get("usdt"), "rtba_closed": closed,
                                   "bot": bool(st.cfg.get("telegram.bot_token")) or st.demo})
+
+    async def api_sources(request):
+        from shopbot.economy import sources_report
+        days = max(1.0, min(365.0, float(request.query.get("days") or 30)))
+        return web.json_response(sources_report(st.db, days))
+
+    async def api_reviews(request):
+        from shopbot.economy import review_stats
+        rows = st.db.q("SELECT order_id, user_id, rating, text, product, status, created_at FROM reviews "
+                       "ORDER BY created_at DESC LIMIT 100")
+        return web.json_response({**review_stats(st.db), "items": [dict(r) for r in rows]})
+
+    async def api_economy(request):
+        """Сводка экономики: уровни клиентов, курс выкупа, скидки и награды за 30 дней (без себестоимости по товарам)."""
+        from shopbot import economy as E
+        since = time.time() - 30 * 86400
+        tiers: dict[str, int] = {}
+        for u in st.db.q("SELECT * FROM users WHERE last_seen>=?", (since,)):
+            t = E.tier_for(st.cfg, st.db, u)
+            tiers[t.title] = tiers.get(t.title, 0) + 1
+        agg = st.db.one("SELECT SUM(loyalty_rub) loy, SUM(discount_rub) disc, SUM(ref_reward_rub) refs, "
+                        "SUM(bonus_rub) bonus, SUM(margin_rub) margin, SUM(total_rub) rev, COUNT(*) n FROM orders "
+                        "WHERE kind='buy' AND status='delivered' AND created_at>=?", (since,))
+        rate, fee, why = E.buyback_usd_per_star(st.cfg, None, st.shop.xtr_stock())
+        return web.json_response({"tiers": tiers, "orders": agg["n"] or 0, "revenue_rub": round(agg["rev"] or 0, 2),
+                                  "margin_rub": round(agg["margin"] or 0, 2), "loyalty_rub": round(agg["loy"] or 0, 2),
+                                  "discount_rub": round(agg["disc"] or 0, 2), "ref_rewards_rub": round(agg["refs"] or 0, 2),
+                                  "bonus_spent_rub": round(agg["bonus"] or 0, 2), "xtr_stock": st.shop.xtr_stock(),
+                                  "buyback": {"usd_per_star": rate, "fee_pct": fee, "why": why},
+                                  "reviews": E.review_stats(st.db)})
 
     async def dashboard(request):
         sh = st.shop
@@ -364,7 +394,8 @@ def make_app(app_state) -> web.Application:
     app.add_routes([
         web.get("/login", login), web.post("/login", login), web.get("/api/ping", ping),
         web.get("/app", miniapp), web.get("/app/", miniapp),
-        web.get("/api/status", status), web.get("/", dashboard), web.get("/orders", orders),
+        web.get("/api/status", status), web.get("/api/sources", api_sources), web.get("/api/reviews", api_reviews),
+        web.get("/api/economy", api_economy), web.get("/", dashboard), web.get("/orders", orders),
         web.get("/orders/{oid}", order), web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.get("/loop", loop_page), web.post("/loop", loop_action),
         web.get(r"/customers/{uid:\d+}", customer), web.post(r"/customers/{uid:\d+}", customer_action),

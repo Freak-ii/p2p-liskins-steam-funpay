@@ -68,7 +68,14 @@ DEFAULTS: dict[str, Any] = {
     # ---------------------------------------------------------------- выкуп у клиентов
     "buyback": {
         "fee_pct": 3,                     # комиссия магазина при продаже звёзд/подарков клиентом (прозрачная)
-        "stars": {"enabled": True, "min": 100, "max": 50000, "usd_per_star": 0.0115},   # курс выкупа до комиссии
+        # Выкуп звёзд. auto: на beat_pct выше официального вывода Telegram (ref, 0.013 $ после 21 дня ожидания),
+        # но не выше ценности звезды для нас (use — цена на Fragment, 0.015 $) минус min_spread_pct.
+        # Звёзды приходят на баланс бота (XTR) и тратятся на подарки клиентам (поставщик gifts с bot_balance).
+        # Запас ≥ max_stock_stars — курс падает до вывода −2%, чтобы не копить звёзды без сбыта.
+        # fixed: usd_per_star и отдельная комиссия fee_pct (как раньше).
+        "stars": {"enabled": True, "min": 100, "max": 50000, "mode": "auto", "usd_per_star": 0.0115,
+                  "ref_usd_per_star": 0.013, "beat_pct": 1.0, "use_usd_per_star": 0.015, "min_spread_pct": 6.0,
+                  "max_stock_stars": 20000, "full_stock_cut_pct": 2.0},
         "gifts": {"enabled": True, "pay_stars": True, "pay_crypto": True,
                   "gift_account": "",     # @ аккаунта, на который клиент передаёт подарок
                   "unique_manual_quote": True},
@@ -134,6 +141,31 @@ DEFAULTS: dict[str, Any] = {
         "payout_reserve_usdt": 10,        # неснижаемый остаток на балансе выплат
         "min_quote_margin_rub": 3,
     },
+    # Лояльность: уровень по обороту за window_days (покупки + выкуп). Скидка уровня и приглашения вместе не
+    # опускают маржу заказа ниже min_margin_after_pct. Тег CRM «tier:<id>» даёт уровень вручную (переговоры с китом).
+    "loyalty": {
+        "enabled": True, "window_days": 30, "min_margin_after_pct": 2.0,
+        "tiers": [
+            {"id": "base", "title": "Клиент", "min_rub": 0, "discount_pct": 0, "buyback_bonus_pct": 0, "limit_mult": 1},
+            {"id": "silver", "title": "Серебро", "min_rub": 15000, "discount_pct": 1, "buyback_bonus_pct": 0.5,
+             "limit_mult": 1.5},
+            {"id": "gold", "title": "Золото", "min_rub": 50000, "discount_pct": 2, "buyback_bonus_pct": 1,
+             "limit_mult": 3},
+            {"id": "whale", "title": "Кит", "min_rub": 150000, "discount_pct": 3, "buyback_bonus_pct": 1.5,
+             "limit_mult": 6},
+        ],
+    },
+    # Отзывы: после выдачи бот просит оценку 1–5 и пару слов. Бонус — только за первый отзыв к заказу от
+    # bonus_min_order_rub; отзывы с оценкой ≥ publish_min_rating попадают в черновики поста канала (публикует владелец).
+    "reviews": {"enabled": True, "bonus_rub": 5, "bonus_min_order_rub": 300, "publish_min_rating": 5,
+                "ask_delay_minutes": 0},
+    # Антискам: новые продавцы и всплески — на ручную проверку; самоприглашения не вознаграждаются;
+    # бонусы не выводятся и покрывают не больше bonus_pay_share_pct заказа.
+    "antiscam": {"new_seller_hours": 72, "new_seller_min_deals": 1, "new_seller_daily_usdt": 15,
+                 "seller_daily_usdt": 150, "ref_daily_cap_rub": 500, "bonus_pay_share_pct": 30,
+                 "max_recipients_per_day": 5},
+    # Метки трафика: t.me/<бот>?start=src_<метка> (можно src_<метка>__stars); первая метка держится window_days.
+    "sources": {"window_days": 30},
     "referral": {
         "enabled": True,
         "reward_pct": 1.5,                # от суммы покупки приглашённого → бонусный баланс пригласившего

@@ -46,6 +46,8 @@ class Quote:
     rate: float = 1.0
     rate_source: str = ""
     lines: list[tuple[str, str]] = field(default_factory=list)
+    loyalty_rub: float = 0.0             # часть discount_rub — скидка уровня лояльности
+    tier: str = ""
 
     @property
     def margin_rub(self) -> float:
@@ -90,8 +92,11 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
     base = r2(q.price_rub - q.discount_rub)
     q.method = method
     q.lines = [(q.title, f"{q.price_rub:.2f} ₽")]
-    if q.discount_rub:
-        q.lines.append(("Скидка по приглашению", f"−{q.discount_rub:.2f} ₽"))
+    ref_part = r2(q.discount_rub - q.loyalty_rub)
+    if ref_part > 0:
+        q.lines.append(("Скидка по приглашению", f"−{ref_part:.2f} ₽"))
+    if q.loyalty_rub > 0:
+        q.lines.append((f"Скидка уровня «{q.tier}»", f"−{q.loyalty_rub:.2f} ₽"))
     if method == "card":
         q.fee_pct = float(cfg.get("payments.card.fee_pct") or 0)
         q.asset, q.rate, q.rate_source = "RUB", 1.0, ""
@@ -165,7 +170,8 @@ class SellQuote:
     lines: list[tuple[str, str]] = field(default_factory=list)
 
 
-def sell_quote(cfg, product: str, stars_value: int, payout: str, title: str = "") -> SellQuote:
+def sell_quote(cfg, product: str, stars_value: int, payout: str, title: str = "", tier=None,
+               xtr_stock: int | None = None) -> SellQuote:
     fee_pct = float(cfg.get("buyback.fee_pct") or 3)
     if payout == "stars":
         gross = float(stars_value)
@@ -174,10 +180,15 @@ def sell_quote(cfg, product: str, stars_value: int, payout: str, title: str = ""
         lines = [(title or "Подарок", f"{stars_value} ⭐ (цена продажи Telegram)"),
                  (f"Комиссия магазина {fee_pct:g}%", f"−{int(fee)} ⭐"), ("Вы получите", f"{int(net)} ⭐")]
         return SellQuote(product, stars_value, "stars", gross, fee_pct, fee, net, "XTR", lines)
-    rate = float(cfg.get("buyback.stars.usd_per_star") or 0.0115)
+    from shopbot.economy import buyback_usd_per_star
+    rate, fee_pct, why = buyback_usd_per_star(cfg, tier, xtr_stock)
     gross = round(stars_value * rate, 4)
     fee = round(gross * fee_pct / 100, 4)
     net = math.floor((gross - fee) * 100) / 100
-    lines = [(title or f"{stars_value} ⭐", f"{stars_value} ⭐ × {rate:g} $ = {gross:.2f} USDT"),
-             (f"Комиссия магазина {fee_pct:g}%", f"−{fee:.2f} USDT"), ("Вы получите", f"{net:.2f} USDT")]
+    lines = [(title or f"{stars_value} ⭐", f"{stars_value} ⭐ × {rate:g} $ = {gross:.2f} USDT")]
+    if fee_pct:
+        lines.append((f"Комиссия магазина {fee_pct:g}%", f"−{fee:.2f} USDT"))
+    else:
+        lines.append(("Курс выкупа", why))
+    lines.append(("Вы получите", f"{net:.2f} USDT"))
     return SellQuote(product, stars_value, "usdt", gross, fee_pct, fee, net, "USDT", lines)
