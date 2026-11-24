@@ -124,6 +124,8 @@ class NftDesk:
         if info.get("rub_per_ton"):
             return float(info["rub_per_ton"])
         v = getattr(self.engine.rates, "value", None)
+        if v and getattr(self.engine.rates, "is_p2p", False):
+            return round(float(v), 2)                  # уже цена закупки, надбавка не нужна
         return round(float(v) * 1.04, 2) if v else None
 
     def rub_per_star(self) -> float:

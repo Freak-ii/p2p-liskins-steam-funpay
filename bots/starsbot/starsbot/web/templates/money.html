@@ -15,7 +15,7 @@
 <div class="grid">
   <div class="card kpi"><div class="v">{{ wallet.balance|ton }}</div><div class="l">TON на кошельке{% if wallet.ts %} · {{ wallet.ts|ts }}{% endif %}</div></div>
   <div class="card kpi"><div class="v">{{ wallet.capacity if wallet.capacity is not none else '—' }}</div><div class="l">звёзд хватит (за вычетом резерва и заказов в работе)</div></div>
-  <div class="card kpi"><div class="v">{{ rate|money }} ₽</div><div class="l">эффективный курс TON · {{ rate_src }}</div></div>
+  <div class="card kpi"><div class="v">{{ rate|money }} ₽</div><div class="l">эффективный курс TON · {{ rate_src }}{% if rate_warn %}<br><b>⚠ {{ rate_warn }}</b>{% endif %}</div></div>
   <div class="card kpi"><div class="v">{{ market|money }} ₽</div><div class="l">биржевой курс TON</div></div>
   <div class="card kpi"><div class="v">{{ tps|ton }}</div><div class="l">TON за 1 звезду (Fragment)</div></div>
   <div class="card kpi"><div class="v">{{ cps|round(3) if cps else '—' }} ₽</div><div class="l">себестоимость звезды</div></div>

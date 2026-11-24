@@ -92,8 +92,9 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("fee_reserve_ton", "Запас на комиссию сети, TON", "float", ""),
     ]),
     ("rates", [
-        ("source", "Курс TON/RUB", "choice:auto|manual", "auto — CoinGecko, manual — только значение ниже"),
+        ("source", "Курс TON/RUB", "choice:auto|manual", "auto — биржа × P2P USDT (запас CoinGecko), manual — только значение ниже"),
         ("ton_rub", "Курс вручную / запасной, ₽", "float", ""),
+        ("usdt_rub", "Почём покупаете USDT, ₽ (0 — живой курс)", "float", "Цена USDT на P2P с переводом"),
         ("refresh_minutes", "Обновлять курс, мин", "int", ""),
     ]),
     ("economics", [
@@ -101,6 +102,8 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("withdraw_fee_pct", "Комиссия вывода с FunPay, %", "float", "Зависит от способа вывода"),
         ("withdraw_fee_fixed_rub", "Фикс. комиссия за один вывод, ₽", "float", ""),
         ("cost_rate_rub", "Курс TON для себестоимости, ₽ (0 — по пополнениям)", "float", "Например, цена следующей закупки"),
+        ("cost_basis", "Себестоимость", "choice:live|topups", "live — по цене следующей закупки, topups — по средней цене пополнений"),
+        ("star_usd", "Цена звезды на Fragment, $", "float", "0.015; 0 — брать из прошлых покупок"),
         ("exchange_spread_pct", "Покупаете TON дороже биржи на, %", "float", "Используется, пока нет записей о пополнениях"),
         ("deposit_fee_ton", "Комиссия перевода TON на кошелёк, TON", "float", ""),
         ("typical_topup_ton", "Обычное пополнение, TON", "float", ""),

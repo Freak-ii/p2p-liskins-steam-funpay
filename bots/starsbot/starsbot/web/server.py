@@ -420,7 +420,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         return render("money.html", request, days=days, period=econ.period(days), calc=econ.calculator(custom),
                       ozon_calc=ozon_calc, oz=sup.cfg.get("ozon") or {},
                       ggsel_calc=ggsel_calc, gg=sup.cfg.get("ggsel") or {},
-                      custom=custom, rate=rate, rate_src=rate_src, market=getattr(sup.engine.rates, "value", None),
+                      custom=custom, rate=rate, rate_src=rate_src, rate_warn=econ.rate_warning(), market=getattr(sup.engine.rates, "value", None),
                       tps=econ.ton_per_star(), cps=econ.cost_per_star_rub(), cap=econ.wallet_capacity(),
                       rec=econ.reconcile(), wallet=wallet_kv(), e=sup.cfg.economics,
                       balance=sup.analytics.balance_series(300),
