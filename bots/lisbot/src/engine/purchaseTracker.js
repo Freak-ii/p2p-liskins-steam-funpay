@@ -67,7 +67,7 @@ export class PurchaseTracker {
       if (!s) continue;
       const st = mapLisStatus(s.status);
       if (s.status !== it.lis_status) this.db.updateItem(it.id, { lis_status: s.status, trade_offer_id: s.trade_offer_id ? String(s.trade_offer_id) : it.trade_offer_id });
-      if (['protected', 'ready', 'listing', 'listed', 'sold', 'failed', 'reversed'].includes(it.status)) continue;
+      if (['protected', 'ready', 'listing', 'listed', 'delivering', 'settling', 'sold', 'failed', 'reversed'].includes(it.status)) continue;
       if (st === 'failed') {
         this.db.setItemStatus(it.id, 'failed', {}, { lisStatus: s.status });
         this.db.set('refundCredit', (this.db.get('refundCredit', 0) || 0) + it.buy_price_usd);

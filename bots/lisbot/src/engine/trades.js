@@ -13,7 +13,7 @@ const AWAITING = ['bought', 'trade_sent', 'locked_on_lis'];
  *     а не продавца, поэтому принимаем «бесплатный» оффер от любого отправителя; совпавшие с покупками
  *     предметы учитываем в CRM, остальные просто попадают в инвентарь.
  * Офферы с запросом наших предметов отклоняются всегда. Любой исходящий оффер, кроме офферов моста
- * ключей (их создаёт сам бот, см. keyBridge.js) и обменов MannBot, записанных в центре на общем
+ * ключей и продаж Market.CSGO (их создаёт сам бот, см. keyBridge.js и arb/seller.js) и обменов MannBot, записанных в центре на общем
  * аккаунте (см. sharedSteam.js), = признак компрометации (API-key scam) -> критическая
  * остановка и отмена оффера.
  */
@@ -144,6 +144,8 @@ export class TradeHandler {
   async onUnknownOutgoing(offer, source) {
     // свой оффер моста ключей (id записан при отправке, получатель и ключи совпадают) — не тревога
     if (this.bridge?.isOwnOffer(offer)) { this.bridge.onOwnOfferChanged(offer); return; }
+    // обмен с покупателем Market.CSGO, созданный ботом под запись площадки (id, получатель и предмет совпадают)
+    if (this.arb?.isOwnOffer(offer)) { this.arb.onOwnOfferChanged(offer); return; }
     if (offer.state !== EState.Active && offer.state !== EState.CreatedNeedsConfirmation) return;
     // один аккаунт с MannBot: обмен записан им в центре (точно этот получатель и эти предметы) — не тревога
     if (await this.shared?.isOwn(offer)) {

@@ -2,6 +2,9 @@ import { sellPrice, repricePlan } from '../pricing/sellStrategy.js';
 import { errMsg, sleep, jitter, HOUR, DAY, inActiveHours, fmtUsd, startOfDay } from '../util/common.js';
 import { esc } from '../notify/telegram.js';
 
+// лоты Market.CSGO ведёт src/arb/seller.js, здесь только ТП Steam
+const onSteam = (i) => !String(i.listing_id || '').startsWith('mcsgo:');
+
 const MARKET_BLOCK_RE = /not allowed|restrict|ban|cannot sell|can't sell|unable to sell|market.*unavailable|trade.*hold|steam guard/i;
 
 /**
@@ -76,7 +79,7 @@ export class Seller {
 
   // ---------- сверка лотов ----------
   async syncListings() {
-    const open = this.db.itemsByStatus('listing', 'listed');
+    const open = this.db.itemsByStatus('listing', 'listed').filter(onSteam);
     if (!open.length) return;
     let my;
     try { my = await this.market.myListings(); this.guard.recordSuccess('steam-listings'); } catch (e) { this.guard.recordError('steam-listings', e); return; }
@@ -187,7 +190,7 @@ export class Seller {
   // ---------- перевыставление ----------
   async reprice() {
     if (!this.guard.canSell || !inActiveHours(this.cfg)) return;
-    for (const it of this.db.itemsByStatus('listed')) {
+    for (const it of this.db.itemsByStatus('listed').filter(onSteam)) {
       if (!it.listing_id || !it.listed_at || Date.now() - it.listed_at < this.cfg.sell.repriceAfterHours * HOUR) continue;
       let book;
       try { book = await this.market.orderBook(it.name); } catch { continue; }

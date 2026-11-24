@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS counterparties (
 );
 `;
 
-export const ACTIVE_STATUSES = ['bought', 'locked_on_lis', 'trade_sent', 'protected', 'ready', 'listing', 'listed'];
+export const ACTIVE_STATUSES = ['bought', 'locked_on_lis', 'trade_sent', 'protected', 'ready', 'listing', 'listed', 'delivering', 'settling'];
 export const HELD_STATUSES = ACTIVE_STATUSES;
 
 export function openDb(dataDir, file = 'bot.sqlite') {
