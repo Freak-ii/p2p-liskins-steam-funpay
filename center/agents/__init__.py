@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS agent_kv (agent TEXT NOT NULL, k TEXT NOT NULL, v TEX
 """
 
 REGISTRY: dict[str, type["Agent"]] = {}
-AGENT_MODULES = ("center.agents.channel",)      # модули с агентами; импорт регистрирует их
+AGENT_MODULES = ("center.agents.channel", "center.agents.trends")      # модули с агентами; импорт регистрирует их
 
 
 def register(cls: type["Agent"]) -> type["Agent"]:
@@ -270,7 +270,9 @@ class Agents:
             importlib.import_module(m)
         self.center = center
         self.store = Store(center.home / "center.sqlite3")
-        self.agents: dict[str, Agent] = {aid: cls(center, self.store) for aid, cls in REGISTRY.items()}
+        order = {m: i for i, m in enumerate(AGENT_MODULES)}        # порядок карточек — как в AGENT_MODULES
+        classes = sorted(REGISTRY.values(), key=lambda c: order.get(c.__module__, len(order)))
+        self.agents: dict[str, Agent] = {cls.id: cls(center, self.store) for cls in classes}
 
     def get(self, aid: str) -> Agent | None:
         return self.agents.get(aid)

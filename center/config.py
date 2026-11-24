@@ -145,6 +145,20 @@ DEFAULTS: dict = {
         },
     },
     "agents": {                      # раздел «Агенты» (center/agents/): при старте центра агенты сами не запускаются
+        "trends": {                  # center/agents/trends.py — тренды NFT-подарков, скинов CS2 и звёзд FunPay
+            "enabled": True,
+            "autostart": False,
+            "interval_minutes": 180,
+            "ai": True,              # короткий вывод Claude (ключ координатора); без ключа — только правила
+            "gifts": {"enabled": True, "max_per_run": 20, "collections": [
+                "plushpepe", "durovscap", "lootbag", "swisswatch", "signetring", "preciouspeach", "lovepotion",
+                "toybear", "diamondring", "eternalrose", "lunarsnake", "kissedfrog"]},
+            "skins": {"enabled": True, "top": 300, "min_price_usd": 1.0, "max_price_usd": 200.0, "min_volume": 20,
+                      "sale_fee_pct": 5.0, "withdraw_pct": 2.5},
+            "stars": {"enabled": True, "position": 3, "denominations": [50, 100, 250, 500, 1000]},
+            "thresholds": {"rise_pct": 10.0, "fall_pct": -10.0, "stars_move_pct": 3.0, "arb_roi_pct": 5.0},
+            "keep_days": 60,
+        },
         "channel": {                 # center/agents/channel.py — посты для Telegram-канала магазина через одобрение
             "enabled": True,
             "autostart": False,      # true — запускать вместе с центром (по умолчанию только кнопкой)
