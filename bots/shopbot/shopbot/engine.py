@@ -590,6 +590,15 @@ class Shop:
                 "active": active, "attention": attention, "users": self.db.scalar("SELECT COUNT(*) FROM users", (), 0),
                 "new_users": self.db.scalar("SELECT COUNT(*) FROM users WHERE created_at>=?", (since,), 0)}
 
+    async def _open_post(self) -> None:
+        await asyncio.sleep(5)                 # бот успевает узнать свой @username
+        try:
+            res = await self.channel.ensure_open_post()
+            if res not in ("выключено", "уже опубликован"):
+                log.info("пост «Открыть магазин»: %s", res)
+        except Exception:  # noqa: BLE001
+            log.exception("пост «Открыть магазин»")
+
     async def _loop_tick(self) -> None:
         self.loop.tick()
         todo = self.loop.todo_text()
@@ -631,6 +640,8 @@ class Shop:
             self.tasks.append(asyncio.create_task(self._loop(name, every, fn)))
         if self.bot is not None:
             self.tasks.append(asyncio.create_task(self.bot.run()))
+        if self.channel is not None and self.bot is not None and self.bot.token and not self.demo:
+            self.tasks.append(asyncio.create_task(self._open_post()))
 
     async def stop(self) -> None:
         for t in self.tasks:

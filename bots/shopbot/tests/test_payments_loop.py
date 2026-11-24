@@ -148,3 +148,27 @@ def test_miniapp_page_public_and_menu_button(tmp_path):
     assert TUNNEL_RE.search("INF |  https://quick-fox-12.trycloudflare.com  |")
     cfg = Config(tmp_path, overrides={"channel": {"chat_id": "@DPBFastchange"}})
     assert "channel=DPBFastchange" in page_query(cfg, "DPBFastchange_bot")
+
+
+def test_open_post_published_and_pinned_once_without_prices(tmp_path):
+    shop, bot = make(tmp_path, channel={"chat_id": "@DPBFastchange", "open_post": {"auto": True}})
+    bot.token = "123:abc"
+    calls = []
+
+    async def fake_call(method, **params):
+        calls.append((method, params))
+        return {"message_id": 77} if method == "sendMessage" else True
+    bot.call = fake_call
+
+    async def go():
+        await shop.rtba.tick()
+        assert "опубликовано" in await shop.channel.ensure_open_post()
+        send = next(p for m, p in calls if m == "sendMessage")
+        assert "₽" not in send["text"]
+        btn = send["reply_markup"]["inline_keyboard"][0][0]
+        assert btn["url"].endswith("?startapp")
+        assert any(m == "pinChatMessage" and p["message_id"] == 77 for m, p in calls)
+        assert await shop.channel.ensure_open_post() == "уже опубликован"
+        # остальные посты по-прежнему только после channel.enabled
+        assert "не подключён" in await shop.channel.publish("prices")
+    asyncio.run(go())
