@@ -28,12 +28,18 @@ DEFAULTS: dict[str, Any] = {
         "admin_chat_ids": [],        # кому слать тревоги RTBA и заявки на ручное подтверждение
         "api": "https://api.telegram.org",
     },
+    # Мини-приложение (окно магазина, как у BotFather), см. shopbot/miniapp.py:
+    # url — постоянный https-адрес страницы (GitHub Pages); пусто → запуск с ПК через туннель Cloudflare
+    # (нужен cloudflared.exe), адрес меняется при каждом запуске, кнопку «Магазин» бот обновляет сам.
+    "miniapp": {"url": "", "menu_text": "Магазин", "tunnel": "cloudflared", "port": 8807, "cloudflared": ""},
     "channel": {
         "enabled": False,            # публикация в канал только после явного включения владельцем
         "chat_id": "",               # @channel или -100…; бот должен быть админом канала
         "autoupdate_price_post": True,
         "price_post_message_id": 0,
         "reprice_threshold_pct": 3,  # обновлять пост с ценами, когда цена сдвинулась больше чем на N %
+        # пост «Открыть магазин» (без цен) с кнопкой мини-приложения: опубликовать и закрепить при запуске
+        "open_post": {"auto": False, "pin": True},
     },
     # ---------------------------------------------------------------- товары
     "catalog": {
@@ -62,7 +68,14 @@ DEFAULTS: dict[str, Any] = {
     # ---------------------------------------------------------------- выкуп у клиентов
     "buyback": {
         "fee_pct": 3,                     # комиссия магазина при продаже звёзд/подарков клиентом (прозрачная)
-        "stars": {"enabled": True, "min": 100, "max": 50000, "usd_per_star": 0.0115},   # курс выкупа до комиссии
+        # Выкуп звёзд. auto: на beat_pct выше официального вывода Telegram (ref, 0.013 $ после 21 дня ожидания),
+        # но не выше ценности звезды для нас (use — цена на Fragment, 0.015 $) минус min_spread_pct.
+        # Звёзды приходят на баланс бота (XTR) и тратятся на подарки клиентам (поставщик gifts с bot_balance).
+        # Запас ≥ max_stock_stars — курс падает до вывода −2%, чтобы не копить звёзды без сбыта.
+        # fixed: usd_per_star и отдельная комиссия fee_pct (как раньше).
+        "stars": {"enabled": True, "min": 100, "max": 50000, "mode": "auto", "usd_per_star": 0.0115,
+                  "ref_usd_per_star": 0.013, "beat_pct": 1.0, "use_usd_per_star": 0.015, "min_spread_pct": 6.0,
+                  "max_stock_stars": 20000, "full_stock_cut_pct": 2.0},
         "gifts": {"enabled": True, "pay_stars": True, "pay_crypto": True,
                   "gift_account": "",     # @ аккаунта, на который клиент передаёт подарок
                   "unique_manual_quote": True},
@@ -72,15 +85,33 @@ DEFAULTS: dict[str, Any] = {
     # ---------------------------------------------------------------- оплата
     "payments": {
         "order_ttl_minutes": 30,
-        "card": {"enabled": True, "provider": "yookassa", "fee_pct": 3.5,
+        # Карта — заготовка под эквайринг (ЮKassa сейчас; другой провайдер — новым классом в payments).
+        # Выключена, пока нет договора: в меню клиента не показывается.
+        "card": {"enabled": False, "provider": "yookassa", "fee_pct": 3.5,
                  "yookassa": {"shop_id": "", "secret_key": "", "test": True, "return_url": "",
                               "send_receipt": False, "vat_code": 1, "tax_system_code": 0}},
         "crypto": {"enabled": True, "provider": "cryptopay", "fee_pct": 2, "min_fee_pct": 2,
                    "assets": ["USDT", "TON"],
                    "cryptopay": {"token": "", "testnet": True}},
         "stars": {"enabled": True, "rub_per_star": 1.25},   # оплата звёздами Telegram (XTR) — кроме покупки звёзд
+        # Крипта на общий кошелёк TON (хаб казначейства StarsBot) — деньги сразу в круге, без Crypto Pay.
+        # Комиссии отдельной строкой нет: спред заложен в курс обмена (курс Bybit − spread_pct %).
+        # spread_pct держим минимальным, но не ниже min_spread_pct (покрывает сеть + обмен USDT→TON на Bybit).
+        "wallet": {"enabled": True, "address": "", "assets": ["USDT", "TON"], "spread_pct": 3.0,
+                   "min_spread_pct": 1.0, "toncenter_api_key": "", "ttl_minutes": 60},
+        # Подарками Telegram: клиент передаёт подарки на аккаунт приёма; засчитываем по цене продажи подарка
+        # Telegram (convert, ⭐) × курс звезды − haircut_pct. Подарки уходят в круг: в запас TG Gift или в звёзды.
+        "gift": {"enabled": True, "account": "", "haircut_pct": 5.0, "ttl_minutes": 60},
+        # Скинами Steam: обмен на trade_url магазина, оценка по Market.CSGO − haircut_pct; скины продаются
+        # LisBot/Market.CSGO → USDT → хаб. Пока подтверждает оператор.
+        "skins": {"enabled": True, "trade_url": "", "haircut_pct": 12.0, "ttl_minutes": 120,
+                  "market": "market.csgo.com"},
         "balance": {"enabled": True},
     },
+    # Круг денег: куда уходит каждый приём (см. shopbot/loop.py). Ничего не двигает само — ведёт учёт и
+    # подсказывает следующий шаг, чтобы приём не лежал активом.
+    "loop": {"xtr_hold_days": 21, "sweep_cryptobot_usdt": 50, "gift_use": "tggift_stock",
+             "skins_sell": "lisbot_market_csgo", "card_route": "p2p_usdt_bybit"},
     "rates": {
         "source": "bybit",                # bybit | fixed
         "usdt_rub": 86.8,                 # запасной курс (ваш P2P, см. starsbot economics)
@@ -110,6 +141,31 @@ DEFAULTS: dict[str, Any] = {
         "payout_reserve_usdt": 10,        # неснижаемый остаток на балансе выплат
         "min_quote_margin_rub": 3,
     },
+    # Лояльность: уровень по обороту за window_days (покупки + выкуп). Скидка уровня и приглашения вместе не
+    # опускают маржу заказа ниже min_margin_after_pct. Тег CRM «tier:<id>» даёт уровень вручную (переговоры с китом).
+    "loyalty": {
+        "enabled": True, "window_days": 30, "min_margin_after_pct": 2.0,
+        "tiers": [
+            {"id": "base", "title": "Клиент", "min_rub": 0, "discount_pct": 0, "buyback_bonus_pct": 0, "limit_mult": 1},
+            {"id": "silver", "title": "Серебро", "min_rub": 15000, "discount_pct": 1, "buyback_bonus_pct": 0.5,
+             "limit_mult": 1.5},
+            {"id": "gold", "title": "Золото", "min_rub": 50000, "discount_pct": 2, "buyback_bonus_pct": 1,
+             "limit_mult": 3},
+            {"id": "whale", "title": "Кит", "min_rub": 150000, "discount_pct": 3, "buyback_bonus_pct": 1.5,
+             "limit_mult": 6},
+        ],
+    },
+    # Отзывы: после выдачи бот просит оценку 1–5 и пару слов. Бонус — только за первый отзыв к заказу от
+    # bonus_min_order_rub; отзывы с оценкой ≥ publish_min_rating попадают в черновики поста канала (публикует владелец).
+    "reviews": {"enabled": True, "bonus_rub": 5, "bonus_min_order_rub": 300, "publish_min_rating": 5,
+                "ask_delay_minutes": 0},
+    # Антискам: новые продавцы и всплески — на ручную проверку; самоприглашения не вознаграждаются;
+    # бонусы не выводятся и покрывают не больше bonus_pay_share_pct заказа.
+    "antiscam": {"new_seller_hours": 72, "new_seller_min_deals": 1, "new_seller_daily_usdt": 15,
+                 "seller_daily_usdt": 150, "ref_daily_cap_rub": 500, "bonus_pay_share_pct": 30,
+                 "max_recipients_per_day": 5},
+    # Метки трафика: t.me/<бот>?start=src_<метка> (можно src_<метка>__stars); первая метка держится window_days.
+    "sources": {"window_days": 30},
     "referral": {
         "enabled": True,
         "reward_pct": 1.5,                # от суммы покупки приглашённого → бонусный баланс пригласившего
@@ -177,6 +233,7 @@ class Config:
         data = merge(data, self.overrides)
         if self.demo:
             data["general"]["demo"] = True
+            data["payments"]["card"]["enabled"] = True       # демо показывает все способы, включая карту
         if not data["dashboard"].get("token"):
             data["dashboard"]["token"] = secrets.token_urlsafe(18)
             self.save({"dashboard": {"token": data["dashboard"]["token"]}})

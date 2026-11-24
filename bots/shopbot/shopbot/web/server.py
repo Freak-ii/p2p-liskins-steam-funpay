@@ -35,6 +35,15 @@ SETTINGS = [  # (путь, подпись, тип)
     ("payments.card.fee_pct", "Карта: комиссия клиенту, %", "float"),
     ("payments.crypto.fee_pct", "Крипта: конвертация, % (не меньше 2)", "float"),
     ("payments.stars.rub_per_star", "Оплата звёздами: ₽ за 1 ⭐", "float"),
+    ("payments.wallet.address", "Общий кошелёк TON (адрес хаба)", "str"),
+    ("payments.wallet.spread_pct", "Кошелёк: спред в курсе, %", "float"),
+    ("payments.wallet.min_spread_pct", "Кошелёк: минимальный спред, %", "float"),
+    ("payments.gift.account", "Оплата подарками: аккаунт приёма (@)", "str"),
+    ("payments.gift.haircut_pct", "Оплата подарками: скидка оценки, %", "float"),
+    ("payments.skins.trade_url", "Оплата скинами: ссылка на обмен магазина", "str"),
+    ("payments.skins.haircut_pct", "Оплата скинами: скидка к Market.CSGO, %", "float"),
+    ("payments.card.enabled", "Карта (эквайринг) включена", "bool"),
+    ("miniapp.url", "Мини-приложение: постоянный адрес (https)", "str"),
     ("buyback.fee_pct", "Выкуп: комиссия, %", "float"), ("buyback.stars.usd_per_star", "Выкуп звёзд: $ за 1 ⭐", "float"),
     ("buyback.gifts.gift_account", "Аккаунт приёма подарков (@)", "str"),
     ("buyback.daily_cap_usdt", "Выкуп: лимит в сутки, USDT", "float"),
@@ -101,9 +110,9 @@ def make_app(app_state) -> web.Application:
 
     @web.middleware
     async def auth(request, handler):
-        if request.path in ("/login", "/api/ping"):
+        if request.path in ("/login", "/api/ping", "/app", "/app/"):   # /app — публичная витрина мини-приложения
             return await handler(request)
-        role = role_for(request.cookies.get(COOKIE, ""))
+        role = role_for(request.cookies.get(COOKIE, "") or request.headers.get("X-Dashboard-Token", ""))
         if not role:
             if request.path.startswith("/api/"):
                 raise web.HTTPUnauthorized(text="login required")
@@ -127,6 +136,10 @@ def make_app(app_state) -> web.Application:
         return web.Response(text=env.get_template("login.html").render(shop_name=st.cfg.get("general.shop_name")),
                             content_type="text/html")
 
+    async def miniapp(request):
+        return web.FileResponse(Path(__file__).parent / "miniapp" / "index.html",
+                                headers={"Cache-Control": "no-cache"})
+
     async def ping(request):
         return web.json_response({"app": "shopbot", "ok": True, "pid": os.getpid(), "version": VERSION})
 
@@ -139,6 +152,36 @@ def make_app(app_state) -> web.Application:
                                   "state": "running", "summary": s1, "rates": sh.rates.snapshot(),
                                   "treasury_usdt": tre.get("usdt"), "rtba_closed": closed,
                                   "bot": bool(st.cfg.get("telegram.bot_token")) or st.demo})
+
+    async def api_sources(request):
+        from shopbot.economy import sources_report
+        days = max(1.0, min(365.0, float(request.query.get("days") or 30)))
+        return web.json_response(sources_report(st.db, days))
+
+    async def api_reviews(request):
+        from shopbot.economy import review_stats
+        rows = st.db.q("SELECT order_id, user_id, rating, text, product, status, created_at FROM reviews "
+                       "ORDER BY created_at DESC LIMIT 100")
+        return web.json_response({**review_stats(st.db), "items": [dict(r) for r in rows]})
+
+    async def api_economy(request):
+        """Сводка экономики: уровни клиентов, курс выкупа, скидки и награды за 30 дней (без себестоимости по товарам)."""
+        from shopbot import economy as E
+        since = time.time() - 30 * 86400
+        tiers: dict[str, int] = {}
+        for u in st.db.q("SELECT * FROM users WHERE last_seen>=?", (since,)):
+            t = E.tier_for(st.cfg, st.db, u)
+            tiers[t.title] = tiers.get(t.title, 0) + 1
+        agg = st.db.one("SELECT SUM(loyalty_rub) loy, SUM(discount_rub) disc, SUM(ref_reward_rub) refs, "
+                        "SUM(bonus_rub) bonus, SUM(margin_rub) margin, SUM(total_rub) rev, COUNT(*) n FROM orders "
+                        "WHERE kind='buy' AND status='delivered' AND created_at>=?", (since,))
+        rate, fee, why = E.buyback_usd_per_star(st.cfg, None, st.shop.xtr_stock())
+        return web.json_response({"tiers": tiers, "orders": agg["n"] or 0, "revenue_rub": round(agg["rev"] or 0, 2),
+                                  "margin_rub": round(agg["margin"] or 0, 2), "loyalty_rub": round(agg["loy"] or 0, 2),
+                                  "discount_rub": round(agg["disc"] or 0, 2), "ref_rewards_rub": round(agg["refs"] or 0, 2),
+                                  "bonus_spent_rub": round(agg["bonus"] or 0, 2), "xtr_stock": st.shop.xtr_stock(),
+                                  "buyback": {"usd_per_star": rate, "fee_pct": fee, "why": why},
+                                  "reviews": E.review_stats(st.db)})
 
     async def dashboard(request):
         sh = st.shop
@@ -184,6 +227,8 @@ def make_app(app_state) -> web.Application:
             res = await sh.reject(oid, str(f.get("reason") or "отклонено оператором"))
         elif a == "gift":
             res = await sh.confirm_gift_received(oid, who=request["role"])
+        elif a == "asset":
+            res = await sh.confirm_asset(oid, who=request["role"])
         elif a == "note":
             st.db.update_order(oid, note=str(f.get("text") or "")[:500])
             res = "заметка сохранена"
@@ -191,6 +236,16 @@ def make_app(app_state) -> web.Application:
             res = "?"
         st.db.audit(request["role"], f"order_{a}", oid, res)
         raise web.HTTPFound(f"/orders/{oid}?msg={res}")
+
+    async def loop_page(request):
+        return render("loop.html", request, s=st.shop.loop.summary(), rows=st.shop.loop.rows(200),
+                      miniapp=(st.shop.miniapp.status() if st.shop.miniapp else st.db.kv_get("miniapp") or {}))
+
+    async def loop_action(request):
+        f = await request.post()
+        res = st.shop.loop.mark_done(int(f.get("id") or 0), str(f.get("note") or ""))
+        st.db.audit(request["role"], "loop_done", str(f.get("id")), res)
+        raise back(request, res)
 
     async def customers(request):
         q = request.query.get("q", "")
@@ -338,8 +393,11 @@ def make_app(app_state) -> web.Application:
     app = web.Application(middlewares=[auth])
     app.add_routes([
         web.get("/login", login), web.post("/login", login), web.get("/api/ping", ping),
-        web.get("/api/status", status), web.get("/", dashboard), web.get("/orders", orders),
+        web.get("/app", miniapp), web.get("/app/", miniapp),
+        web.get("/api/status", status), web.get("/api/sources", api_sources), web.get("/api/reviews", api_reviews),
+        web.get("/api/economy", api_economy), web.get("/", dashboard), web.get("/orders", orders),
         web.get("/orders/{oid}", order), web.post("/orders/{oid}", order_action), web.get("/customers", customers),
+        web.get("/loop", loop_page), web.post("/loop", loop_action),
         web.get(r"/customers/{uid:\d+}", customer), web.post(r"/customers/{uid:\d+}", customer_action),
         web.get("/rtba", rtba_page), web.post("/rtba", rtba_action), web.get("/channel", channel_page),
         web.post("/channel", channel_action), web.get("/settings", settings), web.post("/settings", settings),

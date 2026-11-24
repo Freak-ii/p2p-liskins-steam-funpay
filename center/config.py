@@ -32,13 +32,16 @@ DEFAULTS: dict = {
         "token": "",
         "poll_seconds": 10,          # как часто опрашивать ботов для сводки
         "update_check": True,        # раз в сутки смотреть, не вышла ли новая версия центра на GitHub
+        # Запуск центра не запускает ботов: каждого бота включают кнопкой «Запустить» в панели.
+        # true — разрешить автозапуск ботов, у которых в workers.<бот>.autostart стоит true (так работает демо).
+        "bots_autostart": False,
     },
     "workers": {
-        # autostart — запускать ли бота вместе с центром (меняется кнопкой в панели центра)
+        # autostart — запускать ли бота вместе с центром; действует, только если center.bots_autostart: true
         "mannbot": {"enabled": True, "autostart": False, "port": 8801, "python": ""},
         "lisbot": {"enabled": True, "autostart": False, "port": 8802, "node": ""},
         # процесс StarsBot = его панель; торговля начнётся только после мастера настройки (кошелёк TON, Fragment)
-        "starsbot": {"enabled": True, "autostart": True, "port": 8803, "python": ""},
+        "starsbot": {"enabled": True, "autostart": False, "port": 8803, "python": ""},
         # Telegram-магазин: пока выключен до настройки (токен бота, оплата, токены поставщиков)
         "shopbot": {"enabled": True, "autostart": False, "port": 8806, "python": ""},
         # TG Gift (подарки Telegram на FunPay): выключен до настройки аккаунта подарков (api_id/api_hash, вход)
@@ -141,6 +144,51 @@ DEFAULTS: dict = {
             "cooldown_hours": 6,     # одна и та же аномалия не чаще
         },
     },
+    "agents": {                      # раздел «Агенты» (center/agents/): при старте центра агенты сами не запускаются
+        "trends": {                  # center/agents/trends.py — тренды NFT-подарков, скинов CS2 и звёзд FunPay
+            "enabled": True,
+            "autostart": False,
+            "interval_minutes": 180,
+            "ai": True,              # короткий вывод Claude (ключ координатора); без ключа — только правила
+            "gifts": {"enabled": True, "max_per_run": 20, "collections": [
+                "plushpepe", "durovscap", "lootbag", "swisswatch", "signetring", "preciouspeach", "lovepotion",
+                "toybear", "diamondring", "eternalrose", "lunarsnake", "kissedfrog"]},
+            "skins": {"enabled": True, "top": 300, "min_price_usd": 1.0, "max_price_usd": 200.0, "min_volume": 20,
+                      "sale_fee_pct": 5.0, "withdraw_pct": 2.5},
+            "stars": {"enabled": True, "position": 3, "denominations": [50, 100, 250, 500, 1000]},
+            "thresholds": {"rise_pct": 10.0, "fall_pct": -10.0, "stars_move_pct": 3.0, "arb_roi_pct": 5.0},
+            "keep_days": 60,
+        },
+        "channel": {                 # center/agents/channel.py — посты для Telegram-канала магазина через одобрение
+            "enabled": True,
+            "autostart": False,      # true — запускать вместе с центром (по умолчанию только кнопкой)
+            "interval_minutes": 60,  # как часто делать проход, пока агент запущен
+            "publish_enabled": False,     # без этого одобренные посты в канал не уходят
+            "chat_id": "",           # пусто — channel.chat_id из настроек ShopBot (@DPBFastchange)
+            "bot_token": "",         # пусто — токен бота ShopBot (бот должен быть админом канала)
+            "bot_username": "",      # пусто — из ShopBot; нужен для кнопки «Открыть магазин»
+            "shop_name": "",         # пусто — general.shop_name из ShopBot
+            "button": True,          # кнопка «Открыть магазин» под постом
+            "ai": True,              # тексты пишет Claude (ключ координатора); без ключа — шаблоны
+            "sources": [],           # публичные каналы для новостей: @name или t.me/name
+            "keywords": ["звёзд", "звезд", "stars", "premium", "премиум", "подар", "gift", "nft", "steam", "telegram",
+                         "телеграм", "обновлен"],
+            "news_max_age_hours": 24,
+            "news_per_run": 2,
+            "news_per_day": 4,
+            "season_lead_days": 3,   # за сколько дней до праздника готовить черновик (у некоторых поводов своё)
+            "seasons_off": [],       # id поводов, которые не нужны (см. center/agents/seasons.py)
+            "promo_lead_days": 1,    # анонс акции за столько дней до начала
+            "promos": [],            # [{title, text, code, discount_pct, start: ГГГГ-ММ-ДД, end: ГГГГ-ММ-ДД}]
+            "achievements": [],      # новости проекта своими словами: «добавили оплату по СБП» — по посту на пункт
+            "share_milestones": True,     # пост на круглое число выполненных заказов (без денег)
+            "milestones": [100, 500, 1000, 2500, 5000, 10000],
+            "chatter_every_days": 3, # обычный пост (советы, безопасность, вопросы), если других постов не было; 0 — нет
+            "allow_prices": False,   # суммы и цены в постах агента (по умолчанию нельзя)
+            "forbidden_words": [],   # свои запрещённые слова в дополнение к встроенным
+            "notify_drafts": True,   # сообщать в Telegram центра о новых черновиках
+        },
+    },
 }
 
 
@@ -186,7 +234,7 @@ def default_home() -> Path:
 # Демо живёт рядом с боевым центром на том же компьютере: свои порты (боевые 8800–8803 могут быть заняты
 # работающими ботами) и автозапуск всех ботов — демо нужно, чтобы посмотреть всё сразу.
 DEMO_DEFAULTS: dict = {
-    "center": {"port": 18800, "update_check": False},
+    "center": {"port": 18800, "update_check": False, "bots_autostart": True},
     "workers": {
         "mannbot": {"autostart": True, "port": 18801},
         "lisbot": {"autostart": True, "port": 18802},
@@ -246,6 +294,10 @@ class CenterConfig:
 
     def worker(self, name: str) -> dict:
         return self.data["workers"].get(name, {})
+
+    def autostart(self, name: str) -> bool:
+        """Запускать ли бота вместе с центром. По умолчанию нет: боты стартуют только по кнопке."""
+        return bool(self.data["center"].get("bots_autostart")) and bool(self.worker(name).get("autostart", False))
 
     def save(self, updates: dict) -> None:
         self.user = _merge(self.user, updates)

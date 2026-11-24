@@ -59,6 +59,7 @@ def test_demo_defaults_do_not_clash_with_live_ports(tmp_path):
     assert live["center"]["port"] == 8800 and not live.worker("mannbot")["autostart"]
     ports = {demo["center"]["port"]} | {demo.worker(n)["port"] for n in ("mannbot", "lisbot", "starsbot")}
     assert ports == {18800, 18801, 18802, 18803}
-    assert all(demo.worker(n)["autostart"] for n in ("mannbot", "lisbot", "starsbot"))
+    assert all(demo.autostart(n) for n in ("mannbot", "lisbot", "starsbot"))
+    assert not any(live.autostart(n) for n in ("mannbot", "lisbot", "starsbot", "shopbot", "tggift"))
     demo.save({"workers": {"lisbot": {"autostart": False}}})
-    assert not demo.worker("lisbot")["autostart"] and demo.worker("mannbot")["port"] == 18801
+    assert not demo.autostart("lisbot") and demo.worker("mannbot")["port"] == 18801

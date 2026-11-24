@@ -61,10 +61,19 @@ CREATE TABLE IF NOT EXISTS channel_posts (
     status TEXT DEFAULT 'draft', updated_at REAL, published_at REAL
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS reviews (
+    order_id TEXT PRIMARY KEY, user_id INTEGER, rating INTEGER, text TEXT DEFAULT '', product TEXT DEFAULT '',
+    status TEXT DEFAULT 'new', bonus_rub REAL DEFAULT 0, created_at REAL, updated_at REAL
+);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, role TEXT, action TEXT, target TEXT, result TEXT
 );
 """
+
+# новые колонки старых таблиц (база на ПК уже создана — CREATE TABLE IF NOT EXISTS их не добавит)
+MIGRATIONS = [("users", "source", "TEXT DEFAULT ''"), ("users", "source_at", "REAL"),
+              ("orders", "source", "TEXT DEFAULT ''"), ("orders", "loyalty_rub", "REAL DEFAULT 0"),
+              ("orders", "bonus_rub", "REAL DEFAULT 0"), ("orders", "tier", "TEXT DEFAULT ''")]
 
 ACCOUNTS = {"rub": "balance_rub", "bonus": "bonus_rub", "stars": "stars_credit", "usdt": "usdt"}
 ORDER_COLS = {
@@ -72,7 +81,7 @@ ORDER_COLS = {
     "fee_rub", "total_rub", "margin_rub", "pay_method", "pay_currency", "pay_amount", "rate", "breakdown",
     "payment_id", "supplier", "supplier_ref", "supplier_status", "payout_kind", "payout_amount", "payout_asset",
     "payout_id", "fail_reason", "referrer_id", "ref_reward_rub", "created_at", "paid_at", "delivered_at",
-    "expires_at", "note",
+    "expires_at", "note", "source", "loyalty_rub", "bonus_rub", "tier",
 }
 
 
@@ -88,6 +97,10 @@ class Database:
             if self.path != ":memory:":
                 self.con.execute("PRAGMA journal_mode=WAL")
             self.con.executescript(SCHEMA)
+            for table, col, decl in MIGRATIONS:
+                have = {r[1] for r in self.con.execute(f"PRAGMA table_info({table})")}
+                if col not in have:
+                    self.con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             self.con.commit()
         self.listeners: list = []
 
@@ -154,6 +167,16 @@ class Database:
         self.exec("UPDATE users SET username=COALESCE(NULLIF(?,''),username), first_name=COALESCE(NULLIF(?,''),"
                   "first_name), last_seen=? WHERE id=?", (username, first_name, now, uid))
         return self.user(uid), False
+
+    def set_source(self, uid: int, source: str, window_days: float = 30) -> bool:
+        """Метка трафика: первая побеждает; новая метка — только если старой больше window_days дней."""
+        u = self.user(uid)
+        if u is None or not source:
+            return False
+        if u["source"] and time.time() - float(u["source_at"] or 0) < window_days * 86400:
+            return False
+        self.exec("UPDATE users SET source=?, source_at=? WHERE id=?", (source, time.time(), uid))
+        return True
 
     def credit(self, uid: int, account: str, delta: float, kind: str, ref: str = "", note: str = "") -> None:
         """Любое движение баланса клиента — только через журнал (клиент видит его в «Балансе»)."""

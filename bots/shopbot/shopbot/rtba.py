@@ -19,7 +19,9 @@ POINTS: list[tuple[str, str, str]] = [
     ("buy.stars", "Продажа звёзд", "Товары"), ("buy.gift", "Продажа подарков", "Товары"),
     ("buy.premium", "Продажа Premium", "Товары"), ("buy.steam_keys", "Ключи для Steam", "Товары"),
     ("sell.stars", "Выкуп звёзд за крипту", "Выкуп"), ("sell.gift", "Выкуп подарков", "Выкуп"),
-    ("pay.card", "Оплата картой (ЮKassa)", "Оплата"), ("pay.crypto", "Оплата криптой", "Оплата"),
+    ("pay.wallet", "Крипта на общий кошелёк", "Оплата"), ("pay.gift", "Оплата подарками", "Оплата"),
+    ("pay.skins", "Оплата скинами Steam", "Оплата"),
+    ("pay.card", "Оплата картой (эквайринг)", "Оплата"), ("pay.crypto", "Оплата криптой (@CryptoBot)", "Оплата"),
     ("pay.stars", "Оплата звёздами", "Оплата"), ("pay.balance", "Оплата с баланса", "Оплата"),
     ("payout.crypto", "Выплаты криптой", "Выплаты"), ("payout.stars", "Выплаты звёздами", "Выплаты"),
     ("referral", "Реферальная программа", "Функции"), ("channel.autopost", "Автопост цен в канал", "Функции"),
@@ -135,6 +137,17 @@ class RTBA:
         prov = self.shop.providers.get(method)
         if prov is None or not prov.configured:
             return Check(False, "не настроен провайдер", hard=True)
+        if method == "wallet":
+            if not self.shop.rates.fresh:
+                return Check(False, f"курс Bybit устарел ({self.shop.rates.age_minutes:.0f} мин)", hard=True)
+            from shopbot.pricing import wallet_spread
+            return Check(True, value=f"спред {wallet_spread(self.cfg):g}% · {prov.address[:6]}…{prov.address[-4:]}")
+        if method == "gift":
+            return Check(True, value=f"на {self.cfg.get('payments.gift.account') or self.cfg.get('buyback.gifts.gift_account')}")
+        if method == "skins":
+            if not self.shop.rates.fresh:
+                return Check(False, "курс USDT устарел", hard=True)
+            return Check(True, value=f"скидка оценки {self.cfg.get('payments.skins.haircut_pct')}%")
         if method == "crypto" and not self.shop.rates.fresh:
             return Check(False, f"курс Bybit устарел ({self.shop.rates.age_minutes:.0f} мин)", hard=True)
         if method == "crypto":
@@ -189,7 +202,7 @@ class RTBA:
     async def tick(self) -> None:
         for product in ("stars", "gift", "premium", "steam_keys"):
             await self._apply(f"buy.{product}", await self.check_product(product))
-        for method in ("card", "crypto", "stars", "balance"):
+        for method in ("wallet", "gift", "skins", "card", "crypto", "stars", "balance"):
             await self._apply(f"pay.{method}", await self.check_payment(method))
         await self._apply("payout.crypto", await self.check_payout_crypto())
         await self._apply("payout.stars", Check(self.is_open("buy.stars"), "" if self.is_open("buy.stars")
@@ -200,10 +213,27 @@ class RTBA:
                                             value=f"{self.cfg.get('referral.reward_pct')}%"))
         ch_ok = bool(self.cfg.get("channel.enabled") and self.cfg.get("channel.chat_id"))
         await self._apply("channel.autopost", Check(ch_ok, "" if ch_ok else "канал не подключён", hard=True))
+        await self.refresh_xtr()
         self.db.kv_set("rtba_tick", time.time())
 
+    async def refresh_xtr(self) -> None:
+        """Запас звёзд на балансе бота (getMyStarBalance): от него зависит курс выкупа (economy.buyback_usd_per_star)."""
+        bot = self.shop.bot
+        if bot is None or self.shop.demo or not getattr(bot, "token", ""):
+            return
+        last = self.db.kv_get("xtr_balance") or {}
+        if time.time() - float(last.get("ts") or 0) < 600:
+            return
+        try:
+            r = await bot.call("getMyStarBalance")
+        except Exception:  # noqa: BLE001 — метод может отсутствовать у старого Bot API
+            return
+        if isinstance(r, dict) and "amount" in r:
+            self.db.kv_set("xtr_balance", {"stars": int(r["amount"]), "ts": time.time()})
+
     # ------------------------------------------------------------------ проверки операций
-    def check_order(self, user, product: str, total_rub: float, method: str) -> Check:
+    def check_order(self, user, product: str, total_rub: float, method: str, *, limit_mult: float = 1.0,
+                    recipient: str = "") -> Check:
         if user is None:
             return Check(False, "клиент не найден")
         if user["blocked"]:
@@ -217,6 +247,15 @@ class RTBA:
             return Check(False, f"заказ больше {mx:g} ₽ — напишите в поддержку")
         new = time.time() - float(user["created_at"] or 0) < 86400 and not user["first_order_at"]
         limit = float(self.cfg.get("rtba.new_user_daily_rub" if new else "rtba.user_daily_rub") or 0)
+        if not new:
+            limit *= max(1.0, float(limit_mult or 1))          # киты: лимит уровня лояльности
+        mr = int(self.cfg.get("antiscam.max_recipients_per_day") or 0)
+        if mr and recipient and product in ("stars", "gift", "premium"):
+            rows = self.db.q("SELECT DISTINCT lower(recipient) r FROM orders WHERE user_id=? AND kind='buy' AND "
+                             "created_at>=? AND status NOT IN ('expired','cancelled')", (user["id"], time.time() - 86400))
+            seen = {str(r["r"] or "").lstrip("@") for r in rows}
+            if recipient.lstrip("@").lower() not in seen and len(seen) >= mr:
+                return Check(False, f"за сутки уже {len(seen)} разных получателей — напишите в поддержку")
         spent = self.db.user_spent_since(user["id"], time.time() - 86400)
         if limit and spent + total_rub > limit:
             return Check(False, f"суточный лимит {limit:g} ₽ (уже {spent:.0f} ₽)")

@@ -223,6 +223,7 @@ DEFAULTS: dict[str, Any] = {
     "rates": {
         "source": "auto",                # auto — курс TON/RUB из сети (CoinGecko), manual — только ton_rub
         "ton_rub": 0.0,                  # курс вручную / запасной
+        "usdt_rub": 0.0,                 # почём вы покупаете USDT, ₽ (0 — живой курс Rapira)
         "refresh_minutes": 15,
     },
     "deal": {
@@ -276,10 +277,12 @@ DEFAULTS: dict[str, Any] = {
         "withdraw_fee_pct": 3.0,         # комиссия вывода денег с FunPay (зависит от способа)
         "withdraw_fee_fixed_rub": 0.0,
         "cost_rate_rub": 0.0,            # >0 — считать себестоимость по этому курсу ₽/TON вместо журнала пополнений
+        "cost_basis": "live",            # live — себестоимость по цене следующей закупки; topups — по журналу пополнений
+        "star_usd": 0.015,               # цена звезды на Fragment в долларах (0 — брать из прошлых покупок в TON)
         "exchange_spread_pct": 2.0,      # насколько дороже биржевого курса вы покупаете TON (P2P, обменник)
         "deposit_fee_ton": 0.0,          # комиссия за перевод TON на кошелёк бота (за одно пополнение)
         "typical_topup_ton": 50.0,       # обычный размер пополнения — чтобы разложить комиссию на звёзды
-        "gas_per_purchase_ton": 0.006,   # комиссия сети за одну покупку (уточняется по факту)
+        "gas_per_purchase_ton": 0.001,   # комиссия сети за одну покупку (факт 103 заказов — 0.00053)
         "balance_mismatch_alert_ton": 1.0,   # тревога, если баланс расходится с учётом больше чем на столько
     },
     "notifications": {

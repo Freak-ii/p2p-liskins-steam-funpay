@@ -81,7 +81,7 @@ async def run_scenario(shop, bot: ShopTelegram) -> dict:
     # выкуп звёзд за USDT (небольшой — автоматически)
     await bot.on_callback(BOB, "sell")
     await bot.on_callback(BOB, "sell:stars")
-    await bot.on_text(BOB, "", "", "800")
+    await bot.on_text(BOB, "", "", "700")
     await bot.on_callback(BOB, "sellok")
     await bot.on_callback(BOB, last_button(bot, BOB, "demo:pay:"))
     await settle(shop)

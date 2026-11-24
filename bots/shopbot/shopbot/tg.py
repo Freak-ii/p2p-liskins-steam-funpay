@@ -13,6 +13,7 @@ from typing import Any
 
 import aiohttp
 
+from shopbot import economy as E
 from shopbot import texts as T
 from shopbot.engine import STATUS_TITLES, parse_trade_url, parse_username
 from shopbot.pricing import METHOD_TITLES, apply_method
@@ -107,6 +108,41 @@ class ShopTelegram:
                 except Exception:  # noqa: BLE001
                     log.exception("обработка апдейта")
 
+    def fees_text(self, r: dict) -> str:
+        from shopbot.pricing import gift_star_rub, wallet_spread
+        c, rt = self.cfg, self.shop.rtba
+        lines = ["ℹ️ <b>Комиссии и курсы — честно</b>\n"]
+        if rt.is_open("pay.wallet"):
+            sp = wallet_spread(c)
+            lines.append(f"💎 Крипта на кошелёк TON: курс USDT <b>{r['usdt_rub'] * (1 - sp / 100):.2f} ₽</b>, TON "
+                         f"<b>{r['ton_rub'] * (1 - sp / 100):.2f} ₽</b> (биржа Bybit −{sp:g}%), других комиссий нет")
+        if rt.is_open("pay.crypto"):
+            fee = max(float(c.get("payments.crypto.fee_pct") or 0), float(c.get("payments.crypto.min_fee_pct") or 0))
+            lines.append(f"🪙 @CryptoBot: курс Bybit — USDT <b>{r['usdt_rub']} ₽</b>; конвертация <b>+{fee:g}%</b>")
+        if rt.is_open("pay.stars"):
+            lines.append(f"⭐ Звёзды Telegram: 1 ⭐ = <b>{c.get('payments.stars.rub_per_star'):g} ₽</b>, без комиссии")
+        if rt.is_open("pay.gift"):
+            lines.append(f"🎁 Подарками: 1 ⭐ цены продажи подарка = <b>{gift_star_rub(c):.2f} ₽</b>")
+        if rt.is_open("pay.skins"):
+            lines.append(f"🎮 Скинами Steam: по ценам {c.get('payments.skins.market')} "
+                         f"−{c.get('payments.skins.haircut_pct'):g}%")
+        if rt.is_open("pay.card"):
+            lines.append(f"💳 Карта: <b>+{c.get('payments.card.fee_pct'):g}%</b> — эквайринг банка")
+        lines.append("👛 Баланс магазина: без комиссии\n")
+        lines.append(f"💸 <b>Продажа нам</b>: комиссия <b>{c.get('buyback.fee_pct'):g}%</b>.")
+        lines.append(f"🤝 Рефералка: <b>{c.get('referral.reward_pct'):g}%</b> от покупок друга на ваш бонусный баланс, "
+                     f"другу −{c.get('referral.friend_discount_pct'):g}% на первый заказ.\n")
+        lines.append("Перед оплатой вы всегда видите разбивку: цена товара, скидка, курс и итог.")
+        return "\n".join(lines)
+
+    async def setup_menu_button(self, url: str = "") -> None:
+        """Кнопка меню в чате бота открывает мини-приложение (адрес даёт shopbot.miniapp, только https)."""
+        url = (url or str(self.cfg.get("miniapp.url") or "")).strip()
+        if not url.startswith("https://"):
+            return
+        text = str(self.cfg.get("miniapp.menu_text") or "Магазин")[:32]
+        await self.call("setChatMenuButton", menu_button={"type": "web_app", "text": text, "web_app": {"url": url}})
+
     # ------------------------------------------------------------------ вход
     @property
     def bot_username(self) -> str:
@@ -159,19 +195,24 @@ class ShopTelegram:
     async def on_text(self, uid: int, username: str, first_name: str, text: str, lang: str = "ru") -> None:
         text = text.strip()
         if text.startswith("/start"):
-            arg = text.split(maxsplit=1)[1] if " " in text else ""
+            raw = text.split(maxsplit=1)[1] if " " in text else ""
+            ref_code, src, arg = E.parse_start(raw)
             ref = None
-            if arg.startswith("ref_"):
-                r = self.db.user_by_ref(arg[4:])
+            if ref_code:
+                r = self.db.user_by_ref(ref_code)
                 ref = r["id"] if r else None
             user, new = self.db.touch_user(uid, username, first_name, lang, referred_by=ref)
+            if src:
+                self.db.set_source(uid, src, float(self.cfg.get("sources.window_days") or 30))
+            elif new and ref:
+                self.db.set_source(uid, "ref", float(self.cfg.get("sources.window_days") or 30))
             if new and user["referred_by"]:
                 await self.send(user["referred_by"], "🤝 По вашей ссылке пришёл новый друг!")
             self.db.set_session(uid, "")
             await self.menu(uid)
             if arg in ("stars", "gift", "premium", "steam_keys"):
                 await self.on_callback(uid, f"buy:{arg}")
-            elif arg in ("sell", "ref", "fees"):
+            elif arg in ("sell", "ref", "fees", "level"):
                 await self.on_callback(uid, arg)
             return
         self.db.touch_user(uid, username, first_name, lang)
@@ -183,6 +224,14 @@ class ShopTelegram:
             await self.on_callback(uid, "balance")
             return
         state, data = self.db.session(uid)
+        if state == "review_text":
+            self.db.set_session(uid, "")
+            o = self.db.order(data.get("order", ""))
+            r = self.db.one("SELECT rating FROM reviews WHERE order_id=?", (data.get("order", ""),))
+            if o is not None and r is not None:
+                await self.send(uid, await self.shop.add_review(uid, o["id"], int(r["rating"]), text),
+                                [("◀️ В меню", "menu")])
+                return
         if state == "stars_amount" or state == "sell_stars_amount" or state == "keys_qty":
             try:
                 n = int(text.replace(" ", ""))
@@ -337,14 +386,17 @@ class ShopTelegram:
             await self.send(uid, await shop.withdraw_stars(uid))
         elif head == "ref":
             await self.referral(uid)
+        elif head == "level":
+            await self.level(uid)
+        elif head == "rv" and len(parts) == 3:
+            oid, n = parts[1], int(parts[2]) if parts[2].isdigit() else 5
+            msg = await shop.add_review(uid, oid, n)
+            if "пару слов" in msg:
+                self.db.set_session(uid, "review_text", {"order": oid})
+            await self.send(uid, msg, [("◀️ В меню", "menu")])
         elif head == "fees":
             r = shop.rates.snapshot()
-            await self.send(uid, T.FEES.format(
-                card=self.cfg.get("payments.card.fee_pct"), usdt=r["usdt_rub"], ton=r["ton_rub"],
-                crypto=max(float(self.cfg.get("payments.crypto.fee_pct")), float(self.cfg.get(
-                    "payments.crypto.min_fee_pct"))), xtr=self.cfg.get("payments.stars.rub_per_star"),
-                fee=self.cfg.get("buyback.fee_pct"), ref=self.cfg.get("referral.reward_pct"),
-                disc=self.cfg.get("referral.friend_discount_pct")), [("◀️ В меню", "menu")])
+            await self.send(uid, self.fees_text(r), [("◀️ В меню", "menu")])
         elif head == "orders":
             await self.orders(uid)
         elif head == "support":
@@ -360,6 +412,8 @@ class ShopTelegram:
                 res = await shop.admin_delivered(oid)
             elif action == "gift":
                 res = await shop.confirm_gift_received(oid, who=f"tg:{uid}")
+            elif action == "asset":
+                res = await shop.confirm_asset(oid, who=f"tg:{uid}")
             else:
                 res = "?"
             self.db.audit(f"tg:{uid}", f"adm_{action}", oid, res)
@@ -386,13 +440,16 @@ class ShopTelegram:
         to = "ваш Steam (обмен)" if d["product"] == "steam_keys" else f"@{d['recipient']}"
         lines, rows = [], []
         for m in shop.methods_for(d["product"]):
-            assets = (self.cfg.get("payments.crypto.assets") or ["USDT"]) if m == "crypto" else [""]
+            assets = (self.cfg.get(f"payments.{m}.assets") or ["USDT"]) if m in ("crypto", "wallet") else [""]
             for a in assets:
                 qq = apply_method(self.cfg, type(q)(**{**q.__dict__, "lines": []}), m, shop.rates, a or "USDT")
                 label = METHOD_TITLES[m] + (f" {a}" if a else "")
-                amt = (f"{qq.pay_amount:g} {qq.asset}" if m == "crypto" else
-                       f"{int(qq.pay_amount)} ⭐" if m == "stars" else f"{qq.total_rub:.2f} ₽")
-                fee = f" (комиссия {qq.fee_pct:g}%)" if qq.fee_pct else " (без комиссии)"
+                amt = (f"{qq.pay_amount:g} {qq.asset}" if m in ("crypto", "wallet") else
+                       f"{int(qq.pay_amount)} ⭐" if m == "stars" else
+                       f"подарки на {int(qq.pay_amount)} ⭐" if m == "gift" else
+                       f"скины на {qq.pay_amount:g} $" if m == "skins" else f"{qq.total_rub:.2f} ₽")
+                fee = (f" (курс {qq.rate:.2f} ₽)" if m == "wallet" else
+                       f" (комиссия {qq.fee_pct:g}%)" if qq.fee_pct else " (без комиссии)")
                 lines.append(f"• {label}: <b>{amt}</b>{fee}")
                 rows.append([(f"{label} · {amt}", f"pay:{m}:{a}" if a else f"pay:{m}")])
         if not rows:
@@ -422,11 +479,24 @@ class ShopTelegram:
         head = f"🧾 <b>Заказ #{o['id']}</b>\n{lines}\n\n"
         if method == "balance":
             return
-        amount = (f"{o['pay_amount']:g} {o['pay_currency']}" if method == "crypto" else
+        amount = (f"{o['pay_amount']:g} {o['pay_currency']}" if method in ("crypto", "wallet") else
                   f"{int(o['pay_amount'])} ⭐" if method == "stars" else f"{o['total_rub']:.2f} ₽")
-        ttl = int(self.cfg.get("payments.order_ttl_minutes") or 30)
+        ttl = int(self.cfg.get(f"payments.{method}.ttl_minutes") or self.cfg.get("payments.order_ttl_minutes") or 30)
         rows = []
-        if pay.get("invoice"):
+        if method == "wallet":
+            text = T.PAY_WALLET.format(amount=amount, address=pay.get("address", ""), comment=pay.get("comment", ""),
+                                       ttl=ttl)
+            if pay.get("url"):
+                rows.append([("💎 Открыть в Tonkeeper", {"url": pay["url"]})])
+            await self.send(uid, head + text, rows or None)
+        elif method == "gift":
+            acc = self.cfg.get("payments.gift.account") or self.cfg.get("buyback.gifts.gift_account") or "@shop_gifts"
+            await self.send(uid, head + T.PAY_GIFT.format(stars=int(o["pay_amount"]), account=acc, ttl=ttl, oid=o["id"]))
+        elif method == "skins":
+            await self.send(uid, head + T.PAY_SKINS.format(usd=o["pay_amount"], trade=self.cfg.get("payments.skins.trade_url"),
+                                                           market=self.cfg.get("payments.skins.market"), ttl=ttl,
+                                                           oid=o["id"]))
+        elif pay.get("invoice"):
             await self.send(uid, head + T.PAY_LINK.format(amount=amount, ttl=ttl))
             await self.send_invoice(uid, o["id"], "Заказ " + o["id"], json.loads(o["breakdown"])[0][0],
                                     int(o["pay_amount"]))
@@ -528,6 +598,23 @@ class ShopTelegram:
                                           disc=c.get("referral.friend_discount_pct"),
                                           dmax=c.get("referral.friend_discount_max_rub"), n=n, earned=earned),
                         [[("📤 Поделиться", {"url": f"https://t.me/share/url?url={link}"})], [("◀️ В меню", "menu")]])
+
+    async def level(self, uid: int) -> None:
+        u = self.db.user(uid)
+        t = E.tier_for(self.cfg, self.db, u)
+        tiers = sorted(self.cfg.get("loyalty.tiers") or [], key=lambda x: float(x.get("min_rub") or 0))
+        table = "\n".join(f"{'▶️' if x['id'] == t.id else '▫️'} <b>{x.get('title')}</b> от {float(x.get('min_rub') or 0):,.0f} ₽: "
+                          f"−{x.get('discount_pct', 0):g}% к покупкам, +{x.get('buyback_bonus_pct', 0):g}% к выкупу"
+                          .replace(",", " ") for x in tiers)
+        nxt = (f"\nДо уровня «{t.next_title}» осталось <b>{max(0.0, t.next_rub - t.turnover):,.0f} ₽</b>."
+               .replace(",", " ") if t.next_title else "\nУ вас максимальный уровень 🐳")
+        rv = E.review_stats(self.db)
+        await self.send(uid, f"🏅 <b>Ваш уровень: {t.title}</b>\nОборот за "
+                             f"{self.cfg.get('loyalty.window_days') or 30} дн.: <b>{t.turnover:,.0f} ₽</b>"
+                             .replace(",", " ") + nxt + "\n\n" + table +
+                        (f"\n\n⭐ Рейтинг магазина: <b>{rv['avg']:g}</b> ({rv['count']} отзывов)" if rv["count"] else "")
+                        + "\n\nКрупный объём? Напишите в поддержку — обсудим персональные условия.",
+                        [("◀️ В меню", "menu")])
 
     async def orders(self, uid: int) -> None:
         rows = self.db.q("SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 10", (uid,))
