@@ -97,8 +97,10 @@ class Center:
             if problem:
                 w._set(MISSING_DEPS, problem)
                 continue
-            if self.cfg.worker(name).get("autostart", True):
+            if self.cfg.autostart(name):
                 await w.start("автозапуск центра")
+            elif not w.detail:
+                w._set(w.state, "не запущен: запустите кнопкой «Запустить»")
         self._poll_task = asyncio.create_task(self._poll_loop(), name="center-poll")
 
     async def shutdown(self, stop_timeout: float = 15) -> None:
@@ -150,7 +152,7 @@ class Center:
                 sm = self.summaries.get(name) or {}
                 rows.append(f"{name}: {w.state}{' · ' + w.detail if w.detail else ''}"
                             f"{' · торговля ' + str(sm.get('bot_state')) if sm.get('bot_state') else ''}"
-                            f" · автозапуск {'вкл' if self.cfg.worker(name).get('autostart', True) else 'выкл'}")
+                            f" · автозапуск {'вкл' if self.cfg.autostart(name) else 'выкл'}")
             return "\n".join(rows)
         name, action = parts[0].lower(), (parts[1].lower() if len(parts) > 1 else "")
         w = self.workers.get(name)
@@ -200,7 +202,7 @@ class Center:
     def overview(self) -> dict:
         bots = []
         for name, w in self.workers.items():
-            bots.append({**w.info(), "autostart": bool(self.cfg.worker(name).get("autostart", True)), "summary": self.summaries.get(name), "summary_at": self.summary_at.get(name)})
+            bots.append({**w.info(), "autostart": self.cfg.autostart(name), "autostart_allowed": bool(self.cfg["center"].get("bots_autostart")), "summary": self.summaries.get(name), "summary_at": self.summary_at.get(name)})
         alerts = self.alerts(30)
         return {
             "uptime": round(time.time() - self.started_at), "demo": self.demo, "bots": bots,

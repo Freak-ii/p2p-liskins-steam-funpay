@@ -44,13 +44,39 @@ def test_autostart_toggle_and_defaults(tmp_path):
             await c.get(f"/login?token={token}", allow_redirects=False)
             d = await (await c.get("/api/overview")).json()
             auto = {b["name"]: b["autostart"] for b in d["bots"]}
-            assert auto == {"starsbot": True, "mannbot": False, "lisbot": False, "shopbot": False, "tggift": False}
+            # по умолчанию центр не запускает ни одного бота сам
+            assert not any(auto.values()) and not any(b["autostart_allowed"] for b in d["bots"])
             r = await c.post("/api/workers/mannbot/autostart_on")
             assert (await r.json())["ok"]
-            r = await c.post("/api/workers/starsbot/autostart_off")
             d = await (await c.get("/api/overview")).json()
-            auto = {b["name"]: b["autostart"] for b in d["bots"]}
-            assert auto == {"starsbot": False, "mannbot": True, "lisbot": False, "shopbot": False, "tggift": False}
+            assert not any(b["autostart"] for b in d["bots"])                    # без center.bots_autostart не действует
         assert Center(tmp_path).cfg.worker("mannbot")["autostart"] is True       # сохранено в center.yaml
+        c2 = Center(tmp_path)
+        c2.cfg.save({"center": {"bots_autostart": True}})
+        assert c2.cfg.autostart("mannbot") and not c2.cfg.autostart("starsbot")
+        c2.events.close()
+        center.events.close()
+    asyncio.run(go())
+
+
+def test_center_start_never_starts_bots_by_itself(tmp_path):
+    """Старый center.yaml с autostart: true у бота (как на ПК) не запускает ботов: только кнопка «Запустить»."""
+    async def go():
+        center = Center(tmp_path)
+        center.cfg.save({"workers": {n: {"autostart": True} for n in center.workers}})
+        started = []
+        for w in center.workers.values():
+            w.check_deps = lambda: None
+            async def fake_start(reason="", _n=w.name):
+                started.append(_n)
+            w.start = fake_start
+        for svc in (center.monitor, center.coordinator, center.backup, center.inventory, center.tg, center.updates):
+            async def noop(*a, **k):
+                return None
+            svc.start = noop
+        await center.start()
+        assert started == []
+        assert all("кнопкой" in w.detail for w in center.workers.values() if w.state == "stopped")
+        center._poll_task.cancel()
         center.events.close()
     asyncio.run(go())

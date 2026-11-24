@@ -32,13 +32,16 @@ DEFAULTS: dict = {
         "token": "",
         "poll_seconds": 10,          # как часто опрашивать ботов для сводки
         "update_check": True,        # раз в сутки смотреть, не вышла ли новая версия центра на GitHub
+        # Запуск центра не запускает ботов: каждого бота включают кнопкой «Запустить» в панели.
+        # true — разрешить автозапуск ботов, у которых в workers.<бот>.autostart стоит true (так работает демо).
+        "bots_autostart": False,
     },
     "workers": {
-        # autostart — запускать ли бота вместе с центром (меняется кнопкой в панели центра)
+        # autostart — запускать ли бота вместе с центром; действует, только если center.bots_autostart: true
         "mannbot": {"enabled": True, "autostart": False, "port": 8801, "python": ""},
         "lisbot": {"enabled": True, "autostart": False, "port": 8802, "node": ""},
         # процесс StarsBot = его панель; торговля начнётся только после мастера настройки (кошелёк TON, Fragment)
-        "starsbot": {"enabled": True, "autostart": True, "port": 8803, "python": ""},
+        "starsbot": {"enabled": True, "autostart": False, "port": 8803, "python": ""},
         # Telegram-магазин: пока выключен до настройки (токен бота, оплата, токены поставщиков)
         "shopbot": {"enabled": True, "autostart": False, "port": 8806, "python": ""},
         # TG Gift (подарки Telegram на FunPay): выключен до настройки аккаунта подарков (api_id/api_hash, вход)
@@ -186,7 +189,7 @@ def default_home() -> Path:
 # Демо живёт рядом с боевым центром на том же компьютере: свои порты (боевые 8800–8803 могут быть заняты
 # работающими ботами) и автозапуск всех ботов — демо нужно, чтобы посмотреть всё сразу.
 DEMO_DEFAULTS: dict = {
-    "center": {"port": 18800, "update_check": False},
+    "center": {"port": 18800, "update_check": False, "bots_autostart": True},
     "workers": {
         "mannbot": {"autostart": True, "port": 18801},
         "lisbot": {"autostart": True, "port": 18802},
@@ -246,6 +249,10 @@ class CenterConfig:
 
     def worker(self, name: str) -> dict:
         return self.data["workers"].get(name, {})
+
+    def autostart(self, name: str) -> bool:
+        """Запускать ли бота вместе с центром. По умолчанию нет: боты стартуют только по кнопке."""
+        return bool(self.data["center"].get("bots_autostart")) and bool(self.worker(name).get("autostart", False))
 
     def save(self, updates: dict) -> None:
         self.user = _merge(self.user, updates)
