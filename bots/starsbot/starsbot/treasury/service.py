@@ -166,8 +166,9 @@ class Treasury:
         s["bybit"] = {"enabled": self.bybit_on}
         if self.bybit_on:
             try:
-                b = await self.bybit.balances(("USDT", "TON"))
+                # тикер первым: по нему клиент узнаёт, что монета на бирже теперь GRAM
                 tk = await self.bybit.ticker(self.sub("bybit").get("symbol") or "TONUSDT")
+                b = await self.bybit.balances(("USDT", "TON"))
                 s["bybit"].update(usdt_unified=b.get("UNIFIED", "USDT"), usdt_fund=b.get("FUND", "USDT"),
                                   ton_unified=b.get("UNIFIED", "TON"), ton_fund=b.get("FUND", "TON"),
                                   usdt=b.total("USDT"), ton=b.total("TON"), bid=tk.bid, ask=tk.ask, last=tk.last)

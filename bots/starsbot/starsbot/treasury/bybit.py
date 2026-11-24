@@ -99,6 +99,10 @@ def sign(secret: str, ts: str, key: str, recv: str, payload: str) -> str:
     return hmac.new(secret.encode(), (ts + key + recv + payload).encode(), hashlib.sha256).hexdigest()
 
 
+# Toncoin переименован в Gram: Bybit снял пару TONUSDT (код 10001 Not supported symbols) и торгует GRAMUSDT
+RENAMED = {"TONUSDT": "GRAMUSDT"}
+
+
 class BybitClient:
     def __init__(self, api_key: str, api_secret: str, *, base_url: str = "https://api.bybit.com",
                  recv_window: int = 10000, allowed_addresses: list[str] | None = None, dry_run: bool = False):
@@ -110,6 +114,26 @@ class BybitClient:
         self.dry_run = dry_run
         self._session: aiohttp.ClientSession | None = None
         self._time_offset_ms = 0
+        self._coins: dict[str, str] = {}              # TON → GRAM, если пара на бирже переименована
+
+    def coin(self, name: str) -> str:
+        return self._coins.get(name, name)
+
+    def _symbol(self, symbol: str) -> str:
+        return RENAMED.get(symbol, symbol) if self._coins else symbol
+
+    async def _market(self, path: str, symbol: str) -> dict:
+        """Публичный запрос по паре; если старое имя снято — переходим на новое и запоминаем новую монету."""
+        try:
+            return await self._call("GET", path, {"category": "spot", "symbol": self._symbol(symbol)}, auth=False)
+        except BybitError as e:
+            if self._coins or symbol not in RENAMED or str(e.code) != "10001":
+                raise
+            res = await self._call("GET", path, {"category": "spot", "symbol": RENAMED[symbol]}, auth=False)
+            if not res.get("list"):
+                raise
+            self._coins = {"TON": "GRAM"}
+            return res
 
     @property
     def configured(self) -> bool:
@@ -167,14 +191,13 @@ class BybitClient:
 
     # ------------------------------------------------------------------ рынок
     async def ticker(self, symbol: str = "TONUSDT") -> Ticker:
-        res = await self._call("GET", "/v5/market/tickers", {"category": "spot", "symbol": symbol}, auth=False)
+        res = await self._market("/v5/market/tickers", symbol)
         row = (res.get("list") or [{}])[0]
         last = float(row.get("lastPrice") or 0)
         return Ticker(bid=float(row.get("bid1Price") or last), ask=float(row.get("ask1Price") or last), last=last)
 
     async def instrument(self, symbol: str = "TONUSDT") -> Instrument:
-        res = await self._call("GET", "/v5/market/instruments-info", {"category": "spot", "symbol": symbol},
-                               auth=False)
+        res = await self._market("/v5/market/instruments-info", symbol)
         row = (res.get("list") or [{}])[0]
         lot, pf = row.get("lotSizeFilter") or {}, row.get("priceFilter") or {}
         return Instrument(base_precision=str(lot.get("basePrecision") or "0.01"),
@@ -184,7 +207,7 @@ class BybitClient:
 
     async def coin_chain(self, coin: str = "TON", chain: str = "TON") -> dict:
         """Комиссия и минимум вывода для сети: {'withdraw_fee': 0.05, 'withdraw_min': 0.5, 'can_withdraw': True}."""
-        res = await self._call("GET", "/v5/asset/coin/query-info", {"coin": coin})
+        res = await self._call("GET", "/v5/asset/coin/query-info", {"coin": self.coin(coin)})
         for row in res.get("rows") or []:
             for c in row.get("chains") or []:
                 if str(c.get("chain", "")).upper() == chain.upper():
@@ -196,15 +219,19 @@ class BybitClient:
     # ------------------------------------------------------------------ балансы
     async def balances(self, coins: tuple[str, ...] = ("USDT", "TON")) -> Balances:
         b = Balances()
+        back = {v: k for k, v in self._coins.items()}     # внутри бота монета по-прежнему TON
+        coins = tuple(self.coin(c) for c in coins)
         res = await self._call("GET", "/v5/account/wallet-balance", {"accountType": "UNIFIED", "coin": ",".join(coins)})
         for acc in res.get("list") or []:
             for c in acc.get("coin") or []:
                 free = float(c.get("walletBalance") or 0) - float(c.get("locked") or 0)
-                b.unified[str(c.get("coin"))] = max(0.0, free)
+                name = str(c.get("coin"))
+                b.unified[back.get(name, name)] = max(0.0, free)
         res = await self._call("GET", "/v5/asset/transfer/query-account-coins-balance",
                                {"accountType": "FUND", "coin": ",".join(coins)})
         for c in res.get("balance") or []:
-            b.fund[str(c.get("coin"))] = float(c.get("transferBalance") or c.get("walletBalance") or 0)
+            name = str(c.get("coin"))
+            b.fund[back.get(name, name)] = float(c.get("transferBalance") or c.get("walletBalance") or 0)
         return b
 
     # ------------------------------------------------------------------ торговля
@@ -213,12 +240,13 @@ class BybitClient:
         if self.dry_run:
             return "dry-" + uuid.uuid4().hex[:12]
         res = await self._call("POST", "/v5/order/create", {
-            "category": "spot", "symbol": symbol, "side": "Buy", "orderType": "Limit", "qty": qty,
+            "category": "spot", "symbol": self._symbol(symbol), "side": "Buy", "orderType": "Limit", "qty": qty,
             "price": limit_price, "timeInForce": "IOC", "orderLinkId": link_id or uuid.uuid4().hex[:30]},
             mutating=True)
         return str(res.get("orderId") or "")
 
     async def order(self, order_id: str, symbol: str = "TONUSDT") -> OrderState:
+        symbol = self._symbol(symbol)
         res = await self._call("GET", "/v5/order/realtime", {"category": "spot", "symbol": symbol, "orderId": order_id})
         rows = res.get("list") or []
         if not rows:
@@ -237,7 +265,7 @@ class BybitClient:
             return "dry-" + uuid.uuid4().hex[:12]
         tid = str(uuid.uuid4())
         res = await self._call("POST", "/v5/asset/transfer/inter-transfer", {
-            "transferId": tid, "coin": coin, "amount": amount, "fromAccountType": src, "toAccountType": dst},
+            "transferId": tid, "coin": self.coin(coin), "amount": amount, "fromAccountType": src, "toAccountType": dst},
             mutating=True)
         return str(res.get("transferId") or tid)
 
@@ -247,7 +275,7 @@ class BybitClient:
         if self.dry_run:
             return "dry-" + uuid.uuid4().hex[:12]
         res = await self._call("POST", "/v5/asset/withdraw/create", {
-            "coin": coin, "chain": chain, "address": address, "tag": memo or None, "amount": amount,
+            "coin": self.coin(coin), "chain": chain, "address": address, "tag": memo or None, "amount": amount,
             "timestamp": int(time.time() * 1000), "forceChain": 1, "accountType": "FUND"}, mutating=True)
         return str(res.get("id") or "")
 

@@ -766,7 +766,10 @@ class Engine:
 
     # ================================================================== покупка звёзд
     def cost_per_star_ton(self) -> float | None:
-        """Цена звезды в TON: медиана последних покупок, иначе последняя котировка Fragment, иначе из настроек."""
+        """Цена звезды в TON: 0.015 $ по живому курсу GRAM, иначе медиана последних покупок, котировка, настройки."""
+        live = self.econ.star_ton_live() if self.econ is not None and hasattr(self.econ, "star_ton_live") else None
+        if live:
+            return live
         rows = self.db.q("SELECT ton_amount, stars FROM orders WHERE ton_amount>0 AND stars>0 AND sent_at IS NOT NULL "
                          "ORDER BY sent_at DESC LIMIT 7")
         vals = [r["ton_amount"] / r["stars"] for r in rows]

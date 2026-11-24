@@ -82,7 +82,9 @@ class Assortment:
         return out
 
     def _markup(self) -> float:
-        return 1 + float(self.engine.cfg.rtba.get("buyer_markup_pct", 14.06) or 0) / 100
+        # раздел «Подарки» (3064) дороже «Звёзд»: FunPay добавляет 15.07% против 14.05% (расчёт lots/calc, 24.11.2026)
+        v = self.svc.scfg.get("buyer_markup_pct")
+        return 1 + float(15.07 if v is None else v) / 100
 
     def _keep(self) -> float:
         econ = self.engine.econ
