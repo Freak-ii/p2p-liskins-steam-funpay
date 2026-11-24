@@ -16,6 +16,7 @@ from shopbot.channel import Channel
 from shopbot.config import Config
 from shopbot.db import Database
 from shopbot.engine import Shop
+from shopbot.miniapp import MiniApp
 from shopbot.tg import ShopTelegram
 from shopbot.web.server import make_app
 
@@ -32,12 +33,15 @@ class App:
         self.bot = ShopTelegram(self.shop, "" if demo else str(self.cfg.get("telegram.bot_token") or ""),
                                 str(self.cfg.get("telegram.api") or "https://api.telegram.org"))
         self.channel = Channel(self.shop)
+        self.miniapp = MiniApp(self.shop, self.bot)
+        self.shop.miniapp = self.miniapp
 
     async def start(self) -> None:
         if self.demo:
             from shopbot.demo import run_scenario
             await run_scenario(self.shop, self.bot)
         await self.shop.start()
+        await self.miniapp.start()
 
 
 def setup_logging(home: Path) -> None:
@@ -76,6 +80,7 @@ async def amain(args) -> None:
         except (NotImplementedError, RuntimeError):     # Windows
             pass
     await stop.wait()
+    await app.miniapp.stop()
     await app.shop.stop()
     await runner.cleanup()
 

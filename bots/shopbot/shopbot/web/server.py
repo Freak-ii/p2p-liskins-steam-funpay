@@ -35,6 +35,15 @@ SETTINGS = [  # (путь, подпись, тип)
     ("payments.card.fee_pct", "Карта: комиссия клиенту, %", "float"),
     ("payments.crypto.fee_pct", "Крипта: конвертация, % (не меньше 2)", "float"),
     ("payments.stars.rub_per_star", "Оплата звёздами: ₽ за 1 ⭐", "float"),
+    ("payments.wallet.address", "Общий кошелёк TON (адрес хаба)", "str"),
+    ("payments.wallet.spread_pct", "Кошелёк: спред в курсе, %", "float"),
+    ("payments.wallet.min_spread_pct", "Кошелёк: минимальный спред, %", "float"),
+    ("payments.gift.account", "Оплата подарками: аккаунт приёма (@)", "str"),
+    ("payments.gift.haircut_pct", "Оплата подарками: скидка оценки, %", "float"),
+    ("payments.skins.trade_url", "Оплата скинами: ссылка на обмен магазина", "str"),
+    ("payments.skins.haircut_pct", "Оплата скинами: скидка к Market.CSGO, %", "float"),
+    ("payments.card.enabled", "Карта (эквайринг) включена", "bool"),
+    ("miniapp.url", "Мини-приложение: постоянный адрес (https)", "str"),
     ("buyback.fee_pct", "Выкуп: комиссия, %", "float"), ("buyback.stars.usd_per_star", "Выкуп звёзд: $ за 1 ⭐", "float"),
     ("buyback.gifts.gift_account", "Аккаунт приёма подарков (@)", "str"),
     ("buyback.daily_cap_usdt", "Выкуп: лимит в сутки, USDT", "float"),
@@ -101,7 +110,7 @@ def make_app(app_state) -> web.Application:
 
     @web.middleware
     async def auth(request, handler):
-        if request.path in ("/login", "/api/ping"):
+        if request.path in ("/login", "/api/ping", "/app", "/app/"):   # /app — публичная витрина мини-приложения
             return await handler(request)
         role = role_for(request.cookies.get(COOKIE, ""))
         if not role:
@@ -126,6 +135,10 @@ def make_app(app_state) -> web.Application:
             raise resp
         return web.Response(text=env.get_template("login.html").render(shop_name=st.cfg.get("general.shop_name")),
                             content_type="text/html")
+
+    async def miniapp(request):
+        return web.FileResponse(Path(__file__).parent / "miniapp" / "index.html",
+                                headers={"Cache-Control": "no-cache"})
 
     async def ping(request):
         return web.json_response({"app": "shopbot", "ok": True, "pid": os.getpid(), "version": VERSION})
@@ -184,6 +197,8 @@ def make_app(app_state) -> web.Application:
             res = await sh.reject(oid, str(f.get("reason") or "отклонено оператором"))
         elif a == "gift":
             res = await sh.confirm_gift_received(oid, who=request["role"])
+        elif a == "asset":
+            res = await sh.confirm_asset(oid, who=request["role"])
         elif a == "note":
             st.db.update_order(oid, note=str(f.get("text") or "")[:500])
             res = "заметка сохранена"
@@ -191,6 +206,16 @@ def make_app(app_state) -> web.Application:
             res = "?"
         st.db.audit(request["role"], f"order_{a}", oid, res)
         raise web.HTTPFound(f"/orders/{oid}?msg={res}")
+
+    async def loop_page(request):
+        return render("loop.html", request, s=st.shop.loop.summary(), rows=st.shop.loop.rows(200),
+                      miniapp=(st.shop.miniapp.status() if st.shop.miniapp else st.db.kv_get("miniapp") or {}))
+
+    async def loop_action(request):
+        f = await request.post()
+        res = st.shop.loop.mark_done(int(f.get("id") or 0), str(f.get("note") or ""))
+        st.db.audit(request["role"], "loop_done", str(f.get("id")), res)
+        raise back(request, res)
 
     async def customers(request):
         q = request.query.get("q", "")
@@ -338,8 +363,10 @@ def make_app(app_state) -> web.Application:
     app = web.Application(middlewares=[auth])
     app.add_routes([
         web.get("/login", login), web.post("/login", login), web.get("/api/ping", ping),
+        web.get("/app", miniapp), web.get("/app/", miniapp),
         web.get("/api/status", status), web.get("/", dashboard), web.get("/orders", orders),
         web.get("/orders/{oid}", order), web.post("/orders/{oid}", order_action), web.get("/customers", customers),
+        web.get("/loop", loop_page), web.post("/loop", loop_action),
         web.get(r"/customers/{uid:\d+}", customer), web.post(r"/customers/{uid:\d+}", customer_action),
         web.get("/rtba", rtba_page), web.post("/rtba", rtba_action), web.get("/channel", channel_page),
         web.post("/channel", channel_action), web.get("/settings", settings), web.post("/settings", settings),

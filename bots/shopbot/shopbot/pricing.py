@@ -7,8 +7,20 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-METHOD_TITLES = {"card": "Картой (ЮKassa)", "crypto": "Криптой", "stars": "Звёздами Telegram",
-                 "balance": "С баланса магазина"}
+METHOD_TITLES = {"card": "Картой", "crypto": "Криптой (@CryptoBot)", "stars": "Звёздами Telegram",
+                 "balance": "С баланса магазина", "wallet": "Криптой на кошелёк", "gift": "Подарками Telegram",
+                 "skins": "Скинами Steam"}
+METHODS = ("wallet", "crypto", "stars", "gift", "skins", "card", "balance")
+
+
+def wallet_spread(cfg) -> float:
+    """Спред общего кошелька: заданный, но не меньше минимального (сеть + обмен в круге)."""
+    return max(float(cfg.get("payments.wallet.spread_pct") or 0), float(cfg.get("payments.wallet.min_spread_pct") or 0))
+
+
+def gift_star_rub(cfg) -> float:
+    """Сколько рублей засчитываем за 1 ⭐ цены продажи подарка (курс звезды − haircut)."""
+    return float(cfg.get("payments.stars.rub_per_star") or 1.25) * (1 - float(cfg.get("payments.gift.haircut_pct") or 0) / 100)
 PRODUCT_TITLES = {"stars": "Звёзды Telegram", "gift": "Подарок Telegram", "premium": "Telegram Premium",
                   "steam_keys": "Ключи для Steam"}
 
@@ -91,6 +103,19 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
     elif method == "stars":
         q.fee_pct, q.asset = 0.0, "XTR"
         q.rate, q.rate_source = float(cfg.get("payments.stars.rub_per_star") or 1.25), "магазин"
+    elif method == "wallet":
+        # комиссии строкой нет — спред внутри курса обмена (виден клиенту рядом с биржевым)
+        q.fee_pct, q.asset = 0.0, asset.upper()
+        market = rates.rub_per(q.asset)
+        q.rate, q.rate_source = r2(market * (1 - wallet_spread(cfg) / 100)), f"Bybit {r2(market)} ₽"
+    elif method == "gift":
+        q.fee_pct, q.asset = 0.0, "GIFT"
+        q.rate, q.rate_source = round(gift_star_rub(cfg), 4), "цена продажи подарка"
+    elif method == "skins":
+        q.fee_pct, q.asset = 0.0, "USD"
+        market = rates.rub_per("USDT")
+        haircut = float(cfg.get("payments.skins.haircut_pct") or 0)
+        q.rate, q.rate_source = r2(market * (1 - haircut / 100)), f"{cfg.get('payments.skins.market') or 'Market.CSGO'}"
     else:
         q.fee_pct, q.asset, q.rate = 0.0, "RUB", 1.0
     q.fee_rub = r2(base * q.fee_pct / 100)
@@ -107,6 +132,19 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
         q.pay_amount = float(math.ceil(q.total_rub / q.rate))
         q.lines.append(("Курс звезды", f"{q.rate:g} ₽"))
         q.lines.append(("К оплате", f"{int(q.pay_amount)} ⭐"))
+    elif method == "wallet":
+        digits = 2 if q.asset == "USDT" else 3
+        q.pay_amount = math.ceil(q.total_rub / q.rate * 10 ** digits) / 10 ** digits
+        q.lines.append((f"Курс обмена {q.asset}", f"{q.rate:.2f} ₽ (биржа {q.rate_source.split()[-2]} ₽)"))
+        q.lines.append(("К оплате", f"{q.pay_amount:g} {q.asset} на кошелёк TON"))
+    elif method == "gift":
+        q.pay_amount = float(math.ceil(q.total_rub / q.rate))
+        q.lines.append(("Подарок засчитывается", f"1 ⭐ цены продажи = {q.rate:.2f} ₽"))
+        q.lines.append(("К оплате", f"подарки на {int(q.pay_amount)} ⭐ (цена продажи)"))
+    elif method == "skins":
+        q.pay_amount = math.ceil(q.total_rub / q.rate * 100) / 100
+        q.lines.append(("Скины засчитываются", f"1 $ по {q.rate_source} = {q.rate:.2f} ₽"))
+        q.lines.append(("К оплате", f"скины на {q.pay_amount:g} $ по {q.rate_source}"))
     else:
         q.pay_amount = q.total_rub
         q.lines.append(("К оплате", f"{q.total_rub:.2f} ₽"))

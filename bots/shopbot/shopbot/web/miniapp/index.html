@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DPB Fastchange</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!--
+  Мини-приложение ShopBot (витрина). Само ничего не продаёт и не хранит: каждая кнопка открывает чат бота
+  с нужным разделом (t.me/<бот>?start=<раздел>), а оформление и оплата идут в боте.
+  Цены и ключи сюда не попадают, поэтому страницу можно держать на любом статическом хостинге (GitHub Pages)
+  или отдавать самим ShopBot по адресу /app.
+  Параметры адреса: ?bot=<username бота> (по умолчанию DPBFastchange_bot), ?name=<название>, ?channel=<канал>.
+-->
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #0f1222);
+    --card: var(--tg-theme-secondary-bg-color, #1a1f38);
+    --text: var(--tg-theme-text-color, #f4f5fb);
+    --hint: var(--tg-theme-hint-color, #9aa0bd);
+    --accent: var(--tg-theme-button-color, #7c3aed);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --gold: #ffcf4a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 18px 16px 28px; }
+  .hero { display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 18px;
+    background: linear-gradient(135deg, #6d28d9, #2563eb); color: #fff; }
+  .logo { width: 56px; height: 56px; border-radius: 50%; background: #121634; display: grid; place-items: center;
+    font-size: 30px; flex: none; box-shadow: 0 0 24px rgba(255, 207, 74, .45); }
+  .hero h1 { margin: 0; font-size: 20px; }
+  .hero p { margin: 2px 0 0; opacity: .85; font-size: 13px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--hint); margin: 22px 4px 8px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { border: 0; text-align: left; color: var(--text); background: var(--card); border-radius: 16px;
+    padding: 14px; cursor: pointer; min-height: 92px; display: flex; flex-direction: column; gap: 4px; }
+  .tile:active { transform: scale(.98); }
+  .tile .ic { font-size: 26px; }
+  .tile b { font-size: 15px; }
+  .tile span { font-size: 12px; color: var(--hint); }
+  .wide { grid-column: 1 / -1; min-height: 0; flex-direction: row; align-items: center; gap: 12px; }
+  .list { background: var(--card); border-radius: 16px; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 14px; border: 0;
+    background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .row + .row { border-top: 1px solid rgba(127, 127, 127, .15); }
+  .row .chev { margin-left: auto; color: var(--hint); }
+  .note { color: var(--hint); font-size: 12px; text-align: center; margin-top: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="hero">
+    <div class="logo">⚡</div>
+    <div>
+      <h1 id="name">DPB Fastchange</h1>
+      <p>Звёзды, подарки, Premium и Steam с автовыдачей</p>
+    </div>
+  </div>
+
+  <h2>Купить</h2>
+  <div class="grid">
+    <button class="tile" data-start="stars"><div class="ic">⭐</div><b>Звёзды</b><span>от 50 шт., через Fragment</span></button>
+    <button class="tile" data-start="gift"><div class="ic">🎁</div><b>Подарки</b><span>любому @username</span></button>
+    <button class="tile" data-start="premium"><div class="ic">💎</div><b>Premium</b><span>3, 6 или 12 месяцев</span></button>
+    <button class="tile" data-start="steam_keys"><div class="ic">🎮</div><b>Steam</b><span>ключи для пополнения</span></button>
+    <button class="tile wide" data-start="sell"><div class="ic">💸</div><div><b>Продать нам</b><br><span>звёзды, подарки или скины Steam</span></div></button>
+  </div>
+
+  <h2>Ещё</h2>
+  <div class="list">
+    <button class="row" data-start="fees">ℹ️ Комиссии и курсы <span class="chev">›</span></button>
+    <button class="row" data-start="ref">🤝 Пригласить друга <span class="chev">›</span></button>
+    <button class="row" data-start="">🧾 Мои заказы и баланс <span class="chev">›</span></button>
+    <button class="row" id="channel">📣 Канал магазина <span class="chev">›</span></button>
+  </div>
+
+  <p class="note">Оформление и оплата проходят в чате бота. Все комиссии видны до оплаты.</p>
+</main>
+<script>
+  const q = new URLSearchParams(location.search);
+  const clean = (v, d) => (v && /^[A-Za-z0-9_]{3,40}$/.test(v)) ? v : d;
+  const BOT = clean(q.get("bot"), "DPBFastchange_bot");
+  const CHANNEL = clean(q.get("channel"), "DPBFastchange");
+  if (q.get("name")) document.getElementById("name").textContent = q.get("name").slice(0, 40);
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  function open(url) {
+    if (tg && tg.openTelegramLink) { tg.openTelegramLink(url); setTimeout(() => tg.close(), 300); }
+    else location.href = url;
+  }
+  document.querySelectorAll("[data-start]").forEach(b => b.addEventListener("click", () => {
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    const s = b.dataset.start;
+    open("https://t.me/" + BOT + (s ? "?start=" + s : ""));
+  }));
+  document.getElementById("channel").addEventListener("click", () => open("https://t.me/" + CHANNEL));
+</script>
+</body>
+</html>

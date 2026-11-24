@@ -28,12 +28,18 @@ DEFAULTS: dict[str, Any] = {
         "admin_chat_ids": [],        # кому слать тревоги RTBA и заявки на ручное подтверждение
         "api": "https://api.telegram.org",
     },
+    # Мини-приложение (окно магазина, как у BotFather), см. shopbot/miniapp.py:
+    # url — постоянный https-адрес страницы (GitHub Pages); пусто → запуск с ПК через туннель Cloudflare
+    # (нужен cloudflared.exe), адрес меняется при каждом запуске, кнопку «Магазин» бот обновляет сам.
+    "miniapp": {"url": "", "menu_text": "Магазин", "tunnel": "cloudflared", "port": 8807, "cloudflared": ""},
     "channel": {
         "enabled": False,            # публикация в канал только после явного включения владельцем
         "chat_id": "",               # @channel или -100…; бот должен быть админом канала
         "autoupdate_price_post": True,
         "price_post_message_id": 0,
         "reprice_threshold_pct": 3,  # обновлять пост с ценами, когда цена сдвинулась больше чем на N %
+        # пост «Открыть магазин» (без цен) с кнопкой мини-приложения: опубликовать и закрепить при запуске
+        "open_post": {"auto": False, "pin": True},
     },
     # ---------------------------------------------------------------- товары
     "catalog": {
@@ -72,15 +78,33 @@ DEFAULTS: dict[str, Any] = {
     # ---------------------------------------------------------------- оплата
     "payments": {
         "order_ttl_minutes": 30,
-        "card": {"enabled": True, "provider": "yookassa", "fee_pct": 3.5,
+        # Карта — заготовка под эквайринг (ЮKassa сейчас; другой провайдер — новым классом в payments).
+        # Выключена, пока нет договора: в меню клиента не показывается.
+        "card": {"enabled": False, "provider": "yookassa", "fee_pct": 3.5,
                  "yookassa": {"shop_id": "", "secret_key": "", "test": True, "return_url": "",
                               "send_receipt": False, "vat_code": 1, "tax_system_code": 0}},
         "crypto": {"enabled": True, "provider": "cryptopay", "fee_pct": 2, "min_fee_pct": 2,
                    "assets": ["USDT", "TON"],
                    "cryptopay": {"token": "", "testnet": True}},
         "stars": {"enabled": True, "rub_per_star": 1.25},   # оплата звёздами Telegram (XTR) — кроме покупки звёзд
+        # Крипта на общий кошелёк TON (хаб казначейства StarsBot) — деньги сразу в круге, без Crypto Pay.
+        # Комиссии отдельной строкой нет: спред заложен в курс обмена (курс Bybit − spread_pct %).
+        # spread_pct держим минимальным, но не ниже min_spread_pct (покрывает сеть + обмен USDT→TON на Bybit).
+        "wallet": {"enabled": True, "address": "", "assets": ["USDT", "TON"], "spread_pct": 3.0,
+                   "min_spread_pct": 1.0, "toncenter_api_key": "", "ttl_minutes": 60},
+        # Подарками Telegram: клиент передаёт подарки на аккаунт приёма; засчитываем по цене продажи подарка
+        # Telegram (convert, ⭐) × курс звезды − haircut_pct. Подарки уходят в круг: в запас TG Gift или в звёзды.
+        "gift": {"enabled": True, "account": "", "haircut_pct": 5.0, "ttl_minutes": 60},
+        # Скинами Steam: обмен на trade_url магазина, оценка по Market.CSGO − haircut_pct; скины продаются
+        # LisBot/Market.CSGO → USDT → хаб. Пока подтверждает оператор.
+        "skins": {"enabled": True, "trade_url": "", "haircut_pct": 12.0, "ttl_minutes": 120,
+                  "market": "market.csgo.com"},
         "balance": {"enabled": True},
     },
+    # Круг денег: куда уходит каждый приём (см. shopbot/loop.py). Ничего не двигает само — ведёт учёт и
+    # подсказывает следующий шаг, чтобы приём не лежал активом.
+    "loop": {"xtr_hold_days": 21, "sweep_cryptobot_usdt": 50, "gift_use": "tggift_stock",
+             "skins_sell": "lisbot_market_csgo", "card_route": "p2p_usdt_bybit"},
     "rates": {
         "source": "bybit",                # bybit | fixed
         "usdt_rub": 86.8,                 # запасной курс (ваш P2P, см. starsbot economics)
@@ -177,6 +201,7 @@ class Config:
         data = merge(data, self.overrides)
         if self.demo:
             data["general"]["demo"] = True
+            data["payments"]["card"]["enabled"] = True       # демо показывает все способы, включая карту
         if not data["dashboard"].get("token"):
             data["dashboard"]["token"] = secrets.token_urlsafe(18)
             self.save({"dashboard": {"token": data["dashboard"]["token"]}})
