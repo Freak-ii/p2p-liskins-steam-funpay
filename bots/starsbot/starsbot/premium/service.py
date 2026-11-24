@@ -295,7 +295,9 @@ class PremiumService:
         for l in lots:                                   # наценка FunPay для покупателя — по своему лоту в таблице
             if l.offer_id == offer_id and current and 0.8 < l.price / current < 1.6:
                 self.markup[offer_id] = round(l.price / current, 4)
-        markup = self.markup.get(offer_id) or 1 + float(self.cfg.rtba.get("buyer_markup_pct", 14.06) or 0) / 100
+        # раздел Premium (1391): FunPay добавляет покупателю 15.07%, в «Звёздах» 14.05% (lots/calc, 24.11.2026)
+        pct = self.c.get("buyer_markup_pct")
+        markup = self.markup.get(offer_id) or 1 + float(15.07 if pct is None else pct) / 100
         floor = self.floor_price(months)
         mode = str(self.c.get("price_mode") or "rtba")
         comps = self.competitors(lots, months, own_ids)

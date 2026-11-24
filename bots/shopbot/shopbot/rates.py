@@ -1,6 +1,6 @@
 """Курсы для оплаты криптой и выплат: «реальный курс» берём с Bybit (публичные данные, без ключей).
 
-  TON/USDT — спот Bybit  GET https://api.bybit.com/v5/market/tickers?category=spot&symbol=TONUSDT
+  TON/USDT — спот Bybit  GET https://api.bybit.com/v5/market/tickers?category=spot&symbol=GRAMUSDT (Toncoin → Gram)
   USDT/RUB — P2P Bybit   POST https://api2.bybit.com/fiat/otc/item/online (средняя цена первых объявлений)
 Если источник недоступен, используется последний удачный курс, а когда он старше rates.max_age_minutes,
 RTBA закрывает оплату и выплаты криптой (клиент не получит устаревший курс).
@@ -16,6 +16,8 @@ import aiohttp
 
 log = logging.getLogger("rates")
 BYBIT_TICKER = "https://api.bybit.com/v5/market/tickers"
+RAPIRA = "https://api.rapira.net/open/market/rates"
+TON_SYMBOLS = ("GRAMUSDT", "TONUSDT")
 BYBIT_P2P = "https://api2.bybit.com/fiat/otc/item/online"
 
 
@@ -64,22 +66,37 @@ class Rates:
             self.ts = time.time()
             return True
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-                async with s.get(BYBIT_TICKER, params={"category": "spot", "symbol": "TONUSDT"}) as r:
-                    d = await r.json(content_type=None)
-                ton = float(d["result"]["list"][0]["lastPrice"])
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                ton = 0.0
+                for symbol in TON_SYMBOLS:            # пару TONUSDT Bybit снял после переименования монеты
+                    async with s.get(BYBIT_TICKER, params={"category": "spot", "symbol": symbol}) as r:
+                        d = await r.json(content_type=None)
+                    rows = (d.get("result") or {}).get("list") or []
+                    if rows:
+                        ton = float(rows[0]["lastPrice"])
+                        break
                 body = {"tokenId": "USDT", "currencyId": "RUB", "side": "1", "size": "10", "page": "1",
                         "amount": "", "authMaker": False, "canTrade": False}
-                async with s.post(BYBIT_P2P, json=body) as r:
-                    p = await r.json(content_type=None)
-                prices = [float(x["price"]) for x in (p.get("result") or {}).get("items", [])[:5]]
+                prices = []
+                try:                                  # P2P с ПК в РФ часто не отвечает — не ждём его дольше 4 секунд
+                    async with s.post(BYBIT_P2P, json=body, timeout=aiohttp.ClientTimeout(total=4)) as r:
+                        p = await r.json(content_type=None)
+                    prices = [float(x["price"]) for x in (p.get("result") or {}).get("items", [])[:5]]
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError, KeyError) as e:
+                    log.info("P2P Bybit: %s", e or type(e).__name__)
+                source = "bybit"
+                if not prices:                        # P2P Bybit по рублю пуст — берём биржевой USDT/RUB Rapira
+                    async with s.get(RAPIRA) as r:
+                        q = await r.json(content_type=None)
+                    prices = [float(x["askPrice"]) for x in q.get("data") or [] if x.get("symbol") == "USDT/RUB"]
+                    source = "rapira"
         except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, IndexError, ValueError, TypeError) as e:
-            log.warning("курсы Bybit недоступны: %s", e)
+            log.warning("курсы недоступны: %s", e or type(e).__name__)
             return False
         if not prices or ton <= 0:
             return False
         self.ton_usdt, self.usdt_rub = ton, statistics.median(prices)
-        self.ts, self.source = time.time(), "bybit"
+        self.ts, self.source = time.time(), source
         self.db.kv_set("rates", {"usdt_rub": self.usdt_rub, "ton_usdt": self.ton_usdt, "ts": self.ts,
                                  "source": self.source})
         return True

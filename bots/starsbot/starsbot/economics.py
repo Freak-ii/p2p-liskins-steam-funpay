@@ -64,7 +64,13 @@ class Economics:
         return None
 
     def effective_rate(self) -> tuple[float | None, str]:
-        """Сколько рублей реально стоит 1 TON на кошельке бота."""
+        """Сколько рублей реально стоит 1 TON на кошельке бота.
+
+        Порядок: ручной курс → живая цена закупки (P2P USDT × биржа, economics.cost_basis=live) → журнал пополнений →
+        биржа + спред. Цены лотов считаем по цене СЛЕДУЮЩЕЙ закупки: средняя за 60 дней врёт, когда GRAM движется."""
+        if not self._fixed_rate() and self.live():
+            overhead = float(self.e.deposit_fee_ton or 0) / max(1e-9, float(self.e.typical_topup_ton or 0) or 1e9)
+            return round(self.rates.value * (1 + overhead), 2), "P2P USDT × биржа"
         mine = self.topup_rate()
         if mine:
             return round(mine, 2), "ваши пополнения"
@@ -74,6 +80,35 @@ class Economics:
         overhead = float(self.e.deposit_fee_ton or 0) / max(1e-9, float(self.e.typical_topup_ton or 0) or 1e9)
         rate = market * (1 + float(self.e.exchange_spread_pct or 0) / 100) * (1 + overhead)
         return round(rate, 2), "биржевой курс + спред"
+
+    def _fixed_rate(self) -> float:
+        return float(self.e.get("cost_rate_rub") or 0) if hasattr(self.e, "get") else 0.0
+
+    def live(self) -> bool:
+        """Считаем по живой цене закупки? (есть свежий P2P-курс и cost_basis=live)"""
+        basis = str(self.e.get("cost_basis") or "live") if hasattr(self.e, "get") else "live"
+        return basis == "live" and bool(getattr(self.rates, "is_p2p", False))
+
+    def star_ton_live(self) -> float | None:
+        """Звезда на Fragment стоит фиксированные доллары (0.015 $), поэтому в GRAM цена меняется вместе с курсом.
+        Цена из прошлых покупок устаревает: после падения GRAM на 7% бот недосчитал бы 7% себестоимости."""
+        usd = float(self.e.get("star_usd") or 0) if hasattr(self.e, "get") else 0.0
+        gram = getattr(self.rates, "gram_usdt", None) if self.rates else None
+        if usd > 0 and gram and getattr(self.rates, "is_p2p", False):
+            return usd / float(gram)
+        return None
+
+    def rate_warning(self, threshold_pct: float = 4.0) -> str:
+        """Ручной курс разошёлся с реальной ценой закупки — полы цен неверны."""
+        fixed = self._fixed_rate()
+        if not fixed or not getattr(self.rates, "is_p2p", False):
+            return ""
+        diff = (fixed / float(self.rates.value) - 1) * 100
+        if abs(diff) < threshold_pct:
+            return ""
+        return (f"Курс вручную {fixed:g} ₽ за GRAM, а закупка сейчас {self.rates.value:.2f} ₽ ({diff:+.1f}%): "
+                + ("лоты дороже, чем нужно" if diff > 0 else "бот может продавать в минус")
+                + ". Поставьте 0, чтобы курс считался сам")
 
     def ton_per_star(self) -> float | None:
         return self.engine.cost_per_star_ton() if self.engine else None
@@ -130,7 +165,9 @@ class Economics:
 
     def order_flow(self, o) -> Flow:
         """Фактическая экономика выполненного заказа (по сумме, которую реально заплатили Fragment)."""
-        rate = float(o["ton_rate"]) * (1 + float(self.e.exchange_spread_pct or 0) / 100) if o["ton_rate"] else None
+        # курс p2p — уже цена закупки, биржевой (CoinGecko, tonapi) дополняем спредом
+        spread = 0.0 if getattr(self.rates, "is_p2p", False) else float(self.e.exchange_spread_pct or 0)
+        rate = float(o["ton_rate"]) * (1 + spread / 100) if o["ton_rate"] else None
         mine = self.topup_rate()
         if mine:
             rate = mine
