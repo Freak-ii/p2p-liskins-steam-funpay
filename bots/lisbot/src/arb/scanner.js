@@ -1,5 +1,6 @@
 import { errMsg, HOUR } from '../util/common.js';
 import { valueItem, netFactor } from './math.js';
+import { AccountFx } from './fx.js';
 
 const LIS_FEED = 'https://lis-skins.com/market_export_json/csgo.json';
 
@@ -24,6 +25,8 @@ export class ArbScanner {
     this.picks = saved?.picks || [];
     this.lastScanAt = saved?.ts || 0;
     this.scanned = saved?.scanned || 0;
+    this.fx = new AccountFx({ a: cfg.arbitrage, client, db, log });
+    this.fxRate = 1;
   }
 
   get a() { return this.cfg.arbitrage; }
@@ -71,25 +74,28 @@ export class ArbScanner {
     return this.picks;
   }
 
-  /** Уточнение по ключу: история и стакан. Валюта аккаунта должна быть USD, иначе цены не сравнить без курса. */
+  /** Уточнение по ключу: история и стакан приходят в валюте аккаунта (USD или RUB) — пересчитываем в $ по курсу площадки. */
   async _details(list) {
     if (!this.client.hasKey || !list.length) return null;
     try {
       const m = await this.client.money();
       this.currency = m.currency;
-      if (m.currency !== 'USD') {
-        this.guard?.warn('ARB_CURRENCY', `Аккаунт Market.CSGO в ${m.currency}. Для арбитража нужна валюта USD: история и стакан приходят в валюте аккаунта. Пока считаю только мгновенную продажу в заявку.`);
+      let fx;
+      try { fx = await this.fx.rate(m.currency); } catch (e) {
+        this.guard?.warn('ARB_CURRENCY', `Аккаунт Market.CSGO: ${e.message}. Пока считаю только мгновенную продажу в заявку.`);
         return null;
       }
+      this.fxRate = fx;
+      const usd = (p) => p / fx;
       const out = new Map(list.map((c) => [c.name, {}]));
-      for (const [n, h] of await this.client.history(list.map((c) => c.name))) if (out.has(n)) out.get(n).history = h;
+      for (const [n, h] of await this.client.history(list.map((c) => c.name))) if (out.has(n)) out.get(n).history = h.map((x) => ({ ...x, price: usd(x.price) }));
       for (const c of list) {
         const b = await this.client.bidAsk(c.name).catch(() => null);
         if (!b?.bid.length || !b.ask.length) continue;
         // верх стакана часто держат 1–2 бота по одной заявке: худший случай считаем по цене, где накопилось bidDepth штук
         let depth = 0, at = null;
         for (const x of b.bid) { depth += x.total; if (depth >= this.a.bidDepth) { at = x; break; } }
-        Object.assign(out.get(c.name), { bid: at ? at.price : 0, bidCount: at ? Math.max(depth, this.a.minBidCount) : 0, ask: b.ask[0].price });
+        Object.assign(out.get(c.name), { bid: at ? usd(at.price) : 0, bidCount: at ? Math.max(depth, this.a.minBidCount) : 0, ask: usd(b.ask[0].price) });
       }
       return out;
     } catch (e) {
@@ -109,5 +115,5 @@ export class ArbScanner {
 
   watchMap() { return new Map(this.picks.filter((p) => this.isFresh(p.name)).map((p) => [p.name, { name: p.name, enabled: 1, source: 'arb' }])); }
 
-  get stats() { return { lastScanAt: this.lastScanAt, candidates: this.scanned, currency: this.currency || null, picks: this.picks.slice(0, 50) }; }
+  get stats() { return { lastScanAt: this.lastScanAt, candidates: this.scanned, currency: this.currency || null, fxRate: this.fxRate, withdrawMethod: this.a.withdrawMethod || 'custom', picks: this.picks.slice(0, 50) }; }
 }

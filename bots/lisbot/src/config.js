@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyWithdrawMethod } from './arb/fx.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -46,6 +47,7 @@ export function loadConfig({ configPath, env, dataDir } = {}) {
   const file = configPath || env.BOT_CONFIG || path.join(ROOT, 'config.json');
   const user = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
   const cfg = deepMerge(defaults, user);
+  if (cfg.arbitrage) applyWithdrawMethod(cfg.arbitrage);
   cfg.root = ROOT;
   cfg.dataDir = dataDir ? path.resolve(dataDir) : path.resolve(ROOT, cfg.dataDir || './data');
   cfg.configFile = file;
@@ -150,6 +152,8 @@ export const EDITABLE_SETTINGS = {
   'arbitrage.maxDownsidePct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: худший случай (продажа в заявку), потеря не больше' },
   'arbitrage.minWeeklySales': { type: 'int', min: 1, max: 1000, label: 'Арбитраж: мин. продаж в неделю на Market.CSGO' },
   'arbitrage.saleFeePct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: комиссия продажи' },
+  'arbitrage.withdrawMethod': { type: 'str', label: 'Арбитраж: способ вывода с Market.CSGO (btc — 1%, usdt/trx/eth — 5%, custom — комиссии ниже)' },
+  'arbitrage.rubPerUsd': { type: 'num', min: 0, max: 1000, label: 'Арбитраж: курс ₽ за $ для рублёвого аккаунта (0 — по прайсам площадки)' },
   'arbitrage.withdrawFeePct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: комиссия вывода' },
   'arbitrage.payoutFxLossPct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: потеря на курсе и сети при возврате в Lis' },
   'arbitrage.lisDepositFeePct': { type: 'num', min: 0, max: 0.4, pct: true, label: 'Арбитраж: комиссия пополнения Lis' },

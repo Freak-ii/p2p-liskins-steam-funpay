@@ -107,12 +107,12 @@ test('сканер: берёт только исполнимые связки и
   assert.equal(db.itemsByStatus('bought').length, 1);
 });
 
-test('сканер с ключом: история и стакан; аккаунт не в USD — только мгновенная продажа и предупреждение', async () => {
+test('сканер с ключом: история и стакан; рублёвый аккаунт пересчитывается по курсу, EUR — только заявка и предупреждение', async () => {
   const { cfg, db, guard, sent } = env();
-  const keyed = (currency) => feeds({
+  const keyed = (currency, k = 1) => feeds({
     hasKey: true, money: async () => ({ money: 0, currency }),
-    history: async () => new Map([[NAME, week(7.6, 30)]]),
-    bidAsk: async () => ({ bid: [{ price: 6.9, total: 1 }, { price: 6.7, total: 12 }], ask: [{ price: 8.1, total: 1 }] }),
+    history: async () => new Map([[NAME, week(7.6 * k, 30)]]),
+    bidAsk: async () => ({ bid: [{ price: 6.9 * k, total: 1 }, { price: 6.7 * k, total: 12 }], ask: [{ price: 8.1 * k, total: 1 }] }),
   });
   const usd = new ArbScanner({ cfg, db, client: keyed('USD'), log: silent, lisFeed, guard });
   const p = (await usd.scan())[0];
@@ -120,9 +120,15 @@ test('сканер с ключом: история и стакан; аккаун
   assert.equal(p.weeklySales, 30);
   near(p.expectedSell, 7.6);
   assert.equal(p.bid, 6.7); // одиночная верхняя заявка не считается
-  const rub = new ArbScanner({ cfg, db, client: keyed('RUB'), log: silent, lisFeed, guard });
-  assert.equal((await rub.scan())[0].mode, 'bid');
-  assert.ok(sent.some((s) => /RUB/.test(s.text)));
+  cfg.arbitrage.rubPerUsd = 80;
+  const rub = new ArbScanner({ cfg, db, client: keyed('RUB', 80), log: silent, lisFeed, guard });
+  const r = (await rub.scan())[0];
+  assert.equal(r.mode, 'list');
+  near(r.expectedSell, 7.6);
+  near(r.bid, 6.7);
+  const eur = new ArbScanner({ cfg, db, client: keyed('EUR'), log: silent, lisFeed, guard });
+  assert.equal((await eur.scan())[0].mode, 'bid');
+  assert.ok(sent.some((s) => /EUR/.test(s.text)));
 });
 
 function sellEnv(opts) {
@@ -190,7 +196,7 @@ test('продажа: выставление → обмен под продаж�
   await x.seller.syncMarket();
   const it = x.db.item(x.id);
   assert.equal(it.status, 'sold');
-  near(it.sold_usd, 7.6 * 0.95 * 0.99);
+  near(it.sold_usd, 7.6 * (1 - x.cfg.arbitrage.withdrawFeePct) * (1 - x.cfg.arbitrage.payoutFxLossPct));
 });
 
 test('чужая продажа, чужой предмет, другой appid — обмен не отправляется', async () => {
@@ -293,4 +299,15 @@ test('бот целиком в dry-run: ищет связки без Steam и к
   assert.equal(bot.db.db.prepare('SELECT COUNT(*) c FROM items WHERE dry_run=1').get().c, 1);
   assert.equal(bot.runtimeStats().arbitrage.picks.length, 1);
   await bot.stop('тест');
+});
+
+test('курс аккаунта: медиана отношения прайсов RUB/USD и комиссии способа вывода', async () => {
+  const { derive, applyWithdrawMethod } = await import('../src/arb/fx.js');
+  const usd = new Map(), rub = new Map();
+  for (let i = 0; i < 30; i++) { usd.set(`i${i}`, { price: 1 + i, count: 10 }); rub.set(`i${i}`, { price: (1 + i) * (86 + (i % 3) - 1), count: 10 }); }
+  near(derive(rub, usd), 86);
+  assert.equal(derive(new Map(), usd), null);
+  const a = applyWithdrawMethod({ withdrawMethod: 'btc', withdrawFeePct: 0.05 });
+  assert.equal(a.withdrawFeePct, 0.01);
+  assert.equal(applyWithdrawMethod({ withdrawMethod: 'custom', withdrawFeePct: 0.07 }).withdrawFeePct, 0.07);
 });

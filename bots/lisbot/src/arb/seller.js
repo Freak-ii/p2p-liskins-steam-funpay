@@ -3,6 +3,7 @@ import { Seller } from '../engine/seller.js';
 import { errMsg, sleep, HOUR, DAY, fmtUsd } from '../util/common.js';
 import { esc } from '../notify/telegram.js';
 import { listPrice, netFactor } from './math.js';
+import { AccountFx } from './fx.js';
 
 const EState = TradeOfferManager.ETradeOfferState;
 const STEAMID64_BASE = 76561197960265728n;
@@ -27,6 +28,13 @@ export class ArbSeller extends Seller {
     for (const [id, o] of Object.entries(this.state.offers)) if (o.open) this.conf?.expectTrade(id);
     this.online = null;
     this.money = null;
+    this.fx = new AccountFx({ a: deps.cfg.arbitrage, client: deps.client, db: deps.db, log: deps.log });
+  }
+
+  /** Курс валюты аккаунта к $ и функции пересчёта (цены в CRM — в $, на площадке — в валюте аккаунта). */
+  async _fx(currency) {
+    const k = await this.fx.rate(currency);
+    return { cur: String(currency || 'USD').toUpperCase(), k, usd: (p) => (p > 0 ? p / k : p), acc: (p) => p * k };
   }
 
   get a() { return this.cfg.arbitrage; }
@@ -185,7 +193,8 @@ export class ArbSeller extends Seller {
 
   markArbSold(it, h) {
     // «received» — уже после комиссии продажи; вывод, курс и пополнение Lis ещё впереди
-    const soldUsd = (h.received * netFactor(this.a)) / (1 - this.a.saleFeePct);
+    const k = String(h.currency || 'USD').toUpperCase() === 'USD' ? 1 : (this.fx.cache?.rate || Number(this.a.rubPerUsd) || Number(this.a.rubPerUsdFallback) || 86);
+    const soldUsd = ((h.received / k) * netFactor(this.a)) / (1 - this.a.saleFeePct);
     const profit = soldUsd - it.buy_price_usd;
     this.db.setItemStatus(it.id, 'sold', { sold_at: Date.now(), sold_receive_cents: Math.round(h.received * 100), sold_usd: soldUsd, profit_usd: profit }, { venue: 'market.csgo', received: h.received, currency: h.currency });
     this.notify.send('money', `Market.CSGO: <b>${esc(it.name)}</b> оплачен. После вывода ${fmtUsd(soldUsd)}, куплен за ${fmtUsd(it.buy_price_usd)} → <b>${fmtUsd(profit)}</b> (${((profit / it.buy_price_usd) * 100).toFixed(1)}%)`);
@@ -197,7 +206,8 @@ export class ArbSeller extends Seller {
     const ready = this.db.itemsByStatus('ready').filter((i) => i.asset_id);
     if (!ready.length) return;
     const m = this.money = await this.client.money();
-    if (m.currency !== 'USD') { this.guard.warn('ARB_CURRENCY', `Аккаунт Market.CSGO в ${m.currency}, бот выставляет только в USD. Смените валюту в профиле площадки.`); return; }
+    let fx;
+    try { fx = await this._fx(m.currency); } catch (e) { this.guard.warn('ARB_CURRENCY', `Аккаунт Market.CSGO: ${e.message}`); return; }
     if (this.cfg.dryRun) { this.log.info(`[DRY-RUN] Market.CSGO: выставил бы ${ready.length} предм.`); return; }
     await this.client.updateInventory().catch(() => null);
     await sleep(this.a.inventoryWaitMs ?? 15_000);
@@ -205,8 +215,8 @@ export class ArbSeller extends Seller {
       if (!this.guard.canSell) return;
       try {
         const b = await this.client.bidAsk(it.name);
-        const p = listPrice({ costUsd: it.buy_price_usd, ask: b.ask[0]?.price, bid: b.bid[0]?.price, a: this.a, relists: it.relists });
-        const id = await this.client.addToSale(it.asset_id, p.price, 'USD');
+        const p = listPrice({ costUsd: it.buy_price_usd, ask: fx.usd(b.ask[0]?.price), bid: fx.usd(b.bid[0]?.price), a: this.a, relists: it.relists });
+        const id = await this.client.addToSale(it.asset_id, fx.acc(p.price), fx.cur);
         this.db.setItemStatus(it.id, 'listed', { listing_id: ARB_PREFIX + id, listed_at: Date.now(), list_price_cents: Math.round(p.price * 100) }, { venue: 'market.csgo', ...p });
         this.db.event('sell.listed', { venue: 'market.csgo', price: p.price, mode: p.mode }, it.id);
         this.log.info(`Market.CSGO: выставлен «${it.name}» за ${fmtUsd(p.price)} (${p.mode})`);
@@ -219,14 +229,16 @@ export class ArbSeller extends Seller {
 
   async reprice() {
     if (this.cfg.dryRun || !this.guard.canSell || !this.client.hasKey) return;
+    let fx = null;
     for (const it of this.db.itemsByStatus('listed').filter(isArbListing)) {
       if (Date.now() - (it.listed_at || 0) < this.a.repriceAfterHours * HOUR) continue;
       try {
+        fx ??= await this._fx((this.money ??= await this.client.money()).currency);
         const b = await this.client.bidAsk(it.name);
         const own = it.list_price_cents / 100;
-        const ask = b.ask.find((x) => Math.abs(x.price - own) > 0.005 || x.total > 1)?.price; // не подрезаем сами себя
-        const p = listPrice({ costUsd: it.buy_price_usd, ask, bid: b.bid[0]?.price, a: this.a, relists: it.relists + 1 });
-        if (Math.abs(p.price / own - 1) >= 0.003) await this.client.setPrice(marketId(it), p.price, 'USD');
+        const ask = fx.usd(b.ask.find((x) => Math.abs(fx.usd(x.price) - own) > 0.005 || x.total > 1)?.price); // не подрезаем сами себя
+        const p = listPrice({ costUsd: it.buy_price_usd, ask, bid: fx.usd(b.bid[0]?.price), a: this.a, relists: it.relists + 1 });
+        if (Math.abs(p.price / own - 1) >= 0.003) await this.client.setPrice(marketId(it), fx.acc(p.price), fx.cur);
         this.db.updateItem(it.id, { listed_at: Date.now(), list_price_cents: Math.round(p.price * 100), relists: Math.min(it.relists + 1, this.a.maxRelists) });
       } catch (e) { this.log.warn(`Market.CSGO: цена «${it.name}»: ${errMsg(e)}`); }
     }
