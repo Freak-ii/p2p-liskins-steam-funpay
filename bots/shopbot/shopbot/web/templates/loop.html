@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h2>♻️ Круг денег</h2>
+<p class="mute">Каждый приём сразу получает маршрут в общий круг (хаб TON → StarsBot → Fragment). Магазин сам деньги не двигает: здесь видно, что уже в обороте, а что ещё нужно вернуть.</p>
+<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">
+<div><div class="mute">В круге</div><b>{{ '%.0f'|format(s.in_loop_rub) }} ₽</b></div>
+<div><div class="mute">Нужно вернуть в круг</div><b>{{ '%.0f'|format(s.idle_rub) }} ₽</b></div>
+<div><div class="mute">Заморожено (звёзды 21 дн.)</div><b>{{ '%.0f'|format(s.frozen_rub) }} ₽</b></div>
+<div><div class="mute">Мини-приложение</div><b>{{ miniapp.mode or 'off' }}</b>{% if miniapp.url %}<div class="mute" style="word-break:break-all">{{ miniapp.url }}</div>{% endif %}{% if miniapp.detail %}<div class="mute">{{ miniapp.detail }}</div>{% endif %}</div>
+</div></div>
+<div class="card"><h3>По способам оплаты</h3><table><tr><th>Способ</th><th>Актив</th><th>Шт.</th><th>Сумма</th><th>₽</th></tr>
+{% for m, v in s.by_method.items() %}<tr><td>{{ m }}</td><td>{{ v.asset }}</td><td>{{ v.n }}</td><td>{{ v.amount }}</td><td>{{ '%.2f'|format(v.rub) }}</td></tr>{% endfor %}</table></div>
+<div class="card"><h3>Приходы</h3><table><tr><th>Когда</th><th>Заказ</th><th>Способ</th><th>Сумма</th><th>₽</th><th>Куда попало</th><th>Что дальше</th><th>Статус</th><th></th></tr>
+{% for r in rows %}<tr><td>{{ r.ts|ts }}</td><td><a href="/orders/{{ r.order_id }}">{{ r.order_id }}</a></td><td>{{ r.method }}</td>
+<td>{{ r.amount }} {{ r.asset }}</td><td>{{ '%.2f'|format(r.rub) }}</td><td>{{ r.route }}</td><td class="mute">{{ r.step }}</td><td>{{ r.state }}</td>
+<td>{% if r.state in ('to_sweep', 'ready', 'to_convert') %}<form method="post"><input type="hidden" name="id" value="{{ r.id }}"><button class="ghost">Вернул в круг</button></form>{% endif %}</td></tr>{% endfor %}</table></div>
+{% endblock %}

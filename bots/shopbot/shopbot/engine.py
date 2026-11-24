@@ -16,7 +16,8 @@ import time
 from typing import Any
 
 from shopbot.payments import CANCELED, PAID, PaymentError, build_providers
-from shopbot.pricing import PRODUCT_TITLES, Quote, apply_method, referral_discount, sell_quote, shop_price
+from shopbot.loop import MoneyLoop
+from shopbot.pricing import METHODS, PRODUCT_TITLES, Quote, apply_method, referral_discount, sell_quote, shop_price
 from shopbot.rates import Rates
 from shopbot.rtba import RTBA, PRODUCT_SUPPLIER
 from shopbot.suppliers import SupplierError, build_suppliers
@@ -70,8 +71,10 @@ class Shop:
         self.suppliers = build_suppliers(cfg, demo=demo)
         self.providers = build_providers(cfg, demo=demo)
         self.rtba = RTBA(self)
+        self.loop = MoneyLoop(self)
         self.bot = None                     # shopbot.tg.bot.ShopTelegram
         self.channel = None                 # shopbot.channel.Channel
+        self.miniapp = None                 # shopbot.miniapp.MiniApp (окно магазина)
         self.tasks: list[asyncio.Task] = []
         self.started_at = time.time()
         self.lock = asyncio.Lock()
@@ -113,7 +116,7 @@ class Shop:
 
     def methods_for(self, product: str) -> list[str]:
         out = []
-        for m in ("card", "crypto", "stars", "balance"):
+        for m in METHODS:
             if m == "stars" and product == "stars":      # звёзды за звёзды не продаём
                 continue
             if self.rtba.is_open(f"pay.{m}"):
@@ -165,7 +168,11 @@ class Shop:
             self.rtba.log(f"buy.{product}", "order_denied", chk.reason, user=uid, total=q.total_rub)
             raise ValueError(chk.reason)
         oid = self.db.new_order_id("buy")
-        ttl = float(self.cfg.get("payments.order_ttl_minutes") or 30) * 60
+        ttl = float(self.cfg.get(f"payments.{method}.ttl_minutes") or self.cfg.get("payments.order_ttl_minutes")
+                    or 30) * 60
+        if method == "wallet" and q.asset == "USDT":
+            q.pay_amount = self._unique_usdt(q.pay_amount)
+            q.lines[-1] = ("К оплате", f"{q.pay_amount:g} USDT на кошелёк TON — ровно эту сумму")
         o = self.db.create_order(
             oid, user_id=uid, kind="buy", product=product, item=str(item), amount=amount, recipient=recipient,
             status="awaiting_payment", price_rub=q.price_rub, cost_rub=q.cost_rub, discount_rub=q.discount_rub,
@@ -186,8 +193,40 @@ class Shop:
         self.db.exec("INSERT INTO payments(id,order_id,provider,status,amount,currency,url,created_at,updated_at) "
                      "VALUES(?,?,?,?,?,?,?,?,?)", (pay["id"], oid, prov.name, "pending", q.pay_amount, q.asset,
                                                    pay.get("url", ""), time.time(), time.time()))
-        o = self.db.update_order(oid, payment_id=pay["id"], event="payment_created")
+        asset_pay = method in ("gift", "skins")
+        o = self.db.update_order(oid, payment_id=pay["id"], event="payment_created",
+                                 **({"status": "awaiting_asset"} if asset_pay else {}))
+        if asset_pay:
+            what = "подарки Telegram" if method == "gift" else "скины Steam"
+            await self.notify("INFO", f"asset_{method}", f"#{oid}: клиент {uid} оплачивает {what} на "
+                              f"{q.pay_amount:g} {'⭐' if method == 'gift' else '$'} ({q.total_rub:.2f} ₽). "
+                              "Проверьте поступление.",
+                              [("✔ Получено", f"adm:asset:{oid}"), ("✋ Отклонить", f"adm:reject:{oid}")])
         return o, pay
+
+    def _unique_usdt(self, amount: float) -> float:
+        """USDT (TON) ищем по точной сумме: две открытые заявки не должны совпадать до цента."""
+        taken = {round(float(r["pay_amount"]), 2) for r in self.db.q(
+            "SELECT pay_amount FROM orders WHERE pay_method='wallet' AND pay_currency='USDT' "
+            "AND status='awaiting_payment'")}
+        a = round(amount, 2)
+        while a in taken:
+            a = round(a + 0.01, 2)
+        return a
+
+    async def confirm_asset(self, oid: str, who: str = "operator") -> str:
+        """Оператор увидел подарки/скины от клиента — заказ оплачен."""
+        o = self.db.order(oid)
+        if o is None or o["kind"] != "buy" or o["pay_method"] not in ("gift", "skins") or \
+                o["status"] not in ("awaiting_asset", "expired"):
+            return "заказ не ждёт оплату активом"
+        prov = self.providers.get(o["pay_method"])
+        if prov is not None and hasattr(prov, "confirm"):
+            prov.confirm(o["payment_id"])
+        self.db.exec("UPDATE payments SET status='paid', updated_at=? WHERE id=?", (time.time(), o["payment_id"]))
+        self.db.update_order(oid, event=f"asset_received_by_{who}")
+        await self.on_paid(oid)
+        return "оплата активом принята, выдаю"
 
     async def _pay_from_balance(self, o) -> None:
         u = self.db.user(o["user_id"])
@@ -210,8 +249,17 @@ class Shop:
                 return
             o = self.db.update_order(oid, status="paid", paid_at=time.time())
         if o["kind"] == "sell":
+            if o["product"] == "stars":            # клиент продал нам звёзды — они на балансе бота (XTR)
+                rps = float(self.cfg.get("payments.stars.rub_per_star") or 1.25)
+                self.loop.record(o, method="stars", asset="XTR", amount=float(o["amount"]),
+                                 rub=round(float(o["amount"]) * rps, 2))
+            else:
+                self.loop.record(o, method="gift", asset="GIFT", amount=float(o["amount"]),
+                                 rub=round(float(o["amount"]) * float(self.cfg.get("payments.stars.rub_per_star")
+                                                                      or 1.25), 2))
             await self.on_asset_received(oid)
             return
+        self.loop.record(o)
         await self.tell(o["user_id"], f"✅ Оплата заказа <b>#{oid}</b> получена. Выдаю…")
         await self.deliver(oid)
 
@@ -480,6 +528,11 @@ class Shop:
         o = self.db.order(oid)
         if o is None or o["status"] not in ("payout_pending", "manual", "awaiting_asset", "need_recipient"):
             return "нельзя отклонить в этом статусе"
+        if o["kind"] == "buy" and o["status"] == "awaiting_asset":     # не оплачен — возвращать нечего
+            self.db.update_order(oid, status="cancelled", fail_reason=reason)
+            await self.tell(o["user_id"], f"Заказ <b>#{oid}</b> отменён: оплата не подтверждена ({reason}). "
+                                          "Если вы уже отправили подарки или скины — напишите в поддержку.")
+            return "отменено"
         if o["kind"] == "buy":
             await self._fail(o, reason)
             return "возврат на баланс"
@@ -537,6 +590,14 @@ class Shop:
                 "active": active, "attention": attention, "users": self.db.scalar("SELECT COUNT(*) FROM users", (), 0),
                 "new_users": self.db.scalar("SELECT COUNT(*) FROM users WHERE created_at>=?", (since,), 0)}
 
+    async def _loop_tick(self) -> None:
+        self.loop.tick()
+        todo = self.loop.todo_text()
+        last = float(self.db.kv_get("loop_notified") or 0)
+        if todo and time.time() - last > 86400:            # раз в сутки напомнить, что лежит вне круга
+            self.db.kv_set("loop_notified", time.time())
+            await self.notify("INFO", "loop_idle", todo)
+
     # ------------------------------------------------------------------ циклы
     async def _loop(self, name: str, every: float, fn) -> None:
         while True:
@@ -548,12 +609,22 @@ class Shop:
                 log.exception("цикл %s упал, продолжаю", name)
             await asyncio.sleep(every)
 
+    def _restore_wallet(self) -> None:
+        w = self.providers.get("wallet")
+        if w is None or not hasattr(w, "restore"):
+            return
+        for o in self.db.q("SELECT * FROM orders WHERE pay_method='wallet' AND status='awaiting_payment' "
+                           "AND payment_id!=''"):
+            w.restore(o["payment_id"], o["pay_currency"], float(o["pay_amount"]), float(o["created_at"] or 0))
+
     async def start(self) -> None:
+        self._restore_wallet()
         await self.rates.refresh()
         await self.rtba.tick()
         loops = [("rates", float(self.cfg.get("rates.refresh_seconds") or 120), self.rates.refresh),
                  ("rtba", float(self.cfg.get("rtba.interval_seconds") or 30), self.rtba.tick),
-                 ("payments", 5, self.poll_payments), ("deliveries", 5, self.poll_deliveries)]
+                 ("payments", 5, self.poll_payments), ("deliveries", 5, self.poll_deliveries),
+                 ("loop", 600, self._loop_tick)]
         if self.channel is not None:
             loops.append(("channel", 300, self.channel.autoupdate))
         for name, every, fn in loops:
