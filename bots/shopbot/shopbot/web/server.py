@@ -42,7 +42,9 @@ SETTINGS = [  # (путь, подпись, тип)
     ("payments.gift.haircut_pct", "Оплата подарками: скидка оценки, %", "float"),
     ("payments.skins.trade_url", "Оплата скинами: ссылка на обмен магазина", "str"),
     ("payments.skins.haircut_pct", "Оплата скинами: скидка к Market.CSGO, %", "float"),
-    ("payments.card.enabled", "Карта (эквайринг) включена", "bool"),
+    ("payments.card.enabled", "Карта / СБП включена", "bool"),
+    ("payments.card.provider", "Карта / СБП: провайдер (yookassa | crystalpay | aaio | freekassa)", "str"),
+    ("payments.card.freekassa.method_id", "FreeKassa: код способа оплаты (СБП/карта)", "int"),
     ("miniapp.url", "Мини-приложение: постоянный адрес (https)", "str"),
     ("buyback.fee_pct", "Выкуп: комиссия, %", "float"), ("buyback.stars.usd_per_star", "Выкуп звёзд: $ за 1 ⭐", "float"),
     ("buyback.gifts.gift_account", "Аккаунт приёма подарков (@)", "str"),
@@ -57,6 +59,13 @@ SETTINGS = [  # (путь, подпись, тип)
 SECRET_FIELDS = [("telegram.bot_token", "Токен бота магазина"), ("payments.card.yookassa.shop_id", "ЮKassa shopId"),
                  ("payments.card.yookassa.secret_key", "ЮKassa секретный ключ"),
                  ("payments.crypto.cryptopay.token", "Crypto Pay токен"),
+                 ("payments.card.crystalpay.login", "CrystalPAY логин кассы"),
+                 ("payments.card.crystalpay.secret", "CrystalPAY секретный ключ"),
+                 ("payments.card.crystalpay.salt", "CrystalPAY соль (подпись вебхука)"),
+                 ("payments.card.aaio.merchant_id", "AAIO ID магазина"), ("payments.card.aaio.secret1", "AAIO секрет №1"),
+                 ("payments.card.aaio.api_key", "AAIO API-ключ"),
+                 ("payments.card.freekassa.shop_id", "FreeKassa ID магазина"),
+                 ("payments.card.freekassa.api_key", "FreeKassa API-ключ"),
                  ("suppliers.stars.token", "Токен поставщика StarsBot"), ("suppliers.gifts.token", "Токен TG Gift"),
                  ("suppliers.premium.token", "Токен Premium (StarsBot)")]
 
@@ -305,6 +314,11 @@ def make_app(app_state) -> web.Application:
                         continue
                     if path == "payments.crypto.fee_pct":
                         val = max(val, 2.0)            # минимальная комиссия конвертации — 2%
+                elif typ == "int":
+                    try:
+                        val = int(str(f[path]).strip() or 0)
+                    except ValueError:
+                        continue
                 else:
                     val = str(f[path]).strip()
                 changes = merge(changes, nest(path, val))

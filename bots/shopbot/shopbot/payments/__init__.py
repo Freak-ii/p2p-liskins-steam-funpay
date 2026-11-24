@@ -348,7 +348,9 @@ def build_providers(cfg, *, demo: bool) -> dict:
                 "wallet": wallet, "gift": ManualAsset("gift", True), "skins": ManualAsset("skins", True)}
     y = cfg.get("payments.card.yookassa") or {}
     c = cfg.get("payments.crypto.cryptopay") or {}
-    return {"card": YooKassa(y.get("shop_id"), y.get("secret_key"), return_url=y.get("return_url") or "",
+    from shopbot.payments.gateways import build_gateway
+    gw = build_gateway(cfg)
+    return {"card": gw or YooKassa(y.get("shop_id"), y.get("secret_key"), return_url=y.get("return_url") or "",
                              test=bool(y.get("test", True)), send_receipt=bool(y.get("send_receipt")),
                              vat_code=int(y.get("vat_code") or 1), tax_system_code=int(y.get("tax_system_code") or 0)),
             "crypto": CryptoPay(c.get("token"), testnet=bool(c.get("testnet", True))),

@@ -78,11 +78,17 @@ DEFAULTS: dict[str, Any] = {
     # ---------------------------------------------------------------- оплата
     "payments": {
         "order_ttl_minutes": 30,
-        # Карта — заготовка под эквайринг (ЮKassa сейчас; другой провайдер — новым классом в payments).
-        # Выключена, пока нет договора: в меню клиента не показывается.
-        "card": {"enabled": False, "provider": "yookassa", "fee_pct": 3.5,
+        # Карта / СБП. provider: yookassa (эквайринг, нужен ИП/самозанятость) или P2P-шлюз для физлиц:
+        # crystalpay | aaio | freekassa (см. payments/gateways.py). Шлюз копит рубли у себя, вывод в USDT на хаб
+        # TON возвращает их в круг. fee_pct — комиссия клиенту: приём шлюза + его вывод в USDT + запас.
+        # Выключено, пока нет подключённого шлюза: в меню клиента не показывается.
+        "card": {"enabled": False, "provider": "yookassa", "fee_pct": 3.5, "ttl_minutes": 30,
+                 "title": "Картой / СБП",
                  "yookassa": {"shop_id": "", "secret_key": "", "test": True, "return_url": "",
-                              "send_receipt": False, "vat_code": 1, "tax_system_code": 0}},
+                              "send_receipt": False, "vat_code": 1, "tax_system_code": 0},
+                 "crystalpay": {"login": "", "secret": "", "salt": ""},
+                 "aaio": {"merchant_id": "", "secret1": "", "api_key": ""},
+                 "freekassa": {"shop_id": "", "api_key": "", "method_id": 0}},
         "crypto": {"enabled": True, "provider": "cryptopay", "fee_pct": 2, "min_fee_pct": 2,
                    "assets": ["USDT", "TON"],
                    "cryptopay": {"token": "", "testnet": True}},
@@ -104,7 +110,8 @@ DEFAULTS: dict[str, Any] = {
     # Круг денег: куда уходит каждый приём (см. shopbot/loop.py). Ничего не двигает само — ведёт учёт и
     # подсказывает следующий шаг, чтобы приём не лежал активом.
     "loop": {"xtr_hold_days": 21, "sweep_cryptobot_usdt": 50, "gift_use": "tggift_stock",
-             "skins_sell": "lisbot_market_csgo", "card_route": "p2p_usdt_bybit"},
+             "skins_sell": "lisbot_market_csgo", "card_route": "p2p_usdt_bybit",
+             "sweep_gateway_rub": 5000},
     "rates": {
         "source": "bybit",                # bybit | fixed
         "usdt_rub": 86.8,                 # запасной курс (ваш P2P, см. starsbot economics)
@@ -144,6 +151,8 @@ DEFAULTS: dict[str, Any] = {
 }
 
 SECRETS = [("telegram", "bot_token"), ("payments.card.yookassa", "secret_key"),
+           ("payments.card.crystalpay", "secret"), ("payments.card.crystalpay", "salt"),
+           ("payments.card.aaio", "secret1"), ("payments.card.aaio", "api_key"), ("payments.card.freekassa", "api_key"),
            ("payments.crypto.cryptopay", "token"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
            ("suppliers.gifts", "token"), ("suppliers.steam_keys", "token"),
            ("dashboard", "token"), ("dashboard", "operator_token"), ("dashboard", "viewer_token")]

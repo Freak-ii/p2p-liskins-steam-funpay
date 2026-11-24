@@ -153,6 +153,8 @@ class RTBA:
         if method == "crypto":
             r = self.shop.rates.snapshot()
             return Check(True, value=f"USDT {r['usdt_rub']} ₽ · TON {r['ton_rub']} ₽")
+        if method == "card" and hasattr(prov, "title"):          # P2P-шлюз (payments/gateways.py)
+            return Check(True, value=f"{prov.title}, комиссия {self.cfg.get('payments.card.fee_pct'):g}%")
         if method == "card":
             test = getattr(prov, "test", False)
             return Check(True, "тестовый режим ЮKassa" if test else "", value="тест" if test else "бой")

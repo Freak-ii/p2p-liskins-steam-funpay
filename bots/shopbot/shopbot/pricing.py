@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-METHOD_TITLES = {"card": "Картой", "crypto": "Криптой (@CryptoBot)", "stars": "Звёздами Telegram",
+METHOD_TITLES = {"card": "Картой / СБП", "crypto": "Криптой (@CryptoBot)", "stars": "Звёздами Telegram",
                  "balance": "С баланса магазина", "wallet": "Криптой на кошелёк", "gift": "Подарками Telegram",
                  "skins": "Скинами Steam"}
 METHODS = ("wallet", "crypto", "stars", "gift", "skins", "card", "balance")
@@ -121,7 +121,7 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
     q.fee_rub = r2(base * q.fee_pct / 100)
     q.total_rub = r2(base + q.fee_rub)
     if q.fee_rub:
-        label = {"card": "Комиссия эквайринга", "crypto": "Конвертация по курсу"}.get(method, "Комиссия")
+        label = {"card": "Комиссия за оплату картой/СБП", "crypto": "Конвертация по курсу"}.get(method, "Комиссия")
         q.lines.append((f"{label} {q.fee_pct:g}%", f"+{q.fee_rub:.2f} ₽"))
     if method == "crypto":
         digits = 2 if q.asset == "USDT" else 4
