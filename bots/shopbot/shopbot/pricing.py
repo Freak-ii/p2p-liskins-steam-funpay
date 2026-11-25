@@ -21,7 +21,7 @@ def wallet_spread(cfg) -> float:
 def gift_star_rub(cfg) -> float:
     """Сколько рублей засчитываем за 1 ⭐ цены продажи подарка (курс звезды − haircut)."""
     return float(cfg.get("payments.stars.rub_per_star") or 1.25) * (1 - float(cfg.get("payments.gift.haircut_pct") or 0) / 100)
-PRODUCT_TITLES = {"stars": "Звёзды Telegram", "gift": "Подарок Telegram", "premium": "Telegram Premium",
+PRODUCT_TITLES = {"stars": "Звёзды Telegram", "gift": "Подарок Telegram", "premium": "Telegram Premium", "service": "Сервисы",
                   "steam_keys": "Ключи для Steam"}
 
 
@@ -62,7 +62,7 @@ class Quote:
 
 def shop_price(cfg, product: str, cost_rub: float, amount: int) -> tuple[float, str]:
     """Цена товара для клиента и объяснение для журнала RTBA (клиенту не показывается)."""
-    key = {"gift": "gifts"}.get(product, product)
+    key = {"gift": "gifts", "service": "services"}.get(product, product)
     c = cfg.get(f"catalog.{key}") or {}
     target = cost_rub * (1 + float(c.get("margin_pct", 10)) / 100)
     floor = cost_rub * (1 + float(c.get("min_margin_pct", 3)) / 100) + float(cfg.get("rtba.min_quote_margin_rub") or 0)
@@ -81,7 +81,7 @@ def referral_discount(cfg, user, price_rub: float, cost_rub: float, product: str
     """Скидка приглашённому на первый заказ — в пределах маржи (RTBA не даёт уйти ниже минимальной)."""
     if not cfg.get("referral.enabled") or user is None or not user["referred_by"] or user["first_order_at"]:
         return 0.0
-    key = {"gift": "gifts"}.get(product, product)
+    key = {"gift": "gifts", "service": "services"}.get(product, product)
     floor = cost_rub * (1 + float(cfg.get(f"catalog.{key}.min_margin_pct") or 0) / 100)
     want = min(price_rub * float(cfg.get("referral.friend_discount_pct") or 0) / 100,
                float(cfg.get("referral.friend_discount_max_rub") or 0))
