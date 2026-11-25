@@ -236,6 +236,17 @@ DEFAULTS: dict[str, Any] = {
         "message_rate_limit_seconds": 2,
         "review_reply": True,            # отвечать на отзывы 4–5★ (на 1–3★ — только алерт, отвечаете вы)
         "confirm_reminder_minutes": 10,  # одно напоминание подтвердить заказ через N мин после выдачи (0 — не напоминать)
+        # подтверждение получателя покупателем до выдачи (доказательство для арбитража):
+        # off — не спрашивать; new_or_big — новым покупателям и от confirm_username_min_stars; always — всегда
+        "confirm_username": "new_or_big",
+        "confirm_username_min_stars": 1000,
+        "confirm_username_timeout_minutes": 15,   # покупатель молчит N мин после вопроса →
+        "confirm_username_timeout_action": "deliver",   # deliver — выдать (он предупреждён), manual — продавцу
+    },
+    "evidence": {
+        "enabled": True,                 # снимок доказательств по каждому заказу сразу после выдачи
+        "folder": "data/evidence",       # снимки <заказ>.json и пакеты evidence_*.zip
+        "auto_reply_arbitration": True,  # арбитраж FunPay просит доказательства → бот сам отвечает в чат заказа
     },
     "risk": {
         "enabled": True, "manual_review_score": 60, "block_score": 90, "large_order_stars": 1500,

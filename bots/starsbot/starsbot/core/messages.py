@@ -31,6 +31,21 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "❗ Звёзды уходят сразу на username из заказа — после отправки сменить получателя или вернуть их нельзя.\n"
             "Пожалуйста, подтверждайте заказ только после того, как звёзды придут."
         ),
+        "greeting_confirm_username": (
+            "Здравствуйте, {buyer}! {returning}Спасибо за оплату заказа #{order_id} 🎉\n"
+            "{what} → @{username}{name_part}\n"
+            "❗ Проверьте получателя: после отправки сменить его или отменить отправку нельзя.\n"
+            "👉 Всё верно — ответьте «Да». Аккаунт другой — пришлите правильный @username.{timeout_line}"
+        ),
+        "confirm_username": (
+            "✅ Аккаунт найден: @{username}{name_part}.\n"
+            "❗ {what} уйдут на этот аккаунт — после отправки сменить получателя нельзя.\n"
+            "👉 Всё верно — ответьте «Да». Аккаунт другой — пришлите правильный @username.{timeout_line}"
+        ),
+        "username_confirm_thanks": "👍 Спасибо, получатель подтверждён: @{username}. Отправляю {what}…",
+        "username_confirm_no": "Хорошо! Пришлите, пожалуйста, правильный username в Telegram (например, @username).",
+        "username_confirm_hint": ("Подтвердите, пожалуйста, получателя @{username}: ответьте «Да» или пришлите другой "
+                                  "@username."),
         "username_ok": "✅ Аккаунт найден: @{username}{name_part}. Отправляю {stars} ⭐…",
         "bad_username": (
             "❗ {buyer}, {reason}.\n"
@@ -350,6 +365,20 @@ TEMPLATES: dict[str, dict[str, str]] = {
             "from the order; once sent, the recipient can't be changed and the stars can't be returned. Please "
             "confirm the order only after the stars arrive."
         ),
+        "greeting_confirm_username": (
+            "Hello, {buyer}! {returning}Thank you for order #{order_id} 🎉\n"
+            "{what} → @{username}{name_part}\n"
+            "❗ Please check the recipient: after sending it can't be changed or refunded.\n"
+            "👉 If it's correct, reply \"Yes\". If not, send the right @username.{timeout_line}"
+        ),
+        "confirm_username": (
+            "✅ Account found: @{username}{name_part}.\n"
+            "❗ {what} will go to this account — the recipient can't be changed after sending.\n"
+            "👉 If it's correct, reply \"Yes\". If not, send the right @username.{timeout_line}"
+        ),
+        "username_confirm_thanks": "👍 Thanks, recipient confirmed: @{username}. Sending {what}…",
+        "username_confirm_no": "OK! Please send the correct Telegram username (e.g. @username).",
+        "username_confirm_hint": "Please confirm the recipient @{username}: reply \"Yes\" or send another @username.",
         "username_ok": "✅ Account found: @{username}{name_part}. Sending {stars} ⭐…",
         "bad_username": ("❗ {buyer}, {reason}.\nPlease send your Telegram username again (Latin letters, e.g. "
                          "@username). Attempt {attempt} of {max_attempts}."),
@@ -520,6 +549,7 @@ OVERRIDES: dict[str, dict[str, str]] = {}
 
 # Переменные, доступные в шаблонах (для редактора сообщений)
 TEMPLATE_VARS = {
+    "what": "100 ⭐ Telegram Stars", "timeout_line": "\nБез ответа отправлю на @durov через 15 мин.",
     "order_id": "ABCD1234", "buyer": "Покупатель", "stars": 100, "username": "durov", "name_part": " (Pavel)",
     "reason": "аккаунт не найден", "attempt": 1, "max_attempts": 3, "status_text": "ждём username",
     "denominations": "50, 75, 100", "status_hint": "", "returning": "Рады видеть вас снова 🙌 ",
@@ -588,7 +618,8 @@ FAQ = [
     ("faq_not_arrived", re.compile(r"не\s*(при|за)шл|не\s*получил|не\s*вижу|не\s*начисл|не\s*зачисл|где\s+(мои\s+)?зв[её]зд|"
                                   r"not\s+(received|arrived)|didn.?t\s+(get|receive|arrive)|haven.?t\s+(got|received)",
                                   re.I)),
-    ("faq_refund", re.compile(r"возвр|верни(те)?\s+деньги|отмен(а|ить|ите)\s+заказ|refund|cancel", re.I)),
+    ("faq_refund", re.compile(r"возвр|верни(те)?\s+деньги|отмен(а|ить|ите)\s+заказ|^\s*отмен(и|ите|а|яй)\b|refund|cancel",
+                              re.I)),
     ("faq_premium", re.compile(r"преми?ум|premium", re.I)),
     ("faq_where", re.compile(r"где\s+(посмотреть|увидеть|проверить)|как\s+(посмотреть|проверить)|where\s+(can|do)\s+i\s+see",
                              re.I)),
@@ -622,6 +653,19 @@ def detect_faq(text: str) -> str | None:
         if rx.search(text or ""):
             return key
     return None
+
+
+NO_RE = re.compile(r"^\s*(нет|не\s+тот|не\s+та|не\s+мой|не\s*верно|неправильно|ошиб|no\b|nope|wrong|not\s+mine)", re.I)
+YES_RE = re.compile(r"^\s*(да+\b|ага|угу|верно|вс[её]\s+(верно|так|правильно)|подтвержда|правильно|так\b|ок\b|окей|"
+                    r"ok\b|okay|yes|yep|yeah|correct|confirm|\+|👍|✅)", re.I)
+
+
+def is_yes(text: str) -> bool:
+    return bool(YES_RE.search(text or "")) and not is_no(text)
+
+
+def is_no(text: str) -> bool:
+    return bool(NO_RE.search(text or ""))
 
 
 def is_question(text: str) -> bool:
