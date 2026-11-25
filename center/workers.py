@@ -6,12 +6,19 @@ Worker умеет запускать процесс, собирать его в�
 в бесконечный цикл перезапусков. Если центр упал, а бот остался жить (Linux/Docker), новый центр
 «подхватывает» этот процесс, а не запускает второй экземпляр рядом. Конкретные боты (команда запуска, проверка здоровья, сводка)
 описаны в center/bots.py.
+
+Серверный режим «Орбита» (CENTER_SERVER=1, см. deploy/ и docs/server.md): вывод бота пишется прямо в его
+файл журнала, а не в канал центра. Тогда бот не зависит от жизни процесса центра: центр можно перезапустить
+на новой версии (передача «эстафеты»), а новый центр подхватит работающих ботов и дочитает их журнал.
+У каждого воркера свой code_root — папка релиза, из которой запущен бот: так боты обновляются по одному
+и при сбое возвращаются на прежний релиз (center/rollout.py).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -19,6 +26,7 @@ from collections import deque
 from pathlib import Path
 
 from center import winutil
+from center.config import ROOT
 from center.events import EventStore
 
 log = logging.getLogger("center.workers")
@@ -76,6 +84,11 @@ class Worker:
         self._supervise_task: asyncio.Task | None = None
         self._readers: list[asyncio.Task] = []
         self._log_path: Path | None = self.home.parent / "logs" / f"{self.name}.log"
+        # серверный режим: бот пишет вывод прямо в файл журнала и переживает перезапуск центра
+        self.detached = os.environ.get("CENTER_SERVER", "") not in ("", "0") and sys.platform != "win32"
+        self.code_root: Path = ROOT          # папка релиза, из которой запускается (запущен) бот
+        self.leave_running = False           # центр уходит на обновление: процесс бота не останавливать
+        self._tail_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------ для наследников
     def command(self) -> list[str]:
@@ -124,6 +137,7 @@ class Worker:
             "name": self.name, "title": self.title, "state": self.state, "state_text": STATE_TEXT.get(self.state, self.state),
             "detail": self.detail, "pid": self.pid, "uptime": round(time.time() - self.started_at) if self.started_at and
             self.state in (STARTING, RUNNING) else 0, "restarts": self.restarts, "last_exit": self.last_exit,
+            "release": release_name(self.code_root),
         }
 
     async def start(self, reason: str = "панель") -> str:
@@ -148,7 +162,14 @@ class Worker:
                 await self._supervise_task
             except asyncio.CancelledError:
                 pass
+        if self.leave_running and self.detached and self.alive:
+            # передача эстафеты: центр уходит на новую версию, бот продолжает торговать и будет подхвачен
+            await self._stop_tail()
+            self.events.add(self.name, "info", "worker.handover",
+                            f"{self.title} продолжает работать: центр перезапускается на новой версии", {"pid": self.pid})
+            return f"{self.title} оставлен работать"
         await self._terminate(timeout)
+        await self._stop_tail()
         if self.state not in (NOT_CONFIGURED, MISSING_DEPS, DISABLED):
             self._set(STOPPED, "")
         self.events.add(self.name, "info", "worker.stop", f"{self.title} остановлен ({reason})")
@@ -168,18 +189,71 @@ class Worker:
             log.info("%s: %s %s", self.name, state, detail)
         self.state, self.detail = state, detail
 
-    def _append(self, text: str, stream: str) -> None:
+    def _append(self, text: str, stream: str, *, to_file: bool = True) -> None:
         self.seq += 1
         self.lines.append({"n": self.seq, "ts": time.time(), "stream": stream, "text": text})
-        if self._log_path:
+        if self._log_path and to_file:
             try:
                 self._log_path.parent.mkdir(parents=True, exist_ok=True)
-                if self._log_path.exists() and self._log_path.stat().st_size > self.log_max_bytes:
-                    os.replace(self._log_path, self._log_path.with_suffix(".log.1"))
+                self._rotate_log()
                 with self._log_path.open("a", encoding="utf-8") as f:
                     f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {stream} {text}\n")
             except OSError:
                 pass
+
+    def _rotate_log(self) -> None:
+        p = self._log_path
+        if not p or not p.exists() or p.stat().st_size <= self.log_max_bytes:
+            return
+        if self.detached:
+            # бот держит файл открытым (O_APPEND): копия и обрезка, а не переименование — иначе он писал бы в .log.1
+            import shutil
+            shutil.copyfile(p, p.with_suffix(".log.1"))
+            with p.open("r+b") as f:
+                f.truncate(0)
+        else:
+            os.replace(p, p.with_suffix(".log.1"))
+
+    CENTER_LINE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d center ")
+
+    async def _tail(self, offset: int | None = None) -> None:
+        """Серверный режим: дочитывать файл журнала, куда бот пишет сам, в кольцевой буфер панели.
+        Свои строки центр уже положил в буфер — их пропускаем."""
+        p = self._log_path
+        if p is None:
+            return
+        pos = offset if offset is not None else (p.stat().st_size if p.exists() else 0)
+        buf = b""
+        while True:
+            try:
+                size = p.stat().st_size if p.exists() else 0
+                if size < pos:                    # файл обрезан при ротации
+                    pos, buf = 0, b""
+                if size > pos:
+                    with p.open("rb") as f:
+                        f.seek(pos)
+                        chunk = f.read(min(size - pos, 1_000_000))
+                    pos += len(chunk)
+                    buf += chunk
+                    *lines, buf = buf.split(b"\n")
+                    for raw in lines:
+                        text = raw.decode("utf-8", "replace").rstrip("\r")
+                        if text and not self.CENTER_LINE.match(text):
+                            self._append(text, "out", to_file=False)
+                    self._rotate_log()
+            except OSError:
+                pass
+            await asyncio.sleep(0.5)
+
+    def _start_tail(self, offset: int | None = None) -> None:
+        if self._tail_task is None or self._tail_task.done():
+            self._tail_task = asyncio.create_task(self._tail(offset), name=f"tail-{self.name}")
+
+    async def _stop_tail(self) -> None:
+        t, self._tail_task = self._tail_task, None
+        if t:
+            await asyncio.sleep(0.6)              # дочитать последние строки
+            t.cancel()
 
     async def _read(self, stream: asyncio.StreamReader, name: str) -> None:
         while True:
@@ -200,14 +274,27 @@ class Worker:
         cmd = self.command()
         self._append(f"$ {' '.join(cmd)}", "center")
         self._run_seq = self.seq                       # строки вывода именно этого запуска идут после этой отметки
-        self.proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(self.cwd()), env=env, stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **kwargs)
+        if self.detached and self._log_path:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            offset = self._log_path.stat().st_size if self._log_path.exists() else 0
+            out = open(self._log_path, "ab")           # noqa: SIM115 — дескриптор нужен только до запуска процесса
+            try:
+                self.proc = await asyncio.create_subprocess_exec(
+                    *cmd, cwd=str(self.cwd()), env=env, stdin=asyncio.subprocess.DEVNULL,
+                    stdout=out, stderr=asyncio.subprocess.STDOUT, **kwargs)
+            finally:
+                out.close()
+            self._readers = []
+            self._start_tail(offset)
+        else:
+            self.proc = await asyncio.create_subprocess_exec(
+                *cmd, cwd=str(self.cwd()), env=env, stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **kwargs)
+            self._readers = [asyncio.create_task(self._read(self.proc.stdout, "out")),
+                             asyncio.create_task(self._read(self.proc.stderr, "err"))]
         self.pid = self.proc.pid
         winutil.bind_child(self.pid)                   # Windows: бот завершится вместе с центром, даже при аварии
         self.started_at = time.time()
-        self._readers = [asyncio.create_task(self._read(self.proc.stdout, "out")),
-                         asyncio.create_task(self._read(self.proc.stderr, "err"))]
 
     async def _terminate(self, timeout: float) -> None:
         """Мягкая остановка: команда боту через его API и ожидание выхода. Если не вышло — SIGTERM
@@ -286,6 +373,11 @@ class Worker:
         self.pid = pid or None
         self.started_at = time.time()
         self._set(RUNNING, "подхвачен процесс, оставшийся от прошлого запуска центра")
+        if self.detached:
+            self._start_tail()
+            root = release_of(pid)
+            if root is not None:
+                self.code_root = root
         self.events.add(self.name, "info", "worker.adopted",
                         f"{self.title} уже работал (центр перезапускался) — процесс подхвачен, второй экземпляр не запускается",
                         {"pid": pid or None})
@@ -387,6 +479,58 @@ class Worker:
                             {"tail": tail[-2000:]})
             await asyncio.sleep(delay)
             delay = min(delay * 2, self.backoff_max)
+
+
+def release_name(root: Path | None) -> str:
+    """Имя релиза для панели: папка releases/<имя> на сервере или «dev» для запуска из исходников."""
+    if root is None:
+        return ""
+    p = Path(root)
+    return p.name if p.parent.name == "releases" else "dev"
+
+
+def release_of(pid: int | None) -> Path | None:
+    """Из какой папки релиза запущен процесс (Linux: рабочая папка бота лежит внутри релиза)."""
+    if not pid or sys.platform == "win32":
+        return None
+    try:
+        cwd = Path(os.readlink(f"/proc/{int(pid)}/cwd"))
+    except OSError:
+        return None
+    for p in (cwd, *cwd.parents):
+        if p.parent.name == "releases":
+            return p
+    return None
+
+
+def pid_by_port(port: int) -> int:
+    """Linux: pid процесса, который слушает этот TCP-порт (для ботов, не сообщающих pid в /api/ping)."""
+    if sys.platform != "linux":
+        return 0
+    inodes = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(table, encoding="ascii") as f:
+                next(f, None)
+                for row in f:
+                    parts = row.split()
+                    if len(parts) > 9 and parts[3] == "0A" and int(parts[1].rsplit(":", 1)[1], 16) == int(port):
+                        inodes.add(parts[9])
+        except OSError:
+            continue
+    if not inodes:
+        return 0
+    targets = {f"socket:[{i}]" for i in inodes}
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            for fd in os.listdir(f"/proc/{d}/fd"):
+                if os.readlink(f"/proc/{d}/fd/{fd}") in targets:
+                    return int(d)
+        except OSError:
+            continue
+    return 0
 
 
 def _signal_pid(pid: int | None) -> int:
