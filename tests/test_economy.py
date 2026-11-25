@@ -61,11 +61,11 @@ def test_report_stars(tmp_path):
     assert t["fee_estimate"] == 9.0 and t["net"] == round(300 - 4 * 1.11 * 90 - 9, 2)
     c = r["circles"][0]
     assert c["id"] == CIRCLE and c["net"] == t["net"]
-    assert [l["kind"] for l in c["legs"]] == ["transfer", "purchase", "sale", "transfer"]
+    assert [l["kind"] for l in c["legs"]] == ["transfer", "transfer", "purchase", "sale", "transfer"]
     assert round(sum(l["rub"] for l in c["legs"]), 2) == t["net"]   # шаги круга складываются в итог
     w = r["wallets"][0]
     assert w["diff"] == 0 and w["note"] == "сходится"
-    assert any("дороже рынка" in x for x in r["warnings"]) and any("в минусе" in x for x in r["warnings"])
+    assert any("дороже P2P-ориентира" in x for x in r["warnings"]) and any("в минусе" in x for x in r["warnings"])
     assert r["positions"][-1]["position"] == "fp_hold" and r["positions"][-1]["value_rub"] == 100
     assert Economy(tmp_path).position_margin("stars", "funpay") == t["net_pct"]
     assert Economy(tmp_path).position_margin("stars", "funpay", include_withdraw=False) == t["gross_pct"]
@@ -97,3 +97,22 @@ def test_economy_web(tmp_path):
             body = (await r.read()).decode("utf-8-sig")
             assert r.status == 200 and body.startswith("Время;Бот") and "Продажа" in body
     asyncio.run(go())
+
+
+def test_p2p_benchmark(tmp_path):
+    """Старые заказы с курсом по биржевому доллару сравниваются с ценой TON через P2P USDT, а не с недостижимым рынком."""
+    _stars_db(tmp_path)
+    con = sqlite3.connect(tmp_path / "starsbot" / "data" / "starsbot.sqlite3")
+    con.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)")
+    con.execute("INSERT INTO kv VALUES ('ton_rub', ?)", ('{"v": 80.0, "ts": 1, "gram_usdt": 0.92, "usdt_rub": 88.0}',))
+    con.commit()
+    con.close()
+    r = Economy(tmp_path).report(usd_rub=80)
+    t = r["totals"]
+    assert r["rates"]["ton_market_rub"] == 88.0                      # 80 ₽ по биржевому $ × 88/80
+    assert t["p2p_premium"] == round(4 * 1.1 * 8, 2)                  # наценка P2P: 8 ₽ на TON
+    assert t["fx_loss"] == round(4 * 1.1 * (90 - 88), 2)              # обмен: 90 против ориентира 88
+    assert r["rates"]["next_buy"]["rub"] == 80.0
+    c = r["circles"][0]
+    assert round(sum(l["rub"] for l in c["legs"]), 2) == t["net"]
+    assert any("Следующая закупка TON" in w for w in r["warnings"])

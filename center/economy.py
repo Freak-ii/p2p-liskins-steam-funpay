@@ -34,6 +34,7 @@ import yaml
 log = logging.getLogger("center.economy")
 
 DAY = 86400
+P2P_RATES_SINCE = 1795550400.0   # 2026-11-25 00:00 UTC+4: с 1.6 StarsBot пишет в ton_rate P2P-цену (GRAM/USDT × USDT/₽)
 
 DIRECTIONS = {
     "stars": "Звёзды Telegram",
@@ -91,6 +92,15 @@ def _sel(path: Path, table: str, want: list[str], tail: str = "") -> list[dict]:
         return []
     cols = [c if c in have else f"NULL AS {c}" for c in want]
     return _rows(path, f'SELECT {", ".join(cols)} FROM "{table}" {tail}')
+
+
+def _kv(path: Path, key: str):
+    rows = _rows(path, "SELECT value FROM kv WHERE key=?", (key,))
+    try:
+        v = json.loads(rows[0]["value"]) if rows else None
+    except (TypeError, ValueError):
+        return None
+    return v if isinstance(v, dict) else None
 
 
 def _yaml(path: Path) -> dict:
@@ -207,8 +217,22 @@ class Economy:
                                      "tg_username", "ton_amount", "ton_rate", "cost_rub", "tx_hash", "tx_fee_ton",
                                      "created_at", "sent_at", "delivered_at", "completed_at", "channel", "delivery",
                                      "premium_months", "gift_cost", "payout"], "ORDER BY COALESCE(sent_at, created_at)")
+        # Ориентир цены TON — сколько он стоит при покупке USDT на P2P и обмене на бирже (GRAM/USDT × USDT/₽).
+        # До 1.6 StarsBot писал в ton_rate курс CoinGecko по биржевому доллару: такой цены за рубли не купить,
+        # поэтому старые заказы пересчитываем: ton_rate × P2P USDT / биржевой доллар.
+        live = _kv(db, "ton_rub") or {}
+        usdt_p2p = _f(self.cfg.get("usdt_rub")) or _f(live.get("usdt_rub"))
+        usd_fx = _f(extra["rates"].get("usd_rub"))
+        p2p_since = _f(self.cfg.get("p2p_rates_since"), P2P_RATES_SINCE)
+
+        def bench(rate: float, ts: float) -> float:
+            if ts < p2p_since and usdt_p2p and usd_fx and rate:
+                return rate * usdt_p2p / usd_fx
+            return rate
         rates = [_f(o["ton_rate"]) for o in orders if _f(o["ton_rate"]) > 0]
         market = statistics.median(rates) if rates else 0.0
+        benches = [bench(_f(o["ton_rate"]), _f(o["sent_at"] or o["created_at"])) for o in orders if _f(o["ton_rate"]) > 0]
+        bmark = statistics.median(benches) if benches else 0.0
         lots = TonLots([(_f(c["ts"]), _f(c["rub"]), _f(c["ton"])) for c in cash if c["kind"] == "topup"],
                        econ["cost_rate_rub"] or market)
         for c in cash:
@@ -240,10 +264,13 @@ class Economy:
                 buy_rub = real - gas_rub
                 spent_ton += ton
                 gas_ton += gas
-                out.append(self._op(ts, "starsbot", direction, "purchase", -ton, "TON", -buy_rub, o["order_id"], "done",
-                                    f"Fragment: {label} → @{o['tg_username'] or '?'}; по рынку {ton * rate:,.2f} ₽, "
-                                    f"по закупке {buy_rub:,.2f} ₽", circle=circle, position=position, channel=ch,
-                                    market_rub=-ton * rate))
+                b = bench(rate, ts)
+                op = self._op(ts, "starsbot", direction, "purchase", -ton, "TON", -buy_rub, o["order_id"], "done",
+                              f"Fragment: {label} → @{o['tg_username'] or '?'}; по нашей цене TON {buy_rub:,.2f} ₽, "
+                              f"по P2P-ориентиру {ton * b:,.2f} ₽", circle=circle, position=position, channel=ch,
+                              market_rub=-ton * b)
+                op["forex_rub"] = _r(-ton * rate)
+                out.append(op)
                 if gas:
                     out.append(self._op(ts, "starsbot", direction, "gas", -gas, "TON", -gas_rub, o["order_id"], "done",
                                         "комиссия сети TON", circle=circle, position=position, channel=ch))
@@ -295,13 +322,20 @@ class Economy:
             extra["positions"].append({"bot": "starsbot", "position": "ton", "title": "TON на кошельке StarsBot",
                                        "qty": _r(end, 4), "unit": "TON", "value_rub": _r(end * (market or 0)),
                                        "circle": "fp_rub>card_rub>usdt>ton[stars@funpay]>fp_rub"})
-        extra["rates"]["ton_market_rub"] = _r(market)
+        extra["rates"]["ton_market_rub"] = _r(bmark)
+        extra["rates"]["ton_forex_rub"] = _r(market)
+        extra["rates"]["usdt_p2p_rub"] = _r(usdt_p2p) if usdt_p2p else None
+        if live.get("gram_usdt") and live.get("usdt_rub"):
+            extra["rates"]["next_buy"] = {"rub": _r(_f(live.get("v")) or _f(live["gram_usdt"]) * _f(live["usdt_rub"])),
+                                          "gram_usdt": _f(live["gram_usdt"]), "usdt_rub": _f(live["usdt_rub"]),
+                                          "ts": live.get("ts")}
         extra["rates"]["ton_paid_rub"] = _r(topup_rub / topup_ton) if topup_ton else None
         extra["rates"]["unlotted_ton"] = _r(lots.unlotted_ton, 4)
         extra["rates"]["topups"] = [{"ts": c["ts"], "note": c["note"] or "", "rub": _r(_f(c["rub"])),
                                      "ton": _r(_f(c["ton"]), 4),
                                      "rate": _r(_f(c["rub"]) / _f(c["ton"])) if _f(c["ton"]) else None,
-                                     "over_market_pct": _pct(_f(c["rub"]) / _f(c["ton"]) - market, market)
+                                     "over_market_pct": _pct(_f(c["rub"]) / _f(c["ton"]) - bench(market, _f(c["ts"])),
+                                                            bench(market, _f(c["ts"])))
                                      if _f(c["ton"]) and market else None}
                                     for c in cash if c["kind"] == "topup"]
         pend = [o for o in orders if o["status"] in STARS_PENDING]
@@ -461,6 +495,7 @@ class Economy:
                 t["cost"] += -r
                 if o.get("market_rub") is not None:
                     t["cost_market"] += -o["market_rub"]
+                    t["cost_forex"] += -(o.get("forex_rub") if o.get("forex_rub") is not None else o["market_rub"])
             elif o["kind"] == "gas":
                 t["gas"] += -r
             elif o["kind"] == "fee":
@@ -472,6 +507,7 @@ class Economy:
                 "revenue_pending": _r(t["revenue_pending"]), "cost": _r(t["cost"]), "gas": _r(t["gas"]),
                 "fees": _r(t["fee"]), "fee_estimate": _r(t["fee_estimate"]),
                 "fx_loss": _r(t["cost"] - t["cost_market"]) if t["cost_market"] else 0,
+                "p2p_premium": _r(t["cost_market"] - t["cost_forex"]) if t["cost_market"] else 0,
                 "gross": _r(gross), "gross_pct": _pct(gross, revenue), "net": _r(net), "net_pct": _pct(net, revenue)}
 
     def _circles(self, ops: list[dict], extra: dict) -> list[dict]:
@@ -507,15 +543,20 @@ class Economy:
         rev = t["revenue"] or 0
         legs = []
         if "ton" in nodes and position in ("stars", "premium", "stars_gift"):
-            paid = extra["rates"].get("ton_paid_rub")
-            mkt = extra["rates"].get("ton_market_rub")
-            fx = t["fx_loss"] or 0
-            legs.append({"from": "card_rub", "to": "ton", "kind": "transfer", "title": "₽ → USDT → TON (P2P и биржа)",
+            r = extra["rates"]
+            paid, mkt, fxr, usdt = r.get("ton_paid_rub"), r.get("ton_market_rub"), r.get("ton_forex_rub"), r.get("usdt_p2p_rub")
+            fx, prem = t["fx_loss"] or 0, t.get("p2p_premium") or 0
+            legs.append({"from": "card_rub", "to": "usdt", "kind": "transfer", "title": "₽ → USDT на P2P",
+                         "rub": _r(-prem), "pct": _pct(-prem, rev),
+                         "note": f"наценка P2P к биржевому доллару: USDT ≈ {usdt} ₽ против {r.get('usd_rub')} ₽"
+                         if usdt else "наценка P2P к биржевому доллару"})
+            legs.append({"from": "usdt", "to": "ton", "kind": "transfer", "title": "USDT → TON (биржа, перевод)",
                          "rub": _r(-fx), "pct": _pct(-fx, rev),
-                         "note": f"платим {paid} ₽ за TON при рынке {mkt} ₽" if paid and mkt else ""})
+                         "note": f"в среднем {paid} ₽ за TON при P2P-ориентире {mkt} ₽" if paid and mkt else ""})
+            frag = t["cost"] - fx - prem
             legs.append({"from": "ton", "to": "xtr", "kind": "purchase", "title": "TON → звёзды на Fragment",
-                         "rub": _r(-(t["cost"] - fx) - t["gas"]), "pct": _pct(-(t["cost"] - fx) - t["gas"], rev),
-                         "note": f"по рыночному курсу TON, газ {t['gas']:.2f} ₽"})
+                         "rub": _r(-frag - t["gas"]), "pct": _pct(-frag - t["gas"], rev),
+                         "note": f"по биржевой цене TON ≈ {fxr} ₽, газ {t['gas']:.2f} ₽"})
             legs.append({"from": "xtr", "to": CHANNEL_NODE.get(channel, "fp_rub"), "kind": "sale",
                          "position": position, "channel": channel, "title": "звёзды → покупателю, ₽ на FunPay",
                          "rub": _r(rev), "pct": 100.0 if rev else None,
@@ -552,8 +593,12 @@ class Economy:
         warnings = list(extra["errors"])
         r = extra["rates"]
         if r.get("ton_paid_rub") and r.get("ton_market_rub") and r["ton_paid_rub"] > r["ton_market_rub"] * 1.02:
-            warnings.append(f"TON покупается на {(r['ton_paid_rub'] / r['ton_market_rub'] - 1) * 100:.1f}% дороже рынка "
-                            f"({r['ton_paid_rub']} против {r['ton_market_rub']} ₽): это главный расход круга звёзд")
+            warnings.append(f"TON обходится на {(r['ton_paid_rub'] / r['ton_market_rub'] - 1) * 100:.1f}% дороже "
+                            f"P2P-ориентира ({r['ton_paid_rub']} против {r['ton_market_rub']} ₽): проверьте путь пополнения")
+        nb = r.get("next_buy")
+        if nb and r.get("ton_paid_rub"):
+            warnings.append(f"Следующая закупка TON ≈ {nb['rub']} ₽ (GRAM {nb['gram_usdt']} $ × USDT {nb['usdt_rub']} ₽), "
+                            f"в среднем прошлые обошлись в {r['ton_paid_rub']} ₽: бот уже считает цены лотов по новой")
         for c in self._circles(ops, extra):
             if c["net_pct"] is not None and c["net_pct"] < 0:
                 warnings.append(f"Круг «{c['title']}» в минусе: {c['net']:+,.0f} ₽ ({c['net_pct']:+.1f}%) после вывода")

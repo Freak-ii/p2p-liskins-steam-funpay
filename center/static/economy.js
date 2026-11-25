@@ -31,7 +31,8 @@ function kpi(r) {
     tile(rub(t.cost + t.gas + t.fees), 'закупка, газ и комиссии'),
     tile(`${sgn(t.gross)} <span class="small">${pct(t.gross_pct)}</span>`, 'прибыль до вывода'),
     tile(`${sgn(t.net)} <span class="small">${pct(t.net_pct)}</span>`, `чистыми после вывода (${rub(t.fee_estimate)} оценка)`),
-    tile(rub(t.fx_loss), 'переплата за TON против рынка'),
+    tile(r.rates.next_buy ? `${Number(r.rates.next_buy.rub).toFixed(2)} ₽` : '—', r.rates.next_buy ? `TON сейчас: GRAM ${r.rates.next_buy.gram_usdt} $ × USDT ${r.rates.next_buy.usdt_rub} ₽` : 'цена TON сейчас (нет данных)'),
+    tile(rub(t.p2p_premium), 'наценка P2P к биржевому доллару'),
     tile(rub(t.revenue_pending), 'FunPay ещё держит'),
     tile(rub(r.capital_rub), 'деньги и товар в работе'),
   ].join('');
@@ -95,10 +96,10 @@ function side(r) {
   $('#wallets').innerHTML = r.wallets.map((w) => `<p style="margin:8px 0 2px"><b>${esc(w.title)}</b>: было ${w.start} + пришло ${w.in} − ушло ${w.out} = ${(w.start + w.in - w.out).toFixed(4)}, сейчас ${w.end} ${esc(w.asset)}</p>
     <div class="muted small">${esc(w.note)}</div>`).join('') || '<p class="muted">нет данных</p>';
   const tp = r.rates.topups || [];
-  $('#topups').innerHTML = tp.length ? `<tr><th>Когда</th><th class="num">₽</th><th class="num">TON</th><th class="num">₽/TON</th><th class="num">к рынку</th></tr>` + tp.map((t) =>
+  $('#topups').innerHTML = tp.length ? `<tr><th>Когда</th><th class="num">₽</th><th class="num">TON</th><th class="num">₽/TON</th><th class="num">к P2P-ориентиру</th></tr>` + tp.map((t) =>
     `<tr><td>${when(t.ts)} <span class="muted">${esc(t.note)}</span></td><td class="num">${rub(t.rub)}</td><td class="num">${t.ton}</td><td class="num">${t.rate}</td>
     <td class="num ${t.over_market_pct > 0 ? 'neg' : 'pos'}">${t.over_market_pct > 0 ? '+' : ''}${t.over_market_pct}%</td></tr>`).join('')
-    + `<tr><td colspan="5" class="muted small">рынок по курсу заказов ≈ ${r.rates.ton_market_rub} ₽/TON, в среднем платим ${r.rates.ton_paid_rub}</td></tr>` : '<tr><td class="muted">пополнений не записано</td></tr>';
+    + `<tr><td colspan="5" class="muted small">P2P-ориентир (GRAM × USDT на P2P) ≈ ${r.rates.ton_market_rub} ₽/TON, в среднем платим ${r.rates.ton_paid_rub}; по биржевому доллару было бы ${r.rates.ton_forex_rub}</td></tr>` : '<tr><td class="muted">пополнений не записано</td></tr>';
 }
 
 function filters(r) {
