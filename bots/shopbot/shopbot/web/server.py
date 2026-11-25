@@ -247,6 +247,49 @@ def make_app(app_state) -> web.Application:
         st.db.audit(request["role"], "loop_done", str(f.get("id")), res)
         raise back(request, res)
 
+    async def services_page(request):
+        svc = st.shop.services
+        tasks = []
+        for j in st.db.q("SELECT j.*, o.item, o.amount FROM service_jobs j JOIN orders o ON o.id=j.order_id "
+                         "WHERE j.status='manual' AND o.status='manual' ORDER BY j.created_at"):
+            tasks.append({**dict(j), "title": st.shop.product_title("service", j["item"], int(j["amount"]))})
+        skus = sorted({svc.catalog.sku(f"{it['id']}:{v['id']}") for it in svc.catalog.items()
+                       if "stock" in (it.get("sources") or []) for v in it.get("variants") or []})
+        points = {p["key"]: p["state"] for p in st.shop.rtba.points()}
+        return render("services.html", request, econ=svc.economics(), stock=svc.stock_summary(), skus=skus,
+                      tasks=tasks, points=points)
+
+    async def services_action(request):
+        f = await request.post()
+        action, svc = str(f.get("action") or ""), st.shop.services
+        if action == "stock":
+            codes = [c for c in str(f.get("codes") or "").splitlines() if c.strip()]
+            try:
+                cost = float(str(f.get("cost_rub") or "0").replace(",", "."))
+            except ValueError:
+                raise back(request, "себестоимость — число")
+            n = svc.stock.add(str(f.get("sku") or ""), codes, cost, str(f.get("note") or ""))
+            res = f"добавлено {n} из {len(codes)} (дубли пропущены)"
+            st.db.audit(request["role"], "stock_add", str(f.get("sku")), res)
+        elif action == "deliver":
+            res = await st.shop.admin_service_deliver(str(f.get("order") or ""), str(f.get("payload") or ""),
+                                                      who=f"panel:{request['role']}")
+            st.db.audit(request["role"], "svc_deliver", str(f.get("order")), res)
+        elif action == "fail":
+            res = await st.shop.admin_service_fail(str(f.get("order") or ""))
+            st.db.audit(request["role"], "svc_fail", str(f.get("order")), res)
+        else:
+            res = "?"
+        raise back(request, res)
+
+    async def api_services(request):
+        svc = st.shop.services
+        from shopbot.services import SPEND_ROUTE
+        return web.json_response({"economics": svc.economics(), "stock": svc.stock_summary(), "spend": SPEND_ROUTE,
+                                  "pending": [dict(r) for r in st.db.q(
+                                      "SELECT ref, order_id, sku, source, status, detail, cost_rub, created_at "
+                                      "FROM service_jobs WHERE status='manual' ORDER BY created_at")]})
+
     async def customers(request):
         q = request.query.get("q", "")
         sql = "SELECT * FROM users"
@@ -398,6 +441,8 @@ def make_app(app_state) -> web.Application:
         web.get("/api/economy", api_economy), web.get("/", dashboard), web.get("/orders", orders),
         web.get("/orders/{oid}", order), web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.get("/loop", loop_page), web.post("/loop", loop_action),
+        web.get("/services", services_page), web.post("/services", services_action),
+        web.get("/api/services", api_services),
         web.get(r"/customers/{uid:\d+}", customer), web.post(r"/customers/{uid:\d+}", customer_action),
         web.get("/rtba", rtba_page), web.post("/rtba", rtba_action), web.get("/channel", channel_page),
         web.post("/channel", channel_action), web.get("/settings", settings), web.post("/settings", settings),

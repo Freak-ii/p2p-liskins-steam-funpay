@@ -54,3 +54,26 @@ def test_panel_pages_roles_and_demo_chat(tmp_path):
             await c.close()
             await app.shop.stop()
     asyncio.run(go())
+
+
+def test_services_page_stock_and_delivery(tmp_path):
+    app = App(tmp_path, demo=True)
+    app.cfg.save({"dashboard": {"token": "admin-token-12345"}})
+
+    async def go():
+        await app.start()
+        c = TestClient(TestServer(make_app(app)))
+        await c.start_server()
+        try:
+            await c.get("/login?token=admin-token-12345")
+            assert (await c.get("/services")).status == 200
+            await c.post("/services", data={"action": "stock", "sku": "appstore_us:20", "cost_rub": "1780",
+                                            "codes": "CODE-1\nCODE-2\nCODE-1", "note": "test"})
+            assert app.shop.services.stock.count("appstore_us:20") == 2
+            data = await (await c.get("/api/services")).json()
+            row = next(r for r in data["economics"] if r["key"] == "appstore_us:20")
+            assert row["source"] == "stock" and row["cost_rub"] == 1780
+        finally:
+            await c.close()
+            await app.shop.stop()
+    asyncio.run(go())

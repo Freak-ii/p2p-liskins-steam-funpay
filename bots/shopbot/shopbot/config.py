@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+from shopbot.services_catalog import ITEMS as SERVICE_ITEMS
+
 DEFAULTS: dict[str, Any] = {
     "general": {
         "shop_name": "Stars Market",
@@ -64,6 +66,11 @@ DEFAULTS: dict[str, Any] = {
         "steam_keys": {"enabled": True, "margin_pct": 6, "min_margin_pct": 2, "max_qty": 50,
                        "title": "Ключ Mann Co. (TF2)",
                        "steam_value_usd": 1.87},   # ≈ сколько ключ даёт на балансе Steam после продажи на ТП (оценка)
+        # Сервисы (shopbot/services.py): VPN, карты App Store США, Claude/ChatGPT через карту, Spotify, Steam.
+        # prefer_auto_within_pct — склад/своя панель берутся, даже если дороже перепродажи не больше чем на N %;
+        # max_over_market_pct — вариант закрывается RTBA, если наша цена дороже рынка (market_ref_rub) на N %.
+        "services": {"enabled": True, "margin_pct": 12, "min_margin_pct": 4, "prefer_auto_within_pct": 5,
+                     "stock_low": 3, "max_over_market_pct": 5, "items": SERVICE_ITEMS},
     },
     # ---------------------------------------------------------------- выкуп у клиентов
     "buyback": {
@@ -127,6 +134,16 @@ DEFAULTS: dict[str, Any] = {
         # MannBot /api/supply: ключи TF2 обменом Steam (kind: manual — выдача вручную по cost_rub)
         "steam_keys": {"kind": "http", "url": "http://127.0.0.1:8801", "token": "", "cost_rub": 165},
     },
+    # Источники сервисов. panel — свой VPN-сервер (Marzban или 3x-ui): cost_month_rub — аренда VPS в месяц,
+    # capacity — сколько ключей держит сервер (себестоимость ключа = cost_month_rub / capacity × месяцы).
+    # resale_sla_minutes — за сколько оператор обещает выдать перепродажу; дольше — тревога и возврат на баланс.
+    "services": {
+        "secret_key": "",            # ключ шифрования логинов/паролей покупателей (создаётся сам)
+        "panel": {"kind": "marzban", "url": "", "username": "", "password": "", "inbound_tags": [],
+                  "inbound_id": 1, "sub_base": "", "flow": "", "limit_ip": 3, "data_limit_gb": 0,
+                  "cost_month_rub": 450, "capacity": 60},
+        "resale_sla_minutes": 120,
+    },
     # ---------------------------------------------------------------- RTBA: контроль каждого пункта
     "rtba": {
         "interval_seconds": 30,
@@ -178,6 +195,7 @@ DEFAULTS: dict[str, Any] = {
 SECRETS = [("telegram", "bot_token"), ("payments.card.yookassa", "secret_key"),
            ("payments.crypto.cryptopay", "token"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
            ("suppliers.gifts", "token"), ("suppliers.steam_keys", "token"),
+           ("services", "secret_key"), ("services.panel", "password"),
            ("dashboard", "token"), ("dashboard", "operator_token"), ("dashboard", "viewer_token")]
 
 
