@@ -3,10 +3,10 @@
 <p class="mute">VPN, карты App Store США, Claude/ChatGPT через карту, Spotify, пополнение Steam. Источник выбирается по себестоимости: склад и свой VPN-сервер — автоматически, перепродажа GGSEL/FunPay — задачей оператору. Цены — из каталога (config.yaml → catalog.services).</p></div>
 {% if tasks %}<div class="card"><h3>Ждут выдачи ({{ tasks|length }})</h3><table><tr><th>Заказ</th><th>Товар</th><th>Что купить</th><th>Себест.</th><th>Выдать</th></tr>
 {% for t in tasks %}<tr><td><a href="/orders/{{ t.order_id }}">{{ t.order_id }}</a></td><td>{{ t.title }}</td><td class="mute" style="word-break:break-all">{{ t.detail }}</td><td>{{ '%.0f'|format(t.cost_rub) }} ₽</td>
-<td><form method="post"><input type="hidden" name="action" value="deliver"><input type="hidden" name="order" value="{{ t.order_id }}"><input name="payload" placeholder="код / ключ / «готово»" required> <button>Выдать</button></form>
+<td><form method="post"><input type="hidden" name="action" value="deliver"><input type="hidden" name="order" value="{{ t.order_id }}"><input name="payload" placeholder="код / ключ / «готово» [цена 2050]" required> <button>Выдать</button></form>
 <form method="post"><input type="hidden" name="action" value="fail"><input type="hidden" name="order" value="{{ t.order_id }}"><button class="ghost">Вернуть деньги</button></form></td></tr>{% endfor %}</table></div>{% endif %}
 <div class="card"><h3>Экономика по вариантам</h3><table><tr><th>Товар</th><th>Источник</th><th>Себестоимость</th><th>Цена</th><th>Маржа</th><th>Рынок</th><th>Почему цена</th><th>RTBA</th></tr>
-{% for r in econ %}<tr><td>{{ r.title }}</td><td>{{ r.source or '—' }}{% for o in r.sources %}{% if o.left %} · склад {{ o.left }}{% endif %}{% endfor %}</td>
+{% for r in econ %}<tr><td>{{ r.title }}</td><td>{{ r.source or '—' }}{% for o in r.sources %}{% if o.left %} · склад {{ o.left }}{% endif %}{% if o.learned %} · по факту (в конфиге {{ o.config_cost_rub|round|int }} ₽){% endif %}{% endfor %}</td>
 <td>{{ '%.0f'|format(r.cost_rub) if r.cost_rub is not none else '—' }} ₽</td><td>{{ '%.0f'|format(r.price_rub) if r.price_rub else '—' }} ₽</td>
 <td>{% if r.margin_rub is not none %}{{ '%.0f'|format(r.margin_rub) }} ₽ ({{ r.margin_pct }}%){% else %}—{% endif %}</td><td>{{ r.ref_rub or '—' }}</td><td class="mute">{{ r.why }}</td><td>{{ points.get('svc.' ~ r.key.split(':')[0], '') }}</td></tr>{% endfor %}</table></div>
 <div class="card"><h3>Склад кодов</h3>

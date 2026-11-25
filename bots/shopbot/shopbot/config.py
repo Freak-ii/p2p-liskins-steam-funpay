@@ -148,6 +148,7 @@ DEFAULTS: dict[str, Any] = {
                   "inbound_id": 1, "sub_base": "", "flow": "xtls-rprx-vision", "limit_ip": 3, "data_limit_gb": 0,
                   "cost_month_rub": 560, "capacity": 100},
         "resale_sla_minutes": 120,
+        "learned_cost_days": 14,   # цена закупки = медиана 3 последних реальных закупок за N дней (0 — выкл)
     },
     # ---------------------------------------------------------------- RTBA: контроль каждого пункта
     "rtba": {

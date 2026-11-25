@@ -448,7 +448,8 @@ class ShopTelegram:
                 res = await shop.confirm_asset(oid, who=f"tg:{uid}")
             elif action == "svc":
                 self.db.set_session(uid, "adm_svc", {"order": oid})
-                res = "пришлите код/ключ/ссылку одним сообщением (для подписки на аккаунт — «готово»)"
+                res = ("пришлите код/ключ/ссылку одним сообщением (для подписки на аккаунт — «готово»). "
+                       "В конце можно указать реальную цену закупки: «… цена 2050»")
             elif action == "svcfail":
                 res = await shop.admin_service_fail(oid)
             else:

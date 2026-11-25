@@ -21,7 +21,7 @@ from shopbot.loop import MoneyLoop
 from shopbot.pricing import METHODS, PRODUCT_TITLES, Quote, apply_method, referral_discount, sell_quote, shop_price
 from shopbot.rates import Rates
 from shopbot.rtba import RTBA, PRODUCT_SUPPLIER
-from shopbot.services import ServiceSupplier, delivery_text, mask, service_price
+from shopbot.services import ServiceSupplier, delivery_text, mask, service_price, split_cost
 from shopbot.suppliers import SupplierError, build_suppliers
 
 log = logging.getLogger("shop")
@@ -399,15 +399,17 @@ class Shop:
         o = self.db.order(oid)
         if o is None or o["product"] != "service" or o["status"] not in ("manual", "delivering"):
             return "заказ не ждёт выдачи"
-        payload = (payload or "").strip()
+        payload, real_cost = split_cost(payload)
         if payload.lower() in ("готово", "done", "ok", "+"):
             payload = ""
         sid, _ = self.services.catalog.split(o["item"])
         it = self.services.catalog.item(sid) or {}
         if it.get("kind") in ("code", "vpn") and not payload:
             return "для этого товара пришлите код/ключ"
+        if real_cost is not None:
+            self.services.record_cost(o["supplier_ref"] or oid, real_cost)
         self.services.mark(o["supplier_ref"] or oid, "delivered", payload)
-        self.db.event(oid, "service_delivered_by", who=who)
+        self.db.event(oid, "service_delivered_by", who=who, **({"cost_rub": real_cost} if real_cost else {}))
         await self.on_delivered(oid)
         return "выдано"
 

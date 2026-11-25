@@ -251,3 +251,27 @@ def test_3xui_two_servers_create_and_renew(tmp_path):
             await s1.close()
             await s2.close()
     asyncio.run(go())
+
+
+def test_operator_real_cost_corrects_margin_and_is_learned(tmp_path):
+    from shopbot.services import split_cost
+    assert split_cost("AB-12 цена 2050") == ("AB-12", 2050.0)
+    assert split_cost("готово cost: 240,5 ₽") == ("готово", 240.5)
+    assert split_cost("CODE-2050") == ("CODE-2050", None)
+    shop, bot = make(tmp_path)
+    o = asyncio.run(flow(shop, bot, ["buy:service", "sv:claude_pro", "sx:claude_pro:1", "sa:claude_pro:1"]))
+    sku = shop.services.catalog.sku("claude_pro:1")
+    before = [x for x in shop.services.options("claude_pro:1") if x["source"] == "resale"][0]["cost_rub"]
+    asyncio.run(bot.on_callback(ADMIN, f"adm:svc:{o['id']}"))
+    asyncio.run(bot.on_text(ADMIN, "", "", "XYZ-CLAUDE-20 цена 1990"))
+    o = shop.db.order(o["id"])
+    assert o["status"] == "delivered" and o["cost_rub"] == 1990
+    assert abs(o["margin_rub"] - (o["price_rub"] - o["discount_rub"] - 1990)) < 0.01
+    out = "\n".join(texts(bot, U))
+    assert "XYZ-CLAUDE-20" in out and "цена 1990" not in out
+    assert shop.services.learned_cost(sku) == 1990
+    r = [x for x in shop.services.options("claude_pro:1") if x["source"] == "resale"][0]
+    assert r["cost_rub"] == 1990 and r["learned"] and r["config_cost_rub"] == before
+    # выключатель
+    shop.cfg.data["services"]["learned_cost_days"] = 0
+    assert shop.services.learned_cost(sku) is None

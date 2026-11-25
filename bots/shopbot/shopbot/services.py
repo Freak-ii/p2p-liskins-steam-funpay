@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import secrets
+import re
 import time
 import uuid
 from typing import Any
@@ -51,7 +52,22 @@ CREATE TABLE IF NOT EXISTS service_jobs (
 );
 CREATE INDEX IF NOT EXISTS service_jobs_order ON service_jobs(order_id);
 CREATE TABLE IF NOT EXISTS order_secrets (order_id TEXT PRIMARY KEY, data TEXT, created_at REAL);
+CREATE TABLE IF NOT EXISTS service_costs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT, cost_rub REAL, order_id TEXT DEFAULT '', at REAL
+);
+CREATE INDEX IF NOT EXISTS service_costs_sku ON service_costs(sku, at);
 """
+
+COST_RE = re.compile(r"\s*(?:цена|себестоимость|cost)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*(?:₽|р|руб\.?)?\s*$", re.I)
+
+
+def split_cost(text: str) -> tuple[str, float | None]:
+    """«КОД-123 цена 2050» → («КОД-123», 2050.0). Оператор пишет фактическую цену закупки в конце сообщения."""
+    text = str(text or "")
+    m = COST_RE.search(text)
+    if not m:
+        return text.strip(), None
+    return text[:m.start()].strip(), float(m.group(1).replace(",", "."))
 
 # Куда уходят деньги на закупку (для круга, shopbot/loop.py)
 SPEND_ROUTE = {
@@ -446,9 +462,38 @@ class ServiceSupplier:
         if "resale" in srcs:
             best = self.resale.best(it, v, amount, self.rates)
             if best is not None:
-                out.append({"source": "resale", "auto": False, "cost_rub": best["cost_rub"],
-                            "offer": {k: best.get(k) for k in ("market", "url", "title", "option")}})
+                cost, learned = best["cost_rub"], None
+                if it.get("kind") != "topup":
+                    learned = self.learned_cost(sku)
+                    if learned is not None:
+                        cost = learned          # фактическая цена последних закупок важнее цены из конфига
+                out.append({"source": "resale", "auto": False, "cost_rub": cost,
+                            "offer": {k: best.get(k) for k in ("market", "url", "title", "option")},
+                            **({"learned": True, "config_cost_rub": best["cost_rub"]} if learned is not None else {})})
         return out
+
+    # ------------------------------------------------------------------ фактические цены закупки
+    def record_cost(self, ref: str, cost_rub: float) -> None:
+        """Оператор сообщил, за сколько реально купил: правим себестоимость заказа и запоминаем цену."""
+        job = self._job(ref)
+        if job is None or cost_rub is None or cost_rub <= 0:
+            return
+        self._set(ref, cost_rub=round(float(cost_rub), 2))
+        self.db.exec("INSERT INTO service_costs(sku, cost_rub, order_id, at) VALUES(?,?,?,?)",
+                        (job["sku"], round(float(cost_rub), 2), job["order_id"] or "", time.time()))
+
+    def learned_cost(self, sku: str) -> float | None:
+        """Медиана последних 3 закупок за services.learned_cost_days (по умолчанию 14) дней."""
+        days = float(self.cfg.get("services.learned_cost_days", 14) or 0)
+        if days <= 0:
+            return None
+        rows = self.db.q("SELECT cost_rub FROM service_costs WHERE sku=? AND at>=? ORDER BY at DESC LIMIT 3",
+                           (sku, time.time() - days * 86400))
+        vals = sorted(float(r["cost_rub"]) for r in rows)
+        if not vals:
+            return None
+        n = len(vals)
+        return round(vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2, 2)
 
     def choose(self, key: str, amount: int = 1) -> dict | None:
         opts = self.options(key, amount)
