@@ -13,7 +13,7 @@ from shopbot import texts as T
 from shopbot.pricing import shop_price
 from shopbot.suppliers import SupplierError
 
-POSTS = [("showcase", "Витрина (закреп)"), ("prices", "Цены на сегодня"), ("sell", "Продать нам"),
+POSTS = [("open", "Кнопка «Открыть магазин» (закреп, без цен)"), ("showcase", "Витрина"), ("prices", "Цены на сегодня"), ("sell", "Продать нам"), ("faq", "Вопросы и ответы"),
          ("referral", "Рефералка")]
 
 
@@ -26,6 +26,25 @@ class Channel:
 
     def link(self, payload: str) -> str:
         return f"https://t.me/{self.shop.bot.bot_username if self.shop.bot else 'your_shop_bot'}?start={payload}"
+
+    def app_link(self) -> str:
+        """Ссылка, открывающая мини-приложение сразу (Main Mini App в BotFather)."""
+        return f"https://t.me/{self.shop.bot.bot_username if self.shop.bot else 'your_shop_bot'}?startapp"
+
+    async def ensure_open_post(self) -> str:
+        """Пост с кнопкой «Открыть магазин» — опубликовать и закрепить один раз (channel.open_post.auto).
+        Внизу канала Telegram кнопку бота не даёт, поэтому кнопка живёт под закреплённым постом."""
+        if not self.cfg.get("channel.open_post.auto") or not self.cfg.get("channel.chat_id"):
+            return "выключено"
+        row = self.db.one("SELECT * FROM channel_posts WHERE id='open'")
+        if row is not None and row["message_id"]:
+            return "уже опубликован"
+        res = await self.publish("open", force=True)
+        row = self.db.one("SELECT * FROM channel_posts WHERE id='open'")
+        if row is not None and row["message_id"] and self.cfg.get("channel.open_post.pin", True):
+            await self.shop.bot.call("pinChatMessage", chat_id=self.cfg.get("channel.chat_id"),
+                                     message_id=row["message_id"], disable_notification=True)
+        return res
 
     async def price_rows(self) -> tuple[list[str], dict]:
         shop, rows, mins = self.shop, [], {}
@@ -65,6 +84,8 @@ class Channel:
         c = self.cfg
         shop_name = c.get("general.shop_name")
         posts = {
+            "open": (T.POST_OPEN.format(shop=shop_name),
+                     [[("🛒 Открыть магазин", {"url": self.app_link()})]]),
             "showcase": (T.POST_SHOWCASE.format(shop=shop_name, stars_from=f"{mins.get('stars', 0):.0f}",
                                                 gift_from=f"{mins.get('gift', 0):.0f}",
                                                 prem_from=f"{mins.get('premium', 0):.0f}"),
@@ -74,6 +95,8 @@ class Channel:
             "prices": (T.POST_PRICES.format(rows="\n".join(rows) or "—"),
                        [[("🛒 Купить в боте", {"url": self.link("stars")})]]),
             "sell": (T.POST_SELL.format(fee=c.get("buyback.fee_pct")), [[("💸 Продать", {"url": self.link("sell")})]]),
+            "faq": (T.POST_FAQ, [[("❓ Все вопросы", {"url": self.link("faq")}),
+                                  ("🛟 Поддержка", {"url": self.link("support")})]]),
             "referral": (T.POST_REF.format(pct=c.get("referral.reward_pct"), disc=c.get("referral.friend_discount_pct")),
                          [[("🤝 Получить ссылку", {"url": self.link("ref")})]]),
         }
@@ -93,8 +116,9 @@ class Channel:
         self.db.kv_set("price_mins", mins)
         return out
 
-    async def publish(self, pid: str) -> str:
-        if not (self.cfg.get("channel.enabled") and self.cfg.get("channel.chat_id")):
+    async def publish(self, pid: str, force: bool = False) -> str:
+        # force — только для поста «open» без цен (его разрешает channel.open_post.auto)
+        if not self.cfg.get("channel.chat_id") or not (self.cfg.get("channel.enabled") or (force and pid == "open")):
             return "канал не подключён: включите channel.enabled и укажите chat_id (бот — админ канала)"
         if self.shop.bot is None or not self.shop.bot.token:
             return "нет токена бота"

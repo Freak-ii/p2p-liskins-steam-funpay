@@ -107,6 +107,49 @@ class ShopTelegram:
                 except Exception:  # noqa: BLE001
                     log.exception("обработка апдейта")
 
+    def fees_text(self, r: dict) -> str:
+        from shopbot.pricing import gift_star_rub, wallet_spread
+        c, rt = self.cfg, self.shop.rtba
+        lines = ["ℹ️ <b>Комиссии и курсы — честно</b>\n"]
+        if rt.is_open("pay.wallet"):
+            sp = wallet_spread(c)
+            lines.append(f"💎 Крипта на кошелёк TON: курс USDT <b>{r['usdt_rub'] * (1 - sp / 100):.2f} ₽</b>, TON "
+                         f"<b>{r['ton_rub'] * (1 - sp / 100):.2f} ₽</b> (биржа Bybit −{sp:g}%), других комиссий нет")
+        if rt.is_open("pay.crypto"):
+            fee = max(float(c.get("payments.crypto.fee_pct") or 0), float(c.get("payments.crypto.min_fee_pct") or 0))
+            lines.append(f"🪙 @CryptoBot: курс Bybit — USDT <b>{r['usdt_rub']} ₽</b>; конвертация <b>+{fee:g}%</b>")
+        if rt.is_open("pay.stars"):
+            lines.append(f"⭐ Звёзды Telegram: 1 ⭐ = <b>{c.get('payments.stars.rub_per_star'):g} ₽</b>, без комиссии")
+        if rt.is_open("pay.walt"):
+            lines.append(f"👛 Переводом в Walt: курс USDT на <b>{c.get('payments.walt.spread_pct'):g}%</b> ниже биржи, "
+                         "без комиссии")
+        if rt.is_open("pay.tgwallet"):
+            lines.append(f"👛 Telegram Wallet: курс USDT <b>{r['usdt_rub']} ₽</b>, комиссия "
+                         f"<b>+{c.get('payments.tgwallet.fee_pct'):g}%</b>")
+        if rt.is_open("pay.gift"):
+            lines.append(f"🎁 Подарками: 1 ⭐ цены продажи подарка = <b>{gift_star_rub(c):.2f} ₽</b>")
+        if rt.is_open("pay.skins"):
+            lines.append(f"🎮 Скинами Steam: по ценам {c.get('payments.skins.market')} "
+                         f"−{c.get('payments.skins.haircut_pct'):g}%")
+        if rt.is_open("pay.card"):
+            gw = str(c.get("payments.card.provider") or "yookassa") != "yookassa"
+            lines.append(f"💳 Карта / СБП: <b>+{c.get('payments.card.fee_pct'):g}%</b> — "
+                         + ("комиссия платёжного шлюза" if gw else "эквайринг банка"))
+        lines.append("👛 Баланс магазина: без комиссии\n")
+        lines.append(f"💸 <b>Продажа нам</b>: комиссия <b>{c.get('buyback.fee_pct'):g}%</b>.")
+        lines.append(f"🤝 Рефералка: <b>{c.get('referral.reward_pct'):g}%</b> от покупок друга на ваш бонусный баланс, "
+                     f"другу −{c.get('referral.friend_discount_pct'):g}% на первый заказ.\n")
+        lines.append("Перед оплатой вы всегда видите разбивку: цена товара, скидка, курс и итог.")
+        return "\n".join(lines)
+
+    async def setup_menu_button(self, url: str = "") -> None:
+        """Кнопка меню в чате бота открывает мини-приложение (адрес даёт shopbot.miniapp, только https)."""
+        url = (url or str(self.cfg.get("miniapp.url") or "")).strip()
+        if not url.startswith("https://"):
+            return
+        text = str(self.cfg.get("miniapp.menu_text") or "Магазин")[:32]
+        await self.call("setChatMenuButton", menu_button={"type": "web_app", "text": text, "web_app": {"url": url}})
+
     # ------------------------------------------------------------------ вход
     @property
     def bot_username(self) -> str:
@@ -171,13 +214,16 @@ class ShopTelegram:
             await self.menu(uid)
             if arg in ("stars", "gift", "premium", "steam_keys"):
                 await self.on_callback(uid, f"buy:{arg}")
-            elif arg in ("sell", "ref", "fees"):
+            elif arg in ("sell", "ref", "fees", "faq", "support"):
                 await self.on_callback(uid, arg)
             return
         self.db.touch_user(uid, username, first_name, lang)
         if text in ("/menu", "/help"):
             self.db.set_session(uid, "")
             await self.menu(uid)
+            return
+        if text == "/faq":
+            await self.on_callback(uid, "faq")
             return
         if text == "/balance":
             await self.on_callback(uid, "balance")
@@ -339,12 +385,9 @@ class ShopTelegram:
             await self.referral(uid)
         elif head == "fees":
             r = shop.rates.snapshot()
-            await self.send(uid, T.FEES.format(
-                card=self.cfg.get("payments.card.fee_pct"), usdt=r["usdt_rub"], ton=r["ton_rub"],
-                crypto=max(float(self.cfg.get("payments.crypto.fee_pct")), float(self.cfg.get(
-                    "payments.crypto.min_fee_pct"))), xtr=self.cfg.get("payments.stars.rub_per_star"),
-                fee=self.cfg.get("buyback.fee_pct"), ref=self.cfg.get("referral.reward_pct"),
-                disc=self.cfg.get("referral.friend_discount_pct")), [("◀️ В меню", "menu")])
+            await self.send(uid, self.fees_text(r), [("◀️ В меню", "menu")])
+        elif head == "faq":
+            await self.send(uid, T.faq_text(), [[("🛟 Не нашли ответ? Поддержка", "support")], [("◀️ В меню", "menu")]])
         elif head == "orders":
             await self.orders(uid)
         elif head == "support":
@@ -360,6 +403,8 @@ class ShopTelegram:
                 res = await shop.admin_delivered(oid)
             elif action == "gift":
                 res = await shop.confirm_gift_received(oid, who=f"tg:{uid}")
+            elif action == "asset":
+                res = await shop.confirm_asset(oid, who=f"tg:{uid}")
             else:
                 res = "?"
             self.db.audit(f"tg:{uid}", f"adm_{action}", oid, res)
@@ -386,13 +431,18 @@ class ShopTelegram:
         to = "ваш Steam (обмен)" if d["product"] == "steam_keys" else f"@{d['recipient']}"
         lines, rows = [], []
         for m in shop.methods_for(d["product"]):
-            assets = (self.cfg.get("payments.crypto.assets") or ["USDT"]) if m == "crypto" else [""]
+            assets = (self.cfg.get(f"payments.{m}.assets") or ["USDT"]) if m in ("crypto", "wallet") else [""]
             for a in assets:
                 qq = apply_method(self.cfg, type(q)(**{**q.__dict__, "lines": []}), m, shop.rates, a or "USDT")
                 label = METHOD_TITLES[m] + (f" {a}" if a else "")
-                amt = (f"{qq.pay_amount:g} {qq.asset}" if m == "crypto" else
-                       f"{int(qq.pay_amount)} ⭐" if m == "stars" else f"{qq.total_rub:.2f} ₽")
-                fee = f" (комиссия {qq.fee_pct:g}%)" if qq.fee_pct else " (без комиссии)"
+                amt = (f"{qq.pay_amount:g} {qq.asset}" if m in ("crypto", "wallet") else
+                       f"{int(qq.pay_amount)} ⭐" if m == "stars" else
+                       f"подарки на {int(qq.pay_amount)} ⭐" if m == "gift" else
+                       f"скины на {qq.pay_amount:g} $" if m == "skins" else
+                       f"{qq.pay_amount:g} $" if m == "tgwallet" else
+                       f"{qq.pay_amount:g} USDT" if m == "walt" else f"{qq.total_rub:.2f} ₽")
+                fee = (f" (курс {qq.rate:.2f} ₽)" if m in ("wallet", "walt") else
+                       f" (комиссия {qq.fee_pct:g}%)" if qq.fee_pct else " (без комиссии)")
                 lines.append(f"• {label}: <b>{amt}</b>{fee}")
                 rows.append([(f"{label} · {amt}", f"pay:{m}:{a}" if a else f"pay:{m}")])
         if not rows:
@@ -422,11 +472,34 @@ class ShopTelegram:
         head = f"🧾 <b>Заказ #{o['id']}</b>\n{lines}\n\n"
         if method == "balance":
             return
-        amount = (f"{o['pay_amount']:g} {o['pay_currency']}" if method == "crypto" else
-                  f"{int(o['pay_amount'])} ⭐" if method == "stars" else f"{o['total_rub']:.2f} ₽")
-        ttl = int(self.cfg.get("payments.order_ttl_minutes") or 30)
+        amount = (f"{o['pay_amount']:g} {o['pay_currency']}" if method in ("crypto", "wallet") else
+                  f"{int(o['pay_amount'])} ⭐" if method == "stars" else
+                  f"{o['pay_amount']:g} $" if method == "tgwallet" else f"{o['total_rub']:.2f} ₽")
+        ttl = int(self.cfg.get(f"payments.{method}.ttl_minutes") or self.cfg.get("payments.order_ttl_minutes") or 30)
         rows = []
-        if pay.get("invoice"):
+        if method == "wallet":
+            text = T.PAY_WALLET.format(amount=amount, address=pay.get("address", ""), comment=pay.get("comment", ""),
+                                       ttl=ttl)
+            if pay.get("url"):
+                rows.append([("💎 Открыть в Tonkeeper", {"url": pay["url"]})])
+            await self.send(uid, head + text, rows or None)
+        elif method == "walt":
+            acc = self.cfg.get("payments.walt.account") or "@shop"
+            await self.send(uid, head + T.PAY_WALT.format(amount=f"{o['pay_amount']:g} USDT", account=acc, ttl=ttl,
+                                                          oid=o["id"]),
+                            [[("👛 Открыть Walt", {"url": "https://t.me/wallet"})]])
+        elif method == "tgwallet":
+            if pay.get("url", "").startswith("http"):
+                rows.append([("👛 Оплатить в Wallet", {"url": pay["url"]})])
+            await self.send(uid, head + T.PAY_TGWALLET.format(amount=amount, ttl=ttl), rows or None)
+        elif method == "gift":
+            acc = self.cfg.get("payments.gift.account") or self.cfg.get("buyback.gifts.gift_account") or "@shop_gifts"
+            await self.send(uid, head + T.PAY_GIFT.format(stars=int(o["pay_amount"]), account=acc, ttl=ttl, oid=o["id"]))
+        elif method == "skins":
+            await self.send(uid, head + T.PAY_SKINS.format(usd=o["pay_amount"], trade=self.cfg.get("payments.skins.trade_url"),
+                                                           market=self.cfg.get("payments.skins.market"), ttl=ttl,
+                                                           oid=o["id"]))
+        elif pay.get("invoice"):
             await self.send(uid, head + T.PAY_LINK.format(amount=amount, ttl=ttl))
             await self.send_invoice(uid, o["id"], "Заказ " + o["id"], json.loads(o["breakdown"])[0][0],
                                     int(o["pay_amount"]))

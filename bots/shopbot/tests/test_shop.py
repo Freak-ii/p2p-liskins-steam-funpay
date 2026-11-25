@@ -35,7 +35,7 @@ def test_demo_scenario_all_branches(tmp_path):
     # прозрачность: разбивка есть у каждого заказа, комиссия карты отдельной строкой
     card = db.order(res["stars_card"])
     lines = dict(json.loads(card["breakdown"]))
-    assert any(k.startswith("Комиссия эквайринга 3.5%") for k in lines)
+    assert any(k.startswith("Комиссия за оплату картой/СБП 3.5%") for k in lines)
     assert abs(card["total_rub"] - (card["price_rub"] + card["fee_rub"])) < 0.011
     # крипта: комиссия не меньше 2%
     gift = db.order(res["gift_crypto"])
@@ -92,7 +92,7 @@ def test_channel_posts_are_drafts(tmp_path):
     async def go():
         await shop.rtba.tick()
         posts = await shop.channel.build()
-        assert {p["id"] for p in posts} == {"showcase", "prices", "sell", "referral"}
+        assert {p["id"] for p in posts} == {"open", "showcase", "prices", "sell", "faq", "referral"}
         prices = next(p for p in posts if p["id"] == "prices")
         assert "⭐ 100" in prices["text"] and "Premium 3" in prices["text"]
         assert "не подключён" in await shop.channel.publish("prices")

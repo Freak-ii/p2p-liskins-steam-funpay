@@ -21,7 +21,7 @@ button.ghost{background:transparent;color:var(--acc);border:1px solid var(--acc)
 {% if demo %}<div class="banner">🧪 Демо: Telegram, оплата и поставщики эмулируются, деньги не двигаются</div>
 {% elif dry_run %}<div class="banner">Тестовый режим: платежи принимаются, выдача товара выключена (Настройки → снять галочку)</div>{% endif %}
 <header><b>✨ {{ shop_name }}</b>
-{% for href, t in [('/', 'Сводка'), ('/rtba', 'RTBA'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/channel', 'Канал'), ('/settings', 'Настройки')] %}
+{% for href, t in [('/', 'Сводка'), ('/rtba', 'RTBA'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/loop', 'Круг'), ('/channel', 'Канал'), ('/settings', 'Настройки')] %}
 <a href="{{ href }}" class="{{ 'on' if path == href else '' }}">{{ t }}</a>{% endfor %}
 {% if demo %}<a href="/demo" class="{{ 'on' if path == '/demo' else '' }}">💬 Демо-чат</a>{% endif %}
 <span style="flex:1"></span>{% if alerts_open %}<span class="pill closed">⚠ {{ alerts_open }}</span>{% endif %}<span class="mute">{{ role }} · v{{ VERSION }}</span></header>

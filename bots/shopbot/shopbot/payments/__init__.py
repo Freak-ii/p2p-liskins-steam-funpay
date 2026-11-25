@@ -6,6 +6,13 @@
             testnet=True → testnet-pay.crypt.bot (тестовые монеты). Через тот же API — выплаты при выкупе.
   stars   — счёт Telegram в звёздах (XTR) прямо в боте; так же клиент «продаёт» нам звёзды.
   balance — списание с баланса магазина (возвраты, бонусы рефералки).
+  wallet  — крипта сразу на общий кошелёк TON (хаб казначейства): TON с комментарием DPB-<заказ> или USDT (TON)
+            на уникальную сумму; приход видит опрос toncenter v3. Деньги сразу в круге, без посредника.
+  tgwallet — Telegram Wallet (@wallet) через Wallet Pay: счёт в $ открывается прямо в кошельке Telegram.
+  walt    — перевод USDT контакту внутри Walt (бывший @wallet) на аккаунт магазина: без комиссии и сразу,
+            но API у Walt нет — поступление подтверждает оператор, как подарки.
+  gift    — оплата подарками Telegram на аккаунт приёма; skins — скинами Steam обменом на ссылку магазина.
+            Оба подтверждает оператор (кнопка в Telegram/панели), позже — автоматический приём.
 Статусы проверяются опросом: белый IP и вебхуки не нужны, магазин работает с домашнего компьютера.
 """
 from __future__ import annotations
@@ -204,13 +211,167 @@ class DemoPay:
         return "succeeded"
 
 
+USDT_TON_MASTER = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"
+
+
+def wallet_comment(order_id: str) -> str:
+    return f"DPB-{order_id}"
+
+
+class TonWallet:
+    """Приём на собственный кошелёк TON (общий кошелёк круга). Ничего не подписывает — только смотрит входящие.
+
+    Платёж «создаётся» локально: адрес + сумма + комментарий; ссылки ton:// и Tonkeeper открывают перевод уже
+    заполненным. Проверка: TON — входящая транзакция с нашим комментарием и суммой ≥ счёта; USDT — входящий
+    перевод жетона USDT на точную уникальную сумму (её подбирает магазин), после создания счёта.
+    """
+
+    name = "ton_wallet"
+    API = "https://toncenter.com/api/v3"
+
+    def __init__(self, address: str, *, api_key: str = "", fetch=None):
+        self.address = str(address or "").strip()
+        self.api_key = str(api_key or "")
+        self._fetch = fetch                       # тесты/демо подменяют запрос
+        self.invoices: dict[str, dict] = {}
+
+    @property
+    def configured(self) -> bool:
+        return len(self.address) >= 48
+
+    def links(self, asset: str, amount: float, comment: str) -> dict:
+        from urllib.parse import quote
+        if asset == "TON":
+            nano = int(round(amount * 1e9))
+            q = f"amount={nano}&text={quote(comment)}"
+            return {"ton": f"ton://transfer/{self.address}?{q}",
+                    "url": f"https://app.tonkeeper.com/transfer/{self.address}?{q}"}
+        units = int(round(amount * 1e6))
+        q = f"amount={units}&jetton={USDT_TON_MASTER}&text={quote(comment)}"
+        return {"ton": f"ton://transfer/{self.address}?{q}",
+                "url": f"https://app.tonkeeper.com/transfer/{self.address}?{q}"}
+
+    async def create(self, order_id: str, amount_rub: float, description: str, *, asset: str = "USDT",
+                     pay_amount: float = 0, **_) -> dict:
+        if not self.configured:
+            raise PaymentError("не указан адрес общего кошелька TON (payments.wallet.address)")
+        asset = asset.upper()
+        comment = wallet_comment(order_id)
+        pid = f"w-{order_id}"
+        self.invoices[pid] = {"asset": asset, "amount": float(pay_amount), "comment": comment, "ts": time.time()}
+        return {"id": pid, "status": PENDING, "address": self.address, "comment": comment, "asset": asset,
+                "amount": float(pay_amount), **self.links(asset, float(pay_amount), comment)}
+
+    @property
+    def payments(self) -> dict:                   # демо-кнопка «Оплатить» видит счета только в демо
+        return self.invoices if self._fetch is _demo_ton_fetch else {}
+
+    def pay(self, pid: str) -> None:
+        """Демо: «перевод» нужной суммы с нужным комментарием появляется в демо-блокчейне."""
+        inv = self.invoices[pid]
+        if inv["asset"] == "TON":
+            DEMO_CHAIN.append({"kind": "ton", "hash": f"demo-{pid}", "in_msg": {
+                "value": str(int(inv["amount"] * 1e9)),
+                "message_content": {"decoded": {"type": "text_comment", "comment": inv["comment"]}}}})
+        else:
+            DEMO_CHAIN.append({"kind": "usdt", "transaction_hash": f"demo-{pid}",
+                               "amount": str(int(round(inv["amount"] * 1e6)))})
+
+    def restore(self, pid: str, asset: str, amount: float, created_at: float) -> None:
+        """После перезапуска счета восстанавливаются из БД."""
+        if pid not in self.invoices:
+            self.invoices[pid] = {"asset": asset.upper(), "amount": float(amount),
+                                  "comment": wallet_comment(pid[2:]), "ts": float(created_at)}
+
+    async def _get(self, path: str, params: dict) -> dict:
+        if self._fetch is not None:
+            return await self._fetch(path, params)
+        headers = {"X-API-Key": self.api_key} if self.api_key else {}
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+                async with s.get(f"{self.API}/{path}", params=params, headers=headers) as r:
+                    return await r.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise PaymentError(f"toncenter недоступен: {e}") from e
+
+    @staticmethod
+    def _comment(msg: dict) -> str:
+        dec = ((msg or {}).get("message_content") or {}).get("decoded") or {}
+        return str(dec.get("comment") or "")
+
+    async def check(self, payment_id: str) -> str:
+        inv = self.invoices.get(payment_id)
+        if inv is None:
+            return PENDING
+        since = int(inv["ts"]) - 60
+        if inv["asset"] == "TON":
+            d = await self._get("transactions", {"account": self.address, "limit": 100, "sort": "desc",
+                                                 "start_utime": since})
+            for tx in d.get("transactions") or []:
+                msg = tx.get("in_msg") or {}
+                if self._comment(msg).strip() == inv["comment"] and \
+                        int(msg.get("value") or 0) >= int(inv["amount"] * 1e9 * 0.999):
+                    inv["tx"] = tx.get("hash")
+                    return PAID
+            return PENDING
+        d = await self._get("jetton/transfers", {"owner_address": self.address, "direction": "in",
+                                                 "jetton_master_address": USDT_TON_MASTER, "limit": 100,
+                                                 "sort": "desc", "start_utime": since})
+        want = int(round(inv["amount"] * 1e6))
+        for t in d.get("jetton_transfers") or []:
+            if int(t.get("amount") or 0) == want and not t.get("transaction_aborted"):
+                inv["tx"] = t.get("transaction_hash")
+                return PAID
+        return PENDING
+
+
+class ManualAsset:
+    """Оплата активом (подарок Telegram, скины Steam): счёт — это инструкция, подтверждает оператор."""
+
+    def __init__(self, name: str, ready: bool):
+        self.name = name
+        self.configured = ready
+        self.confirmed: set[str] = set()
+
+    async def create(self, order_id: str, amount_rub: float, description: str, **_) -> dict:
+        return {"id": f"{self.name}-{order_id}", "url": "", "status": PENDING, "manual": True}
+
+    def confirm(self, pid: str) -> None:
+        self.confirmed.add(pid)
+
+    async def check(self, payment_id: str) -> str:
+        return PAID if payment_id in self.confirmed else PENDING
+
+
 def build_providers(cfg, *, demo: bool) -> dict:
+    gift_acc = cfg.get("payments.gift.account") or cfg.get("buyback.gifts.gift_account")
     if demo:
-        return {"card": DemoPay("card"), "crypto": DemoPay("crypto"), "stars": DemoPay("stars")}
+        wallet = TonWallet("UQ" + "D" * 46, fetch=_demo_ton_fetch)
+        return {"card": DemoPay("card"), "crypto": DemoPay("crypto"), "stars": DemoPay("stars"),
+                "wallet": wallet, "tgwallet": DemoPay("tgwallet"), "gift": ManualAsset("gift", True), "walt": ManualAsset("walt", True), "skins": ManualAsset("skins", True)}
     y = cfg.get("payments.card.yookassa") or {}
     c = cfg.get("payments.crypto.cryptopay") or {}
-    return {"card": YooKassa(y.get("shop_id"), y.get("secret_key"), return_url=y.get("return_url") or "",
+    from shopbot.payments.gateways import build_gateway
+    from shopbot.payments.tgwallet import WalletPay
+    gw = build_gateway(cfg)
+    return {"card": gw or YooKassa(y.get("shop_id"), y.get("secret_key"), return_url=y.get("return_url") or "",
                              test=bool(y.get("test", True)), send_receipt=bool(y.get("send_receipt")),
                              vat_code=int(y.get("vat_code") or 1), tax_system_code=int(y.get("tax_system_code") or 0)),
             "crypto": CryptoPay(c.get("token"), testnet=bool(c.get("testnet", True))),
-            "stars": TelegramStars()}
+            "stars": TelegramStars(),
+            "wallet": TonWallet(cfg.get("payments.wallet.address") or "",
+                                api_key=cfg.get("payments.wallet.toncenter_api_key") or ""),
+            "tgwallet": WalletPay(cfg.get("payments.tgwallet.api_key") or "",
+                                  return_url=cfg.get("payments.tgwallet.return_url") or ""),
+            "gift": ManualAsset("gift", bool(gift_acc)),
+            "walt": ManualAsset("walt", bool(cfg.get("payments.walt.account"))),
+            "skins": ManualAsset("skins", bool(cfg.get("payments.skins.trade_url")))}
+
+
+DEMO_CHAIN: list[dict] = []        # демо-«блокчейн»: сюда демо кладёт переводы, TonWallet их «видит»
+
+
+async def _demo_ton_fetch(path: str, params: dict) -> dict:
+    if path == "transactions":
+        return {"transactions": [t for t in DEMO_CHAIN if t.get("kind") == "ton"]}
+    return {"jetton_transfers": [t for t in DEMO_CHAIN if t.get("kind") == "usdt"]}
