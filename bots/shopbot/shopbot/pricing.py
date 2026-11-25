@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-METHOD_TITLES = {"card": "Картой", "crypto": "Криптой (@CryptoBot)", "stars": "Звёздами Telegram",
+METHOD_TITLES = {"card": "Картой / СБП", "crypto": "Криптой (@CryptoBot)", "stars": "Звёздами Telegram",
                  "balance": "С баланса магазина", "wallet": "Криптой на кошелёк", "gift": "Подарками Telegram",
                  "skins": "Скинами Steam"}
 METHODS = ("wallet", "crypto", "stars", "gift", "skins", "card", "balance")

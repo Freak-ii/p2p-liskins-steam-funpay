@@ -87,7 +87,11 @@ DEFAULTS: dict[str, Any] = {
         "order_ttl_minutes": 30,
         # Карта — заготовка под эквайринг (ЮKassa сейчас; другой провайдер — новым классом в payments).
         # Выключена, пока нет договора: в меню клиента не показывается.
+        # provider: yookassa (ИП/самозанятость) | crystalpay | aaio (P2P-шлюзы для физлиц: KYC по паспорту,
+        # комиссия 5–12 % — fee_pct ставьте по тарифу из кабинета шлюза + ~1 % на вывод USDT; см. README).
         "card": {"enabled": False, "provider": "yookassa", "fee_pct": 3.5,
+                 "crystalpay": {"login": "", "secret": "", "redirect_url": ""},
+                 "aaio": {"merchant_id": "", "secret1": "", "api_key": ""},
                  "yookassa": {"shop_id": "", "secret_key": "", "test": True, "return_url": "",
                               "send_receipt": False, "vat_code": 1, "tax_system_code": 0}},
         "crypto": {"enabled": True, "provider": "cryptopay", "fee_pct": 2, "min_fee_pct": 2,
@@ -176,7 +180,8 @@ DEFAULTS: dict[str, Any] = {
 }
 
 SECRETS = [("telegram", "bot_token"), ("payments.card.yookassa", "secret_key"),
-           ("payments.crypto.cryptopay", "token"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
+           ("payments.crypto.cryptopay", "token"),
+           ("payments.card.crystalpay", "secret"), ("payments.card.aaio", "secret1"), ("payments.card.aaio", "api_key"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
            ("suppliers.gifts", "token"), ("suppliers.steam_keys", "token"),
            ("dashboard", "token"), ("dashboard", "operator_token"), ("dashboard", "viewer_token")]
 
