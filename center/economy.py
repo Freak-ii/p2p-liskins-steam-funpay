@@ -566,11 +566,16 @@ class Economy:
                 "ops_total": len(ops), "ops": ops[-ops_limit:][::-1],
                 "titles": {"directions": DIRECTIONS, "bots": BOTS, "nodes": NODES, "kinds": KINDS}}
 
-    def position_margin(self, position: str, channel: str = "funpay", days: float | None = 30) -> float | None:
-        """Фактическая маржа позиции в % от выручки после всех расходов, включая оценку вывода (для center/loops.py)."""
+    def position_margin(self, position: str, channel: str = "funpay", days: float | None = 30,
+                        include_withdraw: bool = True) -> float | None:
+        """Фактическая маржа позиции в % от выручки (для center/loops.py). include_withdraw=False — до вывода
+        с площадки на карту: пульт позиций считает вывод отдельным звеном круга."""
         ops, _ = self.collect()
         rows = [o for o in self._filter(ops, days) if o["position"] == position and (not channel or o["channel"] == channel)]
-        return self._totals(rows)["net_pct"] if rows else None
+        if not rows:
+            return None
+        t = self._totals(rows)
+        return t["net_pct"] if include_withdraw else t["gross_pct"]
 
     # ------------------------------------------------------------------ экспорт
     def csv(self, ops: list[dict]) -> bytes:
@@ -593,7 +598,8 @@ def routes(center) -> list:
     static = Path(__file__).resolve().parent / "static"
 
     def eco() -> Economy:
-        return Economy(center.cfg.home, center.cfg.data.get("economy") or {})
+        e = getattr(center, "economy", None)
+        return e if isinstance(e, Economy) else Economy(center.cfg.home, center.cfg.data.get("economy") or {})
 
     async def rate() -> float:
         try:

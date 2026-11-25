@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from center.analytics import Analytics
+from center.economy import Economy
 from center.backup import Backup
 from center.inventory import Inventory
 from center.readiness import Readiness
@@ -67,6 +68,7 @@ class Center:
         self._poll_task: asyncio.Task | None = None
         self.started_at = time.time()
         self.analytics = Analytics(self)
+        self.economy = Economy(self.cfg.home, self.cfg.data.get("economy") or {})   # раздел «Экономика», только чтение
         self.crm = Crm(self)
         self.rtba = Rtba(self)
         self.monitor = Monitor(self)       # до записи «Центр запущен»: проверяет, не выключался ли центр аварийно

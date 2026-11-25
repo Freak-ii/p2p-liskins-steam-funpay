@@ -68,6 +68,7 @@ def test_report_stars(tmp_path):
     assert any("дороже рынка" in x for x in r["warnings"]) and any("в минусе" in x for x in r["warnings"])
     assert r["positions"][-1]["position"] == "fp_hold" and r["positions"][-1]["value_rub"] == 100
     assert Economy(tmp_path).position_margin("stars", "funpay") == t["net_pct"]
+    assert Economy(tmp_path).position_margin("stars", "funpay", include_withdraw=False) == t["gross_pct"]
     assert Economy(tmp_path).position_margin("mann_keys") is None
 
 
@@ -80,6 +81,7 @@ def test_economy_web(tmp_path):
     async def go():
         _stars_db(tmp_path)
         center = Center(tmp_path)
+        assert center.economy.position_margin("stars") is not None
         token = center.cfg.ensure_token()
         async with TestClient(TestServer(make_app(center))) as c:
             assert (await c.get("/api/economy/summary")).status == 401
