@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 METHOD_TITLES = {"card": "Картой / СБП", "crypto": "Криптой (@CryptoBot)", "stars": "Звёздами Telegram",
-                 "balance": "С баланса магазина", "wallet": "Криптой на кошелёк", "tgwallet": "Telegram Wallet", "gift": "Подарками Telegram",
+                 "balance": "С баланса магазина", "wallet": "Криптой на кошелёк", "tgwallet": "Telegram Wallet", "walt": "Переводом в Walt", "gift": "Подарками Telegram",
                  "skins": "Скинами Steam"}
-METHODS = ("wallet", "tgwallet", "crypto", "stars", "gift", "skins", "card", "balance")
+METHODS = ("wallet", "walt", "tgwallet", "crypto", "stars", "gift", "skins", "card", "balance")
 
 
 def wallet_spread(cfg) -> float:
@@ -108,6 +108,11 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
         q.fee_pct, q.asset = 0.0, asset.upper()
         market = rates.rub_per(q.asset)
         q.rate, q.rate_source = r2(market * (1 - wallet_spread(cfg) / 100)), f"Bybit {r2(market)} ₽"
+    elif method == "walt":
+        q.fee_pct, q.asset = 0.0, "USDT"
+        market = rates.rub_per("USDT")
+        q.rate = r2(market * (1 - float(cfg.get("payments.walt.spread_pct") or 0) / 100))
+        q.rate_source = f"Bybit {r2(market)} ₽"
     elif method == "tgwallet":
         q.fee_pct, q.asset = float(cfg.get("payments.tgwallet.fee_pct") or 0), "USD"
         q.rate, q.rate_source = r2(rates.rub_per("USDT")), rates.source
@@ -140,6 +145,10 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
         q.pay_amount = math.ceil(q.total_rub / q.rate * 10 ** digits) / 10 ** digits
         q.lines.append((f"Курс обмена {q.asset}", f"{q.rate:.2f} ₽ (биржа {q.rate_source.split()[-2]} ₽)"))
         q.lines.append(("К оплате", f"{q.pay_amount:g} {q.asset} на кошелёк TON"))
+    elif method == "walt":
+        q.pay_amount = math.ceil(q.total_rub / q.rate * 100) / 100
+        q.lines.append(("Курс USDT", f"{q.rate:.2f} ₽ (биржа {q.rate_source.split()[-2]} ₽)"))
+        q.lines.append(("К оплате", f"{q.pay_amount:g} USDT переводом в Walt"))
     elif method == "tgwallet":
         q.pay_amount = math.ceil(q.total_rub / q.rate * 100) / 100
         q.lines.append(("Курс $ (USDT)", f"{q.rate:.2f} ₽"))

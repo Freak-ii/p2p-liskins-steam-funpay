@@ -120,6 +120,9 @@ class ShopTelegram:
             lines.append(f"🪙 @CryptoBot: курс Bybit — USDT <b>{r['usdt_rub']} ₽</b>; конвертация <b>+{fee:g}%</b>")
         if rt.is_open("pay.stars"):
             lines.append(f"⭐ Звёзды Telegram: 1 ⭐ = <b>{c.get('payments.stars.rub_per_star'):g} ₽</b>, без комиссии")
+        if rt.is_open("pay.walt"):
+            lines.append(f"👛 Переводом в Walt: курс USDT на <b>{c.get('payments.walt.spread_pct'):g}%</b> ниже биржи, "
+                         "без комиссии")
         if rt.is_open("pay.tgwallet"):
             lines.append(f"👛 Telegram Wallet: курс USDT <b>{r['usdt_rub']} ₽</b>, комиссия "
                          f"<b>+{c.get('payments.tgwallet.fee_pct'):g}%</b>")
@@ -436,8 +439,9 @@ class ShopTelegram:
                        f"{int(qq.pay_amount)} ⭐" if m == "stars" else
                        f"подарки на {int(qq.pay_amount)} ⭐" if m == "gift" else
                        f"скины на {qq.pay_amount:g} $" if m == "skins" else
-                       f"{qq.pay_amount:g} $" if m == "tgwallet" else f"{qq.total_rub:.2f} ₽")
-                fee = (f" (курс {qq.rate:.2f} ₽)" if m == "wallet" else
+                       f"{qq.pay_amount:g} $" if m == "tgwallet" else
+                       f"{qq.pay_amount:g} USDT" if m == "walt" else f"{qq.total_rub:.2f} ₽")
+                fee = (f" (курс {qq.rate:.2f} ₽)" if m in ("wallet", "walt") else
                        f" (комиссия {qq.fee_pct:g}%)" if qq.fee_pct else " (без комиссии)")
                 lines.append(f"• {label}: <b>{amt}</b>{fee}")
                 rows.append([(f"{label} · {amt}", f"pay:{m}:{a}" if a else f"pay:{m}")])
@@ -479,6 +483,11 @@ class ShopTelegram:
             if pay.get("url"):
                 rows.append([("💎 Открыть в Tonkeeper", {"url": pay["url"]})])
             await self.send(uid, head + text, rows or None)
+        elif method == "walt":
+            acc = self.cfg.get("payments.walt.account") or "@shop"
+            await self.send(uid, head + T.PAY_WALT.format(amount=f"{o['pay_amount']:g} USDT", account=acc, ttl=ttl,
+                                                          oid=o["id"]),
+                            [[("👛 Открыть Walt", {"url": "https://t.me/wallet"})]])
         elif method == "tgwallet":
             if pay.get("url", "").startswith("http"):
                 rows.append([("👛 Оплатить в Wallet", {"url": pay["url"]})])

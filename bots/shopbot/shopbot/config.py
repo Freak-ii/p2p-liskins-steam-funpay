@@ -103,6 +103,10 @@ DEFAULTS: dict[str, Any] = {
         # Telegram Wallet (@wallet) через Wallet Pay: счёт в USD по курсу USDT + fee_pct (комиссия Wallet Pay
         # и запас на вывод). Нужен магазин Wallet Pay и ключ api_key. Выключено, пока ключа нет.
         "tgwallet": {"enabled": False, "api_key": "", "fee_pct": 2.0, "ttl_minutes": 60, "return_url": ""},
+        # Перевод в Walt (бывший @wallet) контакту: клиент переводит USDT на Telegram-аккаунт магазина
+        # (Walt → Перевести → контакт), оператор нажимает «Получить» и подтверждает заказ. Комиссии нет,
+        # курс = USDT по бирже − spread_pct. Вывод из Walt на хаб TON стоит 1 USDT.
+        "walt": {"enabled": False, "account": "", "spread_pct": 2.0, "ttl_minutes": 60},
         "gift": {"enabled": True, "account": "", "haircut_pct": 5.0, "ttl_minutes": 60},
         # Скинами Steam: обмен на trade_url магазина, оценка по Market.CSGO − haircut_pct; скины продаются
         # LisBot/Market.CSGO → USDT → хаб. Пока подтверждает оператор.

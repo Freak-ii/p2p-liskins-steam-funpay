@@ -55,6 +55,8 @@ class MoneyLoop:
             days = float(self.cfg.get("loop.xtr_hold_days") or 21)
             return "звёзды бота (XTR)", f"сразу: звёзды на подарки заказов (sendGift); через {days:g} дн. — вывод " \
                                       "через Fragment в TON на хаб", "hold", now + days * DAY
+        if method == "walt":
+            return "Walt аккаунта магазина", "вывести USDT на хаб TON (комиссия Walt 1 USDT), пачкой", "to_sweep", now
         if method == "tgwallet":
             hours = float(self.cfg.get("loop.tgwallet_hold_hours") or 48)
             return "баланс Wallet Pay", f"через {hours:g} ч вывести TON/USDT на хаб TON", "hold", now + hours * 3600

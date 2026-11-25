@@ -8,7 +8,7 @@
 <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
 {% if o.status in ('manual','delivering') %}<form method="post"><input type="hidden" name="action" value="delivered"><button>✔ Выдано вручную</button></form>{% endif %}
 {% if o.status == 'payout_pending' %}<form method="post"><input type="hidden" name="action" value="payout"><button>✔ Выплатить</button></form>{% endif %}
-{% if o.kind == 'buy' and o.pay_method in ('gift', 'skins') and o.status in ('awaiting_asset', 'expired') %}<form method="post"><input type="hidden" name="action" value="asset"><button>✔ {{ 'Подарки' if o.pay_method == 'gift' else 'Скины' }} получены</button></form>{% endif %}
+{% if o.kind == 'buy' and o.pay_method in ('gift', 'skins', 'walt') and o.status in ('awaiting_asset', 'expired') %}<form method="post"><input type="hidden" name="action" value="asset"><button>✔ {{ {'gift': 'Подарки получены', 'skins': 'Скины получены', 'walt': 'Перевод Walt получен'}[o.pay_method] }}</button></form>{% endif %}
 {% if o.kind == 'sell' and o.product == 'gift' and o.status == 'awaiting_asset' %}<form method="post"><input type="hidden" name="action" value="gift"><button>🎁 Подарок пришёл</button></form>{% endif %}
 {% if o.status in ('payout_pending','manual','awaiting_asset','need_recipient') %}<form method="post"><input type="hidden" name="action" value="reject"><input name="reason" placeholder="причина"><button class="ghost">Отклонить / вернуть</button></form>{% endif %}
 </div>

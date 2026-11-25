@@ -193,13 +193,14 @@ class Shop:
         self.db.exec("INSERT INTO payments(id,order_id,provider,status,amount,currency,url,created_at,updated_at) "
                      "VALUES(?,?,?,?,?,?,?,?,?)", (pay["id"], oid, prov.name, "pending", q.pay_amount, q.asset,
                                                    pay.get("url", ""), time.time(), time.time()))
-        asset_pay = method in ("gift", "skins")
+        asset_pay = method in ("gift", "skins", "walt")
         o = self.db.update_order(oid, payment_id=pay["id"], event="payment_created",
                                  **({"status": "awaiting_asset"} if asset_pay else {}))
         if asset_pay:
-            what = "подарки Telegram" if method == "gift" else "скины Steam"
+            what = {"gift": "подарки Telegram", "skins": "скины Steam", "walt": "переводом в Walt"}[method]
+            unit = {"gift": "⭐", "skins": "$", "walt": "USDT"}[method]
             await self.notify("INFO", f"asset_{method}", f"#{oid}: клиент {uid} оплачивает {what} на "
-                              f"{q.pay_amount:g} {'⭐' if method == 'gift' else '$'} ({q.total_rub:.2f} ₽). "
+                              f"{q.pay_amount:g} {unit} ({q.total_rub:.2f} ₽). "
                               "Проверьте поступление.",
                               [("✔ Получено", f"adm:asset:{oid}"), ("✋ Отклонить", f"adm:reject:{oid}")])
         return o, pay
@@ -217,7 +218,7 @@ class Shop:
     async def confirm_asset(self, oid: str, who: str = "operator") -> str:
         """Оператор увидел подарки/скины от клиента — заказ оплачен."""
         o = self.db.order(oid)
-        if o is None or o["kind"] != "buy" or o["pay_method"] not in ("gift", "skins") or \
+        if o is None or o["kind"] != "buy" or o["pay_method"] not in ("gift", "skins", "walt") or \
                 o["status"] not in ("awaiting_asset", "expired"):
             return "заказ не ждёт оплату активом"
         prov = self.providers.get(o["pay_method"])

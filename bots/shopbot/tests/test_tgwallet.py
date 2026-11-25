@@ -61,3 +61,23 @@ def test_tgwallet_order_in_demo_goes_to_loop_hold(tmp_path):
         r = shop.db.one("SELECT * FROM inflows WHERE order_id=?", (oid,))
         assert r["state"] == "hold" and "Wallet Pay" in r["route"]
     asyncio.run(go())
+
+
+def test_walt_contact_transfer_needs_operator_and_goes_to_sweep(tmp_path):
+    cfg = Config(tmp_path, demo=True, overrides={"payments": {"walt": {"enabled": True, "account": "@dpb_pay"}}})
+    shop = Shop(cfg, Database(":memory:"), demo=True)
+    bot = ShopTelegram(shop)
+
+    async def go():
+        await shop.rtba.tick()
+        assert shop.rtba.is_open("pay.walt")
+        await bot.on_text(ALICE, "alice", "Alice", "/start")
+        oid = await buy(bot, ALICE, ["buy:stars", "st:100", "to:me"], "pay:walt", pay=False)
+        o = shop.db.order(oid)
+        assert o["status"] == "awaiting_asset" and o["pay_currency"] == "USDT" and o["fee_rub"] == 0
+        assert any("@dpb_pay" in m["text"] for m in bot.outbox if m["chat"] == ALICE)
+        assert await shop.confirm_asset(oid, who="test") == "оплата активом принята, выдаю"
+        await settle(shop)
+        assert shop.db.order(oid)["status"] == "delivered"
+        assert shop.db.one("SELECT state FROM inflows WHERE order_id=?", (oid,))["state"] == "to_sweep"
+    asyncio.run(go())

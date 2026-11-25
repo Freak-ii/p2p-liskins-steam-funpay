@@ -9,6 +9,8 @@
   wallet  — крипта сразу на общий кошелёк TON (хаб казначейства): TON с комментарием DPB-<заказ> или USDT (TON)
             на уникальную сумму; приход видит опрос toncenter v3. Деньги сразу в круге, без посредника.
   tgwallet — Telegram Wallet (@wallet) через Wallet Pay: счёт в $ открывается прямо в кошельке Telegram.
+  walt    — перевод USDT контакту внутри Walt (бывший @wallet) на аккаунт магазина: без комиссии и сразу,
+            но API у Walt нет — поступление подтверждает оператор, как подарки.
   gift    — оплата подарками Telegram на аккаунт приёма; skins — скинами Steam обменом на ссылку магазина.
             Оба подтверждает оператор (кнопка в Telegram/панели), позже — автоматический приём.
 Статусы проверяются опросом: белый IP и вебхуки не нужны, магазин работает с домашнего компьютера.
@@ -346,7 +348,7 @@ def build_providers(cfg, *, demo: bool) -> dict:
     if demo:
         wallet = TonWallet("UQ" + "D" * 46, fetch=_demo_ton_fetch)
         return {"card": DemoPay("card"), "crypto": DemoPay("crypto"), "stars": DemoPay("stars"),
-                "wallet": wallet, "tgwallet": DemoPay("tgwallet"), "gift": ManualAsset("gift", True), "skins": ManualAsset("skins", True)}
+                "wallet": wallet, "tgwallet": DemoPay("tgwallet"), "gift": ManualAsset("gift", True), "walt": ManualAsset("walt", True), "skins": ManualAsset("skins", True)}
     y = cfg.get("payments.card.yookassa") or {}
     c = cfg.get("payments.crypto.cryptopay") or {}
     from shopbot.payments.gateways import build_gateway
@@ -362,6 +364,7 @@ def build_providers(cfg, *, demo: bool) -> dict:
             "tgwallet": WalletPay(cfg.get("payments.tgwallet.api_key") or "",
                                   return_url=cfg.get("payments.tgwallet.return_url") or ""),
             "gift": ManualAsset("gift", bool(gift_acc)),
+            "walt": ManualAsset("walt", bool(cfg.get("payments.walt.account"))),
             "skins": ManualAsset("skins", bool(cfg.get("payments.skins.trade_url")))}
 
 

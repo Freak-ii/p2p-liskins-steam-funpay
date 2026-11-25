@@ -19,7 +19,7 @@ POINTS: list[tuple[str, str, str]] = [
     ("buy.stars", "Продажа звёзд", "Товары"), ("buy.gift", "Продажа подарков", "Товары"),
     ("buy.premium", "Продажа Premium", "Товары"), ("buy.steam_keys", "Ключи для Steam", "Товары"),
     ("sell.stars", "Выкуп звёзд за крипту", "Выкуп"), ("sell.gift", "Выкуп подарков", "Выкуп"),
-    ("pay.wallet", "Крипта на общий кошелёк", "Оплата"), ("pay.tgwallet", "Telegram Wallet (Wallet Pay)", "Оплата"), ("pay.gift", "Оплата подарками", "Оплата"),
+    ("pay.wallet", "Крипта на общий кошелёк", "Оплата"), ("pay.tgwallet", "Telegram Wallet (Wallet Pay)", "Оплата"), ("pay.walt", "Перевод в Walt", "Оплата"), ("pay.gift", "Оплата подарками", "Оплата"),
     ("pay.skins", "Оплата скинами Steam", "Оплата"),
     ("pay.card", "Оплата картой (эквайринг)", "Оплата"), ("pay.crypto", "Оплата криптой (@CryptoBot)", "Оплата"),
     ("pay.stars", "Оплата звёздами", "Оплата"), ("pay.balance", "Оплата с баланса", "Оплата"),
@@ -142,6 +142,10 @@ class RTBA:
                 return Check(False, f"курс Bybit устарел ({self.shop.rates.age_minutes:.0f} мин)", hard=True)
             from shopbot.pricing import wallet_spread
             return Check(True, value=f"спред {wallet_spread(self.cfg):g}% · {prov.address[:6]}…{prov.address[-4:]}")
+        if method == "walt":
+            if not self.shop.rates.fresh:
+                return Check(False, "курс USDT устарел", hard=True)
+            return Check(True, value=f"на {self.cfg.get('payments.walt.account')}")
         if method == "tgwallet":
             if not self.shop.rates.fresh:
                 return Check(False, f"курс USDT устарел ({self.shop.rates.age_minutes:.0f} мин)", hard=True)
@@ -208,7 +212,7 @@ class RTBA:
     async def tick(self) -> None:
         for product in ("stars", "gift", "premium", "steam_keys"):
             await self._apply(f"buy.{product}", await self.check_product(product))
-        for method in ("wallet", "tgwallet", "gift", "skins", "card", "crypto", "stars", "balance"):
+        for method in ("wallet", "walt", "tgwallet", "gift", "skins", "card", "crypto", "stars", "balance"):
             await self._apply(f"pay.{method}", await self.check_payment(method))
         await self._apply("payout.crypto", await self.check_payout_crypto())
         await self._apply("payout.stars", Check(self.is_open("buy.stars"), "" if self.is_open("buy.stars")
