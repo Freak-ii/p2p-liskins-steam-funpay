@@ -1,0 +1,40 @@
+# Орбита: центр StarsCenter и все боты (deploy/orbita install кладёт файл в /etc/systemd/system)
+[Unit]
+Description=Orbita — StarsCenter center and bots
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=orbita
+Group=orbita
+EnvironmentFile=/etc/orbita/orbita.env
+Environment=CENTER_HOME=/var/lib/orbita CENTER_SERVER=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+WorkingDirectory=/opt/orbita/current
+ExecStart=/opt/orbita/current/.venv/bin/python -m center --no-browser --host 127.0.0.1
+# Передача эстафеты: центр выходит, а боты продолжают работать и подхватываются новым центром.
+# Поэтому при выходе центра systemd не трогает остальные процессы группы и сразу запускает центр снова.
+# Обычный «systemctl stop» по-прежнему мягко останавливает ботов: это делает сам центр по SIGTERM.
+KillMode=process
+Restart=always
+RestartSec=1
+TimeoutStopSec=60
+UMask=0077
+# защита: центр видит только свой код (только чтение) и папку данных
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/orbita
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
