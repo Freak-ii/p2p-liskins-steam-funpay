@@ -484,15 +484,26 @@ class Shop:
         sid, _ = self.services.catalog.split(o["item"])
         it = self.services.catalog.item(sid) or {}
         payload = self.services.payload(o["id"])
-        job = self.db.one("SELECT source, cost_rub FROM service_jobs WHERE order_id=? ORDER BY updated_at DESC LIMIT 1",
-                          (o["id"],))
+        job = self.db.one("SELECT source, cost_rub, expires_at, detail FROM service_jobs WHERE order_id=? "
+                          "ORDER BY updated_at DESC LIMIT 1", (o["id"],))
         if job is not None and float(job["cost_rub"] or 0) and abs(float(job["cost_rub"]) - float(o["cost_rub"])) > 0.01:
             cost = float(job["cost_rub"])            # фактическая себестоимость (склад FIFO) — маржа честная
             self.db.update_order(o["id"], cost_rub=cost,
                                  margin_rub=round(float(o["price_rub"]) - float(o["discount_rub"]) - cost, 2))
         self.db.event(o["id"], "service_payload", source=job["source"] if job else "", payload=mask(payload))
         self.services.wipe(o["id"])
-        await self.tell(o["user_id"], delivery_text(it, payload))
+        exp = float(job["expires_at"] or 0) if job is not None else 0.0
+        renewed = job is not None and job["detail"] == "продление"
+        await self.tell(o["user_id"], delivery_text(it, payload, exp, renewed))
+
+    async def remind_expiring(self) -> None:
+        """За 3 дня до конца срока VPN-ключа — напоминание с кнопкой продления (один раз на ключ)."""
+        for j in self.services.expiring(3):
+            self.services.mark_reminded(j["ref"])
+            left = max(1, int((float(j["expires_at"]) - time.time()) // 86400) + 1)
+            await self.tell(j["user_id"], f"⏳ Ваш ключ VPN (заказ <b>#{j['order_id']}</b>) закончится через "
+                                          f"<b>{left} дн.</b> Продлите — ссылка в Happ останется той же.",
+                            [("🔄 Продлить", f"rn:{j['order_id']}")])
 
     # ------------------------------------------------------------------ отзывы
     async def ask_review(self, o) -> None:
@@ -537,6 +548,8 @@ class Shop:
         body = "\n".join(f"{a}: <b>{b}</b>" for a, b in lines)
         to = ("\nПолучатель: <b>" + ("ваш Steam" if o["product"] == "steam_keys" else
                                      "этот чат" if o["product"] == "service" and o["recipient"] in ("", "chat") else
+                                     "продление ключа" if o["product"] == "service" and
+                                     str(o["recipient"]).startswith("renew:") else
                                      o["recipient"] if o["product"] == "service" else "@" + o["recipient"]) + "</b>")
         return f"🎉 <b>Заказ #{o['id']} выполнен</b>\n\n{body}{to}\n\nСпасибо! Оцените нас в канале 💬"
 
@@ -565,6 +578,7 @@ class Shop:
             self.db.update_order(o["id"], status="expired")
 
     async def poll_deliveries(self) -> None:
+        await self.remind_expiring()
         sla = float(self.cfg.get("services.resale_sla_minutes") or 120) * 60
         for o in self.db.q("SELECT * FROM orders WHERE kind='buy' AND product='service' AND status='manual' AND "
                            "paid_at<?", (time.time() - sla,)):

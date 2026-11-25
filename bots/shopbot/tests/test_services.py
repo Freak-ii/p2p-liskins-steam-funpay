@@ -56,8 +56,8 @@ def test_vpn_from_own_panel_with_consent(tmp_path):
     ev = {e["kind"]: json.loads(e["data"]) for e in shop.db.events(o["id"])}
     assert ev["terms_accepted"]["shown"] and ev["terms_accepted"]["notice_hash"]
     assert ev["service_payload"]["source"] == "panel"
-    # себестоимость своего сервера: 450 ₽ / 60 ключей × 3 мес
-    assert abs(o["cost_rub"] - 22.5) < 0.01
+    # себестоимость своего сервера: 560 ₽ / 100 ключей × 3 мес
+    assert abs(o["cost_rub"] - 16.8) < 0.01
 
 
 def test_appstore_from_stock_fifo_cost(tmp_path):
@@ -143,3 +143,111 @@ def test_economics_table(tmp_path):
     r = {r["key"]: r for r in shop.services.economics()}["appstore_us:20"]
     assert r["source"] == "stock" and r["price_rub"] == 2078 and r["margin_pct"] > 17      # 2120 − 2%
     assert rows["spotify:12"]["price_rub"] == 2474
+
+
+def test_vpn_renew_keeps_link_and_reminder(tmp_path):
+    import time as _t
+    shop, bot = make(tmp_path)
+    o = asyncio.run(flow(shop, bot, ["buy:service", "sv:vpn", "sx:vpn:1", "sa:vpn:1"]))
+    j = shop.db.one("SELECT * FROM service_jobs WHERE order_id=?", (o["id"],))
+    meta1 = json.loads(j["meta"])
+    assert j["expires_at"] > _t.time() + 29 * 86400
+    # за 3 дня до конца — напоминание с кнопкой продления, один раз
+    shop.db.exec("UPDATE service_jobs SET expires_at=? WHERE ref=?", (_t.time() + 2 * 86400, j["ref"]))
+    asyncio.run(shop.poll_deliveries())
+    asyncio.run(shop.poll_deliveries())
+    assert sum("закончится через" in t for t in texts(bot, U)) == 1
+    assert f"rn:{o['id']}" in buttons(bot, U)
+    asyncio.run(bot.on_callback(U, f"rn:{o['id']}"))
+    asyncio.run(bot.on_callback(U, f"rv2:{o['id']}:3"))
+    asyncio.run(bot.on_callback(U, "pay:balance"))
+    o2 = shop.db.scalar("SELECT id FROM orders WHERE user_id=? ORDER BY rowid DESC LIMIT 1", (U,))
+    j2 = shop.db.one("SELECT * FROM service_jobs WHERE order_id=?", (o2,))
+    meta2 = json.loads(j2["meta"])
+    assert shop.db.order(o2)["status"] == "delivered"
+    assert meta2["uuid"] == meta1["uuid"] and meta2["sub_id"] == meta1["sub_id"]       # тот же ключ
+    assert abs(j2["expires_at"] - (_t.time() + 2 * 86400 + 90 * 86400)) < 60            # срок прибавился
+    assert "продлён до" in texts(bot, U)[-3] or any("продлён до" in t for t in texts(bot, U))
+
+
+def test_3xui_two_servers_create_and_renew(tmp_path):
+    """Настоящий HTTP-протокол 3x-ui на фейковой панели: вход, addClient, inbound для ссылки, updateClient."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    calls = []
+
+    def panel_app(name):
+        clients = {}
+
+        async def login(r):
+            f = await r.post()
+            ok = f.get("username") == "u" and f.get("password") == "p"
+            resp = web.json_response({"success": ok})
+            if ok:
+                resp.set_cookie("3x-ui", "s")
+            return resp
+
+        def authed(r):
+            if r.cookies.get("3x-ui") != "s":
+                raise web.HTTPUnauthorized()
+
+        async def add(r):
+            authed(r)
+            b = await r.json()
+            c = json.loads(b["settings"])["clients"][0]
+            clients[c["id"]] = c
+            calls.append((name, "add", c["email"], c["expiryTime"]))
+            return web.json_response({"success": True})
+
+        async def upd(r):
+            authed(r)
+            b = await r.json()
+            c = json.loads(b["settings"])["clients"][0]
+            assert r.match_info["cid"] in clients
+            clients[c["id"]] = c
+            calls.append((name, "update", c["email"], c["expiryTime"]))
+            return web.json_response({"success": True})
+
+        async def get(r):
+            authed(r)
+            st = {"network": "tcp", "security": "reality",
+                  "realitySettings": {"serverNames": ["www.microsoft.com"], "shortIds": ["abcd"],
+                                      "settings": {"publicKey": "PUBKEY", "fingerprint": "chrome", "spiderX": "/"}}}
+            return web.json_response({"success": True, "obj": {"port": 443, "streamSettings": json.dumps(st)}})
+
+        app = web.Application()
+        app.add_routes([web.post("/x/login", login), web.post("/x/panel/api/inbounds/addClient", add),
+                        web.post("/x/panel/api/inbounds/updateClient/{cid}", upd),
+                        web.get("/x/panel/api/inbounds/get/{iid}", get)])
+        return app
+
+    async def go():
+        s1, s2 = TestServer(panel_app("nl1")), TestServer(panel_app("de1"))
+        await s1.start_server()
+        await s2.start_server()
+        try:
+            shop, bot = make(tmp_path)
+            shop.services.panel.demo = False
+            shop.cfg.data["services"]["panels"] = [
+                {"name": "nl1", "kind": "3xui", "url": f"http://127.0.0.1:{s1.port}/x", "username": "u",
+                 "password": "p", "inbound_id": 1, "host": "1.2.3.4", "sub_base": "http://1.2.3.4:2096/sub"},
+                {"name": "de1", "kind": "3xui", "url": f"http://127.0.0.1:{s2.port}/x", "username": "u",
+                 "password": "p", "inbound_id": 1, "host": "5.6.7.8"}]
+            text, meta = await shop.services.panel.create("B1", 1)
+            lines = text.splitlines()
+            assert lines[0] == f"http://1.2.3.4:2096/sub/{meta['sub_id']}"
+            assert lines[1].startswith(f"vless://{meta['uuid']}@1.2.3.4:443?") and "pbk=PUBKEY" in lines[1]
+            assert "flow=xtls-rprx-vision" in lines[1] and "sni=www.microsoft.com" in lines[1]
+            assert lines[2].startswith(f"vless://{meta['uuid']}@5.6.7.8:443?") and meta["servers"] == 2
+            _, meta2 = await shop.services.panel.create("B2", 3, meta)
+            assert [c[1] for c in calls] == ["add", "add", "update", "update"]
+            assert meta2["expires_at"] - meta["expires_at"] == 90 * 86400
+            # один сервер лежит — ключ всё равно выдаётся с другого
+            await s2.close()
+            text, meta3 = await shop.services.panel.create("B3", 1)
+            assert meta3["servers"] == 1 and meta3["errors"]
+        finally:
+            await s1.close()
+            await s2.close()
+    asyncio.run(go())

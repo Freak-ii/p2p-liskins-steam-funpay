@@ -340,11 +340,18 @@ class ShopTelegram:
             await self.service_notice(uid, parts[1], parts[2])
         elif head == "sa" and len(parts) == 3:
             await self.service_accept(uid, parts[1], parts[2])
+        elif head == "rn" and len(parts) == 2:              # продлить ключ VPN: выбрать срок
+            await self.service_renew_menu(uid, parts[1])
+        elif head == "rv2" and len(parts) == 3:             # продлить ключ заказа parts[1] на вариант parts[2]
+            await self.service_renew(uid, parts[1], parts[2])
         elif head == "code" and len(parts) == 2:
             o = self.db.order(parts[1])
             if o is not None and o["user_id"] == uid and o["product"] == "service" and o["status"] == "delivered":
                 it = shop.services.catalog.item(shop.services.catalog.split(o["item"])[0]) or {}
-                await self.send(uid, delivery_text(it, shop.services.payload(o["id"])), [("◀️ В меню", "menu")])
+                j = shop.db.one("SELECT expires_at FROM service_jobs WHERE order_id=? ORDER BY updated_at DESC LIMIT 1",
+                                (o["id"],))
+                await self.send(uid, delivery_text(it, shop.services.payload(o["id"]),
+                                                   float(j["expires_at"] or 0) if j else 0), [("◀️ В меню", "menu")])
         elif head == "st":
             await self.pick_amount(uid, "stars", "", int(parts[1]))
         elif head == "gf":
@@ -469,6 +476,7 @@ class ShopTelegram:
             return
         to = ("ваш Steam (обмен)" if d["product"] == "steam_keys" else
               "этот чат" if d["product"] == "service" and d["recipient"] == "chat" else
+              "продление ключа" if d["product"] == "service" and d["recipient"].startswith("renew:") else
               f"<code>{d['recipient']}</code>" if d["product"] == "service" else f"@{d['recipient']}")
         lines, rows = [], []
         for m in shop.methods_for(d["product"]):
@@ -683,6 +691,10 @@ class ShopTelegram:
         if not rows:
             await self.send(uid, T.CLOSED, [("◀️ Назад", "buy:service")])
             return
+        if it.get("kind") == "vpn":
+            for k in shop.services.active_keys(uid)[:2]:
+                till = time.strftime("%d.%m", time.localtime(float(k["expires_at"])))
+                rows.insert(0, [(f"🔄 Продлить мой ключ (до {till})", f"rn:{k['order_id']}")])
         rows.append([("ℹ️ Как я получу?", f"sx:{sid}:{(it.get('variants') or [{}])[0].get('id', '')}"),
                      ("◀️ Назад", "buy:service")])
         await self.send(uid, f"{it.get('emoji', '')} <b>{it['title']}</b>\n{it.get('short', '')}\n\nВыберите вариант:",
@@ -711,6 +723,36 @@ class ShopTelegram:
                             [("◀️ Отмена", "menu")])
             return
         await self._service_next_field(uid, d)
+
+    async def service_renew_menu(self, uid: int, oid: str) -> None:
+        shop = self.shop
+        o = self.db.order(oid)
+        it = shop.services.catalog.item("vpn")
+        if o is None or o["user_id"] != uid or it is None or not shop.rtba.is_open("svc.vpn") or \
+                not shop.services.renewable(f"renew:{oid}"):
+            await self.send(uid, "Этот ключ продлить нельзя — оформите новый.", [("🛡 VPN", "sv:vpn")])
+            return
+        rows = []
+        for v in it.get("variants") or []:
+            ch = shop.services.choose(f"vpn:{v['id']}")
+            if ch is None or ch["source"] != "panel":
+                continue
+            price, _ = service_price(self.cfg, it, v, ch["cost_rub"])
+            rows.append([(f"+{v['title']} · {price:.0f} ₽", f"rv2:{oid}:{v['id']}")])
+        if not rows:
+            await self.send(uid, T.CLOSED, [("◀️ В меню", "menu")])
+            return
+        await self.send(uid, "🔄 <b>Продление ключа VPN</b>\nСрок добавится к текущему, ссылка в Happ не изменится.",
+                        rows + [[("◀️ Назад", "sv:vpn")]])
+
+    async def service_renew(self, uid: int, oid: str, vid: str) -> None:
+        o = self.db.order(oid)
+        if o is None or o["user_id"] != uid or not self.shop.services.renewable(f"renew:{oid}"):
+            await self.send(uid, "Этот ключ продлить нельзя — оформите новый.", [("🛡 VPN", "sv:vpn")])
+            return
+        d = {"product": "service", "item": f"vpn:{vid}", "amount": 1, "recipient": f"renew:{oid}",
+             "consent": {"ts": time.time(), "hash": self.shop.services.catalog.notice_hash("vpn"), "renew": oid}}
+        await self.show_quote(uid, d)
 
     async def _service_next_field(self, uid: int, d: dict) -> None:
         shop = self.shop

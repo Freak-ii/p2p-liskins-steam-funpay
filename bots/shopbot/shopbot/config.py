@@ -139,9 +139,14 @@ DEFAULTS: dict[str, Any] = {
     # resale_sla_minutes — за сколько оператор обещает выдать перепродажу; дольше — тревога и возврат на баланс.
     "services": {
         "secret_key": "",            # ключ шифрования логинов/паролей покупателей (создаётся сам)
-        "panel": {"kind": "marzban", "url": "", "username": "", "password": "", "inbound_tags": [],
-                  "inbound_id": 1, "sub_base": "", "flow": "", "limit_ip": 3, "data_limit_gb": 0,
-                  "cost_month_rub": 450, "capacity": 60},
+        # Свои VPN-серверы: блок на каждый сервер печатает bots/shopbot/vpn/install-3xui.sh. Ключ создаётся
+        # на всех сразу (один UUID), подписка — с первого. kind: 3xui | marzban.
+        "panels": [],
+        # общая экономика серверов (и старый формат одного сервера: url/username/password здесь же)
+        # Aeza NLs-1 (1 ядро, 2 ГБ, 1 Гбит/с, безлимит) — 5.93 €/мес ≈ 560 ₽; ~100 ключей на сервер
+        "panel": {"kind": "3xui", "url": "", "username": "", "password": "", "inbound_tags": [],
+                  "inbound_id": 1, "sub_base": "", "flow": "xtls-rprx-vision", "limit_ip": 3, "data_limit_gb": 0,
+                  "cost_month_rub": 560, "capacity": 100},
         "resale_sla_minutes": 120,
     },
     # ---------------------------------------------------------------- RTBA: контроль каждого пункта

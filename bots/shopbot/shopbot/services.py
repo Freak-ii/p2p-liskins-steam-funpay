@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS service_jobs (
     ref TEXT PRIMARY KEY, order_id TEXT, sku TEXT, source TEXT, status TEXT, detail TEXT DEFAULT '',
     payload TEXT DEFAULT '', cost_rub REAL DEFAULT 0, offer TEXT DEFAULT '', created_at REAL, updated_at REAL
 );
+CREATE INDEX IF NOT EXISTS service_jobs_order ON service_jobs(order_id);
 CREATE TABLE IF NOT EXISTS order_secrets (order_id TEXT PRIMARY KEY, data TEXT, created_at REAL);
 """
 
@@ -222,8 +223,13 @@ class StockSource:
 
 
 class PanelSource:
-    """Свой VPN-сервер: Marzban (/api/admin/token, /api/user) или 3x-ui (/login, /panel/api/inbounds/addClient).
-    Отдаёт ссылку подписки (её принимает Happ) и, если панель даёт, саму vless://-ссылку."""
+    """Свои VPN-серверы: 3x-ui (/login, /panel/api/inbounds/*) или Marzban (/api/admin/token, /api/user).
+
+    Ключ создаётся сразу на ВСЕХ включённых серверах (services.panels) с одним UUID и сроком: покупатель получает
+    vless://-ссылку каждого сервера и ссылку подписки основного (Happ сам обновляет её раз в 12 часов). Заблокировали
+    один IP — работает второй. Срок 3x-ui/Marzban выключают сами (expiryTime/expire); продление сдвигает срок от
+    max(сейчас, старый срок). Настройки сервера печатает bots/shopbot/vpn/install-3xui.sh.
+    """
 
     name, auto = "panel", True
 
@@ -231,64 +237,139 @@ class PanelSource:
         self.cfg = cfg
         self.demo = demo
 
+    def panels(self) -> list[dict]:
+        out = [p for p in (self.cfg.get("services.panels") or []) if p.get("enabled", True) and p.get("url")]
+        old = self.cfg.get("services.panel") or {}
+        if not out and old.get("url"):                     # старый формат: один сервер в services.panel
+            out = [{"name": "vpn1", **old}]
+        return out
+
     @property
-    def p(self) -> dict:
+    def p(self) -> dict:                                     # экономика: общие cost_month_rub/capacity
         return self.cfg.get("services.panel") or {}
 
     @property
     def configured(self) -> bool:
-        return self.demo or bool(self.p.get("url") and self.p.get("username") and self.p.get("password"))
+        return self.demo or any(p.get("username") and p.get("password") for p in self.panels())
 
     def cost(self, months: int) -> float:
         p = self.p
-        per_user = float(p.get("cost_month_rub") or 0) / max(1, int(p.get("capacity") or 1))
+        servers = max(1, len(self.panels()) or 1)
+        per_user = float(p.get("cost_month_rub") or 0) * servers / max(1, int(p.get("capacity") or 1))
         return round(per_user * max(1, months), 2)
 
-    async def create(self, ref: str, months: int) -> str:
-        expire = int(time.time() + months * 30 * 86400)
-        name = f"dpb_{ref.lower()}"[:32]
-        if self.demo:
-            uid = uuid.uuid5(uuid.NAMESPACE_URL, ref)
-            return (f"vless://{uid}@vpn.demo.example:443?type=tcp&security=reality&fp=chrome#DPB-{months}m\n"
-                    f"https://vpn.demo.example/sub/{name}")
-        p = self.p
+    # ------------------------------------------------------------------ http
+    @staticmethod
+    def _session(p: dict) -> aiohttp.ClientSession:
+        conn = aiohttp.TCPConnector(ssl=False) if p.get("verify_tls") is False else None
+        return aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20), connector=conn,
+                                     cookie_jar=aiohttp.CookieJar(unsafe=True))
+
+    @staticmethod
+    async def _json(r) -> dict:
+        try:
+            return await r.json(content_type=None)
+        except Exception:  # noqa: BLE001
+            raise RuntimeError(f"HTTP {r.status}: {(await r.text())[:150]}")
+
+    async def _xui_login(self, s, p: dict) -> str:
         base = str(p["url"]).rstrip("/")
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            if p.get("kind", "marzban") == "marzban":
-                async with s.post(base + "/api/admin/token",
-                                  data={"username": p["username"], "password": p["password"]}) as r:
-                    tok = (await r.json(content_type=None))["access_token"]
-                body = {"username": name, "proxies": {"vless": {"flow": p.get("flow", "")}},
-                        "inbounds": {"vless": list(p.get("inbound_tags") or [])}, "expire": expire,
-                        "data_limit": int(float(p.get("data_limit_gb") or 0) * 1024 ** 3),
-                        "data_limit_reset_strategy": "no_reset", "note": ref}
-                async with s.post(base + "/api/user", json=body, headers={"Authorization": f"Bearer {tok}"}) as r:
-                    if r.status not in (200, 201):
-                        raise RuntimeError(f"Marzban {r.status}: {(await r.text())[:150]}")
-                    u = await r.json(content_type=None)
-                sub = str(u.get("subscription_url") or "")
-                if sub.startswith("/"):
-                    sub = (p.get("sub_base") or base).rstrip("/") + sub
-                links = [x for x in (u.get("links") or []) if str(x).startswith("vless://")]
-                return "\n".join([*links[:1], sub]).strip()
-            # 3x-ui
-            async with s.post(base + "/login", data={"username": p["username"], "password": p["password"]}) as r:
-                if r.status != 200 or not (await r.json(content_type=None)).get("success"):
-                    raise RuntimeError("3x-ui: вход не удался")
-            sub_id = secrets.token_hex(8)
-            client = {"id": str(uuid.uuid4()), "email": name, "enable": True, "expiryTime": expire * 1000,
-                      "limitIp": int(p.get("limit_ip") or 0), "totalGB": int(float(p.get("data_limit_gb") or 0) * 1024 ** 3),
-                      "flow": p.get("flow", ""), "subId": sub_id, "tgId": "", "reset": 0}
+        async with s.post(base + "/login", data={"username": p["username"], "password": p["password"]}) as r:
+            if not (await self._json(r)).get("success"):
+                raise RuntimeError(f"{p.get('name')}: вход в 3x-ui не удался")
+        return base
+
+    async def _xui_link(self, s, base: str, p: dict, client_id: str, label: str) -> str:
+        async with s.get(f"{base}/panel/api/inbounds/get/{int(p.get('inbound_id') or 1)}") as r:
+            ib = (await self._json(r)).get("obj") or {}
+        st = json.loads(ib.get("streamSettings") or "{}")
+        rs = st.get("realitySettings") or {}
+        rset = rs.get("settings") or {}
+        host = p.get("host") or base.split("//", 1)[-1].split("/")[0].split(":")[0]
+        q = {"type": st.get("network", "tcp"), "security": st.get("security", "reality"),
+             "pbk": rset.get("publicKey", ""), "fp": rset.get("fingerprint", "chrome"),
+             "sni": (rs.get("serverNames") or [""])[0], "sid": (rs.get("shortIds") or [""])[0],
+             "spx": rset.get("spiderX", "/"), "flow": p.get("flow", "xtls-rprx-vision")}
+        from urllib.parse import quote, urlencode
+        return f"vless://{client_id}@{host}:{ib.get('port', 443)}?{urlencode(q)}#{quote(label)}"
+
+    async def _xui_upsert(self, p: dict, client: dict, *, update: bool) -> tuple[str, str]:
+        async with self._session(p) as s:
+            base = await self._xui_login(s, p)
             body = {"id": int(p.get("inbound_id") or 1), "settings": json.dumps({"clients": [client]})}
-            async with s.post(base + "/panel/api/inbounds/addClient", json=body) as r:
-                res = await r.json(content_type=None)
+            path = f"/panel/api/inbounds/updateClient/{client['id']}" if update else "/panel/api/inbounds/addClient"
+            async with s.post(base + path, json=body) as r:
+                res = await self._json(r)
                 if not res.get("success"):
-                    raise RuntimeError(f"3x-ui: {res.get('msg')}")
-            sub_base = str(p.get("sub_base") or "").rstrip("/")
-            if not sub_base:
-                raise RuntimeError("3x-ui: не задан services.panel.sub_base (адрес подписок)")
-            return f"{sub_base}/{sub_id}"
+                    raise RuntimeError(f"{p.get('name')}: 3x-ui {res.get('msg')}")
+            link = await self._xui_link(s, base, p, client["id"], f"DPB {p.get('name', '')}".strip())
+        sub = f"{str(p['sub_base']).rstrip('/')}/{client['subId']}" if p.get("sub_base") else ""
+        return link, sub
+
+    async def _marzban(self, p: dict, name: str, expire: int, *, update: bool) -> tuple[str, str]:
+        base = str(p["url"]).rstrip("/")
+        async with self._session(p) as s:
+            async with s.post(base + "/api/admin/token", data={"username": p["username"],
+                                                              "password": p["password"]}) as r:
+                tok = (await self._json(r))["access_token"]
+            h = {"Authorization": f"Bearer {tok}"}
+            if update:
+                req = s.put(f"{base}/api/user/{name}", json={"expire": expire, "status": "active"}, headers=h)
+            else:
+                req = s.post(base + "/api/user", headers=h, json={
+                    "username": name, "proxies": {"vless": {"flow": p.get("flow", "xtls-rprx-vision")}},
+                    "inbounds": {"vless": list(p.get("inbound_tags") or [])}, "expire": expire,
+                    "data_limit": int(float(p.get("data_limit_gb") or 0) * 1024 ** 3),
+                    "data_limit_reset_strategy": "no_reset"})
+            async with req as r:
+                if r.status not in (200, 201):
+                    raise RuntimeError(f"{p.get('name')}: Marzban {r.status} {(await r.text())[:120]}")
+                u = await r.json(content_type=None)
+        sub = str(u.get("subscription_url") or "")
+        if sub.startswith("/"):
+            sub = (p.get("sub_base") or base).rstrip("/") + sub
+        links = [x for x in (u.get("links") or []) if str(x).startswith("vless://")]
+        return (links[0] if links else ""), sub
+
+    # ------------------------------------------------------------------ ключ
+    async def create(self, ref: str, months: int, meta: dict | None = None) -> tuple[str, dict]:
+        """Новый ключ (meta=None) или продление (meta — от прошлого ключа). → (текст для покупателя, meta)."""
+        now = time.time()
+        renew = bool(meta)
+        meta = dict(meta or {})
+        base_exp = max(now, float(meta.get("expires_at") or 0))
+        expire = int(base_exp + months * 30 * 86400)
+        name = meta.get("name") or f"dpb_{ref.lower()}"[:32]
+        cid = meta.get("uuid") or str(uuid.uuid4())
+        sub_id = meta.get("sub_id") or secrets.token_hex(8)
+        meta.update(name=name, uuid=cid, sub_id=sub_id, expires_at=expire)
+        if self.demo:
+            return (f"vless://{cid}@vpn.demo.example:443?type=tcp&security=reality&fp=chrome#DPB\n"
+                    f"https://vpn.demo.example/sub/{sub_id}"), meta
+        links, subs, errors = [], [], []
+        for p in self.panels():
+            try:
+                if p.get("kind", "3xui") == "marzban":
+                    link, sub = await self._marzban(p, name, expire, update=renew)
+                else:
+                    client = {"id": cid, "email": f"{name}_{p.get('name', '')}"[:40], "enable": True,
+                              "expiryTime": expire * 1000, "limitIp": int(p.get("limit_ip") or 3),
+                              "totalGB": int(float(p.get("data_limit_gb") or 0) * 1024 ** 3),
+                              "flow": p.get("flow", "xtls-rprx-vision"), "subId": sub_id, "tgId": "", "reset": 0}
+                    link, sub = await self._xui_upsert(p, client, update=renew)
+                if link:
+                    links.append(link)
+                if sub:
+                    subs.append(sub)
+            except Exception as e:  # noqa: BLE001 — один сервер упал, остальные выдают ключ
+                log.warning("VPN %s: %s", p.get("name"), e)
+                errors.append(f"{p.get('name')}: {e}")
+        if not links and not subs:
+            raise RuntimeError("; ".join(errors) or "нет серверов в services.panels")
+        meta["servers"] = len(links)
+        if errors:
+            meta["errors"] = errors
+        return "\n".join([*subs[:1], *links]), meta
 
 
 class ResaleSource:
@@ -330,6 +411,12 @@ class ServiceSupplier:
         self.cfg, self.db, self.demo, self.rates = cfg, db, demo, rates
         with db.lock:
             db.con.executescript(SCHEMA)
+            have = {r[1] for r in db.con.execute("PRAGMA table_info(service_jobs)")}
+            for col, decl in (("meta", "TEXT DEFAULT ''"), ("expires_at", "REAL DEFAULT 0"),
+                              ("reminded", "INTEGER DEFAULT 0")):
+                if col not in have:
+                    db.con.execute(f"ALTER TABLE service_jobs ADD COLUMN {col} {decl}")
+            db.con.commit()
         self.catalog = Catalog(cfg)
         self.stock = StockSource(db)
         self.panel = PanelSource(cfg, demo=demo)
@@ -414,6 +501,8 @@ class ServiceSupplier:
         if it is None or v is None:
             return {"ok": False, "error": "нет такого товара"}
         ch = self.choose(key, amount)
+        if self.renewable(recipient) is not None and self.panel.configured:     # продление — только своим сервером
+            ch = {"source": "panel", "auto": True, "cost_rub": self.panel.cost(int(v.get("months") or 1))}
         if ch is None:
             return {"ok": False, "error": "нет источника товара"}
         now = time.time()
@@ -428,9 +517,15 @@ class ServiceSupplier:
             else:
                 self._set(ref, status="delivered", payload=got[0], cost_rub=got[1])
         elif ch["source"] == "panel":
+            old = self.renewable(recipient)
             try:
-                link = await self.panel.create(ref, int(v.get("months") or 1))
-                self._set(ref, status="delivered", payload=link)
+                link, meta = await self.panel.create(ref, int(v.get("months") or 1),
+                                                     {**json.loads(old["meta"]), "expires_at": float(old["expires_at"] or 0)}
+                                                     if old is not None else None)
+                self._set(ref, status="delivered", payload=link, meta=json.dumps(meta),
+                          expires_at=float(meta["expires_at"]), detail="продление" if old is not None else "")
+                if old is not None:
+                    self._set(old["ref"], reminded=1, detail="продлён заказом " + oid)
             except Exception as e:  # noqa: BLE001
                 log.warning("панель VPN: %s", e)
                 self._set(ref, status="manual", source="resale", detail=f"панель VPN: {e}"[:200])
@@ -439,6 +534,29 @@ class ServiceSupplier:
             self._set(ref, status="manual", detail=f"купить: {off.get('market', '')} {off.get('url', '')} "
                                                    f"{off.get('option', '')}".strip())
         return {"ok": True, "order_id": ref, **self._state(self._job(ref))}
+
+    def renewable(self, recipient: str):
+        """recipient «renew:<заказ>» — продлить ключ того заказа (тот же UUID и ссылка подписки)."""
+        if not str(recipient).startswith("renew:"):
+            return None
+        return self.db.one("SELECT * FROM service_jobs WHERE order_id=? AND source='panel' AND meta!='' "
+                           "ORDER BY updated_at DESC LIMIT 1", (recipient[6:],))
+
+    def active_keys(self, uid: int) -> list:
+        """VPN-ключи клиента с сервера магазина, которые можно продлить (живые и истёкшие до 30 дней)."""
+        return self.db.q("SELECT j.*, o.item FROM service_jobs j JOIN orders o ON o.id=j.order_id WHERE o.user_id=? "
+                         "AND j.source='panel' AND j.status='delivered' AND j.meta!='' AND j.reminded IN (0,2) AND "
+                         "j.expires_at>? ORDER BY j.expires_at DESC", (uid, time.time() - 30 * 86400))
+
+    def expiring(self, days: float = 3) -> list:
+        """Ключи, у которых до конца срока меньше days и напоминания ещё не было."""
+        now = time.time()
+        return self.db.q("SELECT j.*, o.user_id FROM service_jobs j JOIN orders o ON o.id=j.order_id WHERE "
+                         "j.source='panel' AND j.status='delivered' AND j.reminded=0 AND j.expires_at>? AND "
+                         "j.expires_at<?", (now, now + days * 86400))
+
+    def mark_reminded(self, ref: str) -> None:
+        self._set(ref, reminded=2)
 
     @staticmethod
     def _state(job) -> dict:
@@ -484,11 +602,16 @@ class ServiceSupplier:
                                                      "GROUP BY sku")}
 
 
-def delivery_text(it: dict, payload: str) -> str:
+def delivery_text(it: dict, payload: str, expires_at: float = 0, renewed: bool = False) -> str:
     """Сообщение покупателю с кодом/ключом и инструкцией. Код в <code> — копируется одним нажатием."""
+    if renewed:
+        return (f"🔄 <b>Ключ VPN продлён до {time.strftime('%d.%m.%Y', time.localtime(expires_at))}</b>\n"
+                "Ничего менять не нужно — Happ продолжит работать с той же подпиской.")
+    till = (f"\nДействует до <b>{time.strftime('%d.%m.%Y', time.localtime(expires_at))}</b>"
+            if expires_at else "")
     body = "\n".join(f"<code>{p}</code>" for p in str(payload).splitlines() if p.strip()) if payload else ""
     instr = str(it.get("instructions") or "")
     head = {"vpn": "🛡 <b>Ваш ключ VPN</b>", "code": "🎟 <b>Ваш код</b>", "account": "✅ <b>Подписка подключена</b>",
             "topup": "✅ <b>Баланс Steam пополнен</b>"}.get(it.get("kind", "code"), "✅ <b>Готово</b>")
-    return f"{head}\n{body}\n\n{instr}".strip()
+    return f"{head}{till}\n{body}\n\n{instr}".strip()
 
