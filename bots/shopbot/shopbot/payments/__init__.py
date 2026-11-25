@@ -8,6 +8,7 @@
   balance — списание с баланса магазина (возвраты, бонусы рефералки).
   wallet  — крипта сразу на общий кошелёк TON (хаб казначейства): TON с комментарием DPB-<заказ> или USDT (TON)
             на уникальную сумму; приход видит опрос toncenter v3. Деньги сразу в круге, без посредника.
+  tgwallet — Telegram Wallet (@wallet) через Wallet Pay: счёт в $ открывается прямо в кошельке Telegram.
   gift    — оплата подарками Telegram на аккаунт приёма; skins — скинами Steam обменом на ссылку магазина.
             Оба подтверждает оператор (кнопка в Telegram/панели), позже — автоматический приём.
 Статусы проверяются опросом: белый IP и вебхуки не нужны, магазин работает с домашнего компьютера.
@@ -345,10 +346,11 @@ def build_providers(cfg, *, demo: bool) -> dict:
     if demo:
         wallet = TonWallet("UQ" + "D" * 46, fetch=_demo_ton_fetch)
         return {"card": DemoPay("card"), "crypto": DemoPay("crypto"), "stars": DemoPay("stars"),
-                "wallet": wallet, "gift": ManualAsset("gift", True), "skins": ManualAsset("skins", True)}
+                "wallet": wallet, "tgwallet": DemoPay("tgwallet"), "gift": ManualAsset("gift", True), "skins": ManualAsset("skins", True)}
     y = cfg.get("payments.card.yookassa") or {}
     c = cfg.get("payments.crypto.cryptopay") or {}
     from shopbot.payments.gateways import build_gateway
+    from shopbot.payments.tgwallet import WalletPay
     gw = build_gateway(cfg)
     return {"card": gw or YooKassa(y.get("shop_id"), y.get("secret_key"), return_url=y.get("return_url") or "",
                              test=bool(y.get("test", True)), send_receipt=bool(y.get("send_receipt")),
@@ -357,6 +359,8 @@ def build_providers(cfg, *, demo: bool) -> dict:
             "stars": TelegramStars(),
             "wallet": TonWallet(cfg.get("payments.wallet.address") or "",
                                 api_key=cfg.get("payments.wallet.toncenter_api_key") or ""),
+            "tgwallet": WalletPay(cfg.get("payments.tgwallet.api_key") or "",
+                                  return_url=cfg.get("payments.tgwallet.return_url") or ""),
             "gift": ManualAsset("gift", bool(gift_acc)),
             "skins": ManualAsset("skins", bool(cfg.get("payments.skins.trade_url")))}
 

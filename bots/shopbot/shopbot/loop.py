@@ -10,6 +10,7 @@
   crypto        баланс @CryptoBot приложения          вывести на хаб, когда ≥ sweep_cryptobot  to_sweep
   stars (XTR)   баланс звёзд бота                     звёзды → подарки (sendGift) сразу, или  hold → ready
                                                       вывод через Fragment в TON после 21 дня
+  tgwallet      баланс магазина в Wallet Pay           вывод на хаб TON через 48 ч              hold → ready
   gift          аккаунт приёма подарков               запас для заказов TG Gift / в звёзды    to_convert
   skins         Steam-аккаунт магазина                продать на Market.CSGO → USDT → хаб     to_convert
   card          банк (эквайринг)                      P2P USDT → Bybit → хаб (как сейчас)     to_convert
@@ -54,6 +55,9 @@ class MoneyLoop:
             days = float(self.cfg.get("loop.xtr_hold_days") or 21)
             return "звёзды бота (XTR)", f"сразу: звёзды на подарки заказов (sendGift); через {days:g} дн. — вывод " \
                                       "через Fragment в TON на хаб", "hold", now + days * DAY
+        if method == "tgwallet":
+            hours = float(self.cfg.get("loop.tgwallet_hold_hours") or 48)
+            return "баланс Wallet Pay", f"через {hours:g} ч вывести TON/USDT на хаб TON", "hold", now + hours * 3600
         if method == "gift":
             return "аккаунт приёма подарков", "в запас TG Gift под заказы или конвертировать в звёзды", "to_convert", now
         if method == "skins":

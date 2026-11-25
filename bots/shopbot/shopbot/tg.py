@@ -120,6 +120,9 @@ class ShopTelegram:
             lines.append(f"🪙 @CryptoBot: курс Bybit — USDT <b>{r['usdt_rub']} ₽</b>; конвертация <b>+{fee:g}%</b>")
         if rt.is_open("pay.stars"):
             lines.append(f"⭐ Звёзды Telegram: 1 ⭐ = <b>{c.get('payments.stars.rub_per_star'):g} ₽</b>, без комиссии")
+        if rt.is_open("pay.tgwallet"):
+            lines.append(f"👛 Telegram Wallet: курс USDT <b>{r['usdt_rub']} ₽</b>, комиссия "
+                         f"<b>+{c.get('payments.tgwallet.fee_pct'):g}%</b>")
         if rt.is_open("pay.gift"):
             lines.append(f"🎁 Подарками: 1 ⭐ цены продажи подарка = <b>{gift_star_rub(c):.2f} ₽</b>")
         if rt.is_open("pay.skins"):
@@ -432,7 +435,8 @@ class ShopTelegram:
                 amt = (f"{qq.pay_amount:g} {qq.asset}" if m in ("crypto", "wallet") else
                        f"{int(qq.pay_amount)} ⭐" if m == "stars" else
                        f"подарки на {int(qq.pay_amount)} ⭐" if m == "gift" else
-                       f"скины на {qq.pay_amount:g} $" if m == "skins" else f"{qq.total_rub:.2f} ₽")
+                       f"скины на {qq.pay_amount:g} $" if m == "skins" else
+                       f"{qq.pay_amount:g} $" if m == "tgwallet" else f"{qq.total_rub:.2f} ₽")
                 fee = (f" (курс {qq.rate:.2f} ₽)" if m == "wallet" else
                        f" (комиссия {qq.fee_pct:g}%)" if qq.fee_pct else " (без комиссии)")
                 lines.append(f"• {label}: <b>{amt}</b>{fee}")
@@ -465,7 +469,8 @@ class ShopTelegram:
         if method == "balance":
             return
         amount = (f"{o['pay_amount']:g} {o['pay_currency']}" if method in ("crypto", "wallet") else
-                  f"{int(o['pay_amount'])} ⭐" if method == "stars" else f"{o['total_rub']:.2f} ₽")
+                  f"{int(o['pay_amount'])} ⭐" if method == "stars" else
+                  f"{o['pay_amount']:g} $" if method == "tgwallet" else f"{o['total_rub']:.2f} ₽")
         ttl = int(self.cfg.get(f"payments.{method}.ttl_minutes") or self.cfg.get("payments.order_ttl_minutes") or 30)
         rows = []
         if method == "wallet":
@@ -474,6 +479,10 @@ class ShopTelegram:
             if pay.get("url"):
                 rows.append([("💎 Открыть в Tonkeeper", {"url": pay["url"]})])
             await self.send(uid, head + text, rows or None)
+        elif method == "tgwallet":
+            if pay.get("url", "").startswith("http"):
+                rows.append([("👛 Оплатить в Wallet", {"url": pay["url"]})])
+            await self.send(uid, head + T.PAY_TGWALLET.format(amount=amount, ttl=ttl), rows or None)
         elif method == "gift":
             acc = self.cfg.get("payments.gift.account") or self.cfg.get("buyback.gifts.gift_account") or "@shop_gifts"
             await self.send(uid, head + T.PAY_GIFT.format(stars=int(o["pay_amount"]), account=acc, ttl=ttl, oid=o["id"]))

@@ -185,7 +185,7 @@ class Shop:
         prov = self.providers[method]
         try:
             pay = await prov.create(oid, q.total_rub, f"{q.title} · заказ {oid}", asset=q.asset,
-                                    pay_amount=q.pay_amount, ttl=int(ttl))
+                                    pay_amount=q.pay_amount, ttl=int(ttl), user_id=uid)
         except PaymentError as e:
             self.db.update_order(oid, status="cancelled", fail_reason=str(e))
             await self.notify("WARNING", f"pay_{method}_error", f"#{oid}: не создан платёж ({e})")

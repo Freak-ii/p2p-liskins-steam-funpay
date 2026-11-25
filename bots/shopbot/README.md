@@ -56,6 +56,7 @@ Fragment), чтобы деньги не лежали активом. Учёт �
 | Способ | Куда попадает | Дальше |
 |---|---|---|
 | 💎 Крипта на кошелёк (`payments.wallet`) | сразу хаб TON (адрес `payments.wallet.address`) | уже в круге |
+| 👛 Telegram Wallet (`payments.tgwallet`, Wallet Pay) | баланс магазина в Wallet Pay | через 48 ч вывести на хаб TON |
 | ⭐ Звёзды Telegram (XTR) | баланс звёзд бота | подарки заказов сразу, вывод через Fragment после 21 дня |
 | 🎁 Подарки (`payments.gift`) | аккаунт приёма | запас TG Gift или в звёзды |
 | 🎮 Скины Steam (`payments.skins`) | Steam магазина | продать на Market.CSGO (LisBot) → USDT → хаб |

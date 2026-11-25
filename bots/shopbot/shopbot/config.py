@@ -100,6 +100,9 @@ DEFAULTS: dict[str, Any] = {
                    "min_spread_pct": 1.0, "toncenter_api_key": "", "ttl_minutes": 60},
         # Подарками Telegram: клиент передаёт подарки на аккаунт приёма; засчитываем по цене продажи подарка
         # Telegram (convert, ⭐) × курс звезды − haircut_pct. Подарки уходят в круг: в запас TG Gift или в звёзды.
+        # Telegram Wallet (@wallet) через Wallet Pay: счёт в USD по курсу USDT + fee_pct (комиссия Wallet Pay
+        # и запас на вывод). Нужен магазин Wallet Pay и ключ api_key. Выключено, пока ключа нет.
+        "tgwallet": {"enabled": False, "api_key": "", "fee_pct": 2.0, "ttl_minutes": 60, "return_url": ""},
         "gift": {"enabled": True, "account": "", "haircut_pct": 5.0, "ttl_minutes": 60},
         # Скинами Steam: обмен на trade_url магазина, оценка по Market.CSGO − haircut_pct; скины продаются
         # LisBot/Market.CSGO → USDT → хаб. Пока подтверждает оператор.
@@ -111,7 +114,7 @@ DEFAULTS: dict[str, Any] = {
     # подсказывает следующий шаг, чтобы приём не лежал активом.
     "loop": {"xtr_hold_days": 21, "sweep_cryptobot_usdt": 50, "gift_use": "tggift_stock",
              "skins_sell": "lisbot_market_csgo", "card_route": "p2p_usdt_bybit",
-             "sweep_gateway_rub": 5000},
+             "sweep_gateway_rub": 5000, "tgwallet_hold_hours": 48},
     "rates": {
         "source": "bybit",                # bybit | fixed
         "usdt_rub": 86.8,                 # запасной курс (ваш P2P, см. starsbot economics)
@@ -151,7 +154,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 SECRETS = [("telegram", "bot_token"), ("payments.card.yookassa", "secret_key"),
-           ("payments.card.crystalpay", "secret"), ("payments.card.crystalpay", "salt"),
+           ("payments.tgwallet", "api_key"), ("payments.card.crystalpay", "secret"), ("payments.card.crystalpay", "salt"),
            ("payments.card.aaio", "secret1"), ("payments.card.aaio", "api_key"), ("payments.card.freekassa", "api_key"),
            ("payments.crypto.cryptopay", "token"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
            ("suppliers.gifts", "token"), ("suppliers.steam_keys", "token"),

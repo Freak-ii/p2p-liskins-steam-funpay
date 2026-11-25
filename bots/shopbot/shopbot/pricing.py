@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 METHOD_TITLES = {"card": "Картой / СБП", "crypto": "Криптой (@CryptoBot)", "stars": "Звёздами Telegram",
-                 "balance": "С баланса магазина", "wallet": "Криптой на кошелёк", "gift": "Подарками Telegram",
+                 "balance": "С баланса магазина", "wallet": "Криптой на кошелёк", "tgwallet": "Telegram Wallet", "gift": "Подарками Telegram",
                  "skins": "Скинами Steam"}
-METHODS = ("wallet", "crypto", "stars", "gift", "skins", "card", "balance")
+METHODS = ("wallet", "tgwallet", "crypto", "stars", "gift", "skins", "card", "balance")
 
 
 def wallet_spread(cfg) -> float:
@@ -108,6 +108,9 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
         q.fee_pct, q.asset = 0.0, asset.upper()
         market = rates.rub_per(q.asset)
         q.rate, q.rate_source = r2(market * (1 - wallet_spread(cfg) / 100)), f"Bybit {r2(market)} ₽"
+    elif method == "tgwallet":
+        q.fee_pct, q.asset = float(cfg.get("payments.tgwallet.fee_pct") or 0), "USD"
+        q.rate, q.rate_source = r2(rates.rub_per("USDT")), rates.source
     elif method == "gift":
         q.fee_pct, q.asset = 0.0, "GIFT"
         q.rate, q.rate_source = round(gift_star_rub(cfg), 4), "цена продажи подарка"
@@ -121,7 +124,7 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
     q.fee_rub = r2(base * q.fee_pct / 100)
     q.total_rub = r2(base + q.fee_rub)
     if q.fee_rub:
-        label = {"card": "Комиссия за оплату картой/СБП", "crypto": "Конвертация по курсу"}.get(method, "Комиссия")
+        label = {"card": "Комиссия за оплату картой/СБП", "tgwallet": "Комиссия Wallet Pay", "crypto": "Конвертация по курсу"}.get(method, "Комиссия")
         q.lines.append((f"{label} {q.fee_pct:g}%", f"+{q.fee_rub:.2f} ₽"))
     if method == "crypto":
         digits = 2 if q.asset == "USDT" else 4
@@ -137,6 +140,10 @@ def apply_method(cfg, q: Quote, method: str, rates, asset: str = "USDT") -> Quot
         q.pay_amount = math.ceil(q.total_rub / q.rate * 10 ** digits) / 10 ** digits
         q.lines.append((f"Курс обмена {q.asset}", f"{q.rate:.2f} ₽ (биржа {q.rate_source.split()[-2]} ₽)"))
         q.lines.append(("К оплате", f"{q.pay_amount:g} {q.asset} на кошелёк TON"))
+    elif method == "tgwallet":
+        q.pay_amount = math.ceil(q.total_rub / q.rate * 100) / 100
+        q.lines.append(("Курс $ (USDT)", f"{q.rate:.2f} ₽"))
+        q.lines.append(("К оплате в Telegram Wallet", f"{q.pay_amount:g} $ (TON, USDT, BTC или NOT)"))
     elif method == "gift":
         q.pay_amount = float(math.ceil(q.total_rub / q.rate))
         q.lines.append(("Подарок засчитывается", f"1 ⭐ цены продажи = {q.rate:.2f} ₽"))
