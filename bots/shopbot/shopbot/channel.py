@@ -13,7 +13,7 @@ from shopbot import texts as T
 from shopbot.pricing import shop_price
 from shopbot.suppliers import SupplierError
 
-POSTS = [("open", "Кнопка «Открыть магазин» (закреп, без цен)"), ("showcase", "Витрина"), ("prices", "Цены на сегодня"), ("sell", "Продать нам"),
+POSTS = [("open", "Кнопка «Открыть магазин» (закреп, без цен)"), ("showcase", "Витрина"), ("prices", "Цены на сегодня"), ("sell", "Продать нам"), ("faq", "Вопросы и ответы"),
          ("referral", "Рефералка")]
 
 
@@ -95,6 +95,8 @@ class Channel:
             "prices": (T.POST_PRICES.format(rows="\n".join(rows) or "—"),
                        [[("🛒 Купить в боте", {"url": self.link("stars")})]]),
             "sell": (T.POST_SELL.format(fee=c.get("buyback.fee_pct")), [[("💸 Продать", {"url": self.link("sell")})]]),
+            "faq": (T.POST_FAQ, [[("❓ Все вопросы", {"url": self.link("faq")}),
+                                  ("🛟 Поддержка", {"url": self.link("support")})]]),
             "referral": (T.POST_REF.format(pct=c.get("referral.reward_pct"), disc=c.get("referral.friend_discount_pct")),
                          [[("🤝 Получить ссылку", {"url": self.link("ref")})]]),
         }

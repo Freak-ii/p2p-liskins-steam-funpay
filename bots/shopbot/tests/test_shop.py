@@ -92,7 +92,7 @@ def test_channel_posts_are_drafts(tmp_path):
     async def go():
         await shop.rtba.tick()
         posts = await shop.channel.build()
-        assert {p["id"] for p in posts} == {"open", "showcase", "prices", "sell", "referral"}
+        assert {p["id"] for p in posts} == {"open", "showcase", "prices", "sell", "faq", "referral"}
         prices = next(p for p in posts if p["id"] == "prices")
         assert "⭐ 100" in prices["text"] and "Premium 3" in prices["text"]
         assert "не подключён" in await shop.channel.publish("prices")

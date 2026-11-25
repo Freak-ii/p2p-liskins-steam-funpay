@@ -92,3 +92,24 @@ def test_gateway_is_card_provider_and_inflow_goes_to_sweep(tmp_path):
     where, step, state, _ = shop.loop.route("card", "RUB")
     assert state == "to_sweep" and "aaio" in where and "USDT" in step
     assert build_gateway(Config(tmp_path)) is None          # по умолчанию — ЮKassa
+
+
+def test_faq_in_bot_and_channel(tmp_path):
+    from shopbot import texts as T
+    from shopbot.channel import Channel
+    from shopbot.demo import ALICE
+    from shopbot.tg import ShopTelegram
+    cfg = Config(tmp_path, demo=True)
+    shop = Shop(cfg, Database(":memory:"), demo=True)
+    bot = ShopTelegram(shop)
+    Channel(shop)
+
+    async def go():
+        await bot.on_text(ALICE, "alice", "Alice", "/faq")
+        msg = bot.outbox[-1]["text"]
+        assert "Вопросы и ответы" in msg and msg.count("<blockquote expandable>") == len(T.FAQ_ITEMS)
+        assert "₽" not in msg
+        posts = {p["id"]: p for p in await shop.channel.build()}
+        assert "faq" in posts and "₽" not in posts["faq"]["text"]
+        assert posts["faq"]["buttons"][0][0][1]["url"].endswith("?start=faq")
+    asyncio.run(go())

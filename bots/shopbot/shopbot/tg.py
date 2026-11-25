@@ -208,13 +208,16 @@ class ShopTelegram:
             await self.menu(uid)
             if arg in ("stars", "gift", "premium", "steam_keys"):
                 await self.on_callback(uid, f"buy:{arg}")
-            elif arg in ("sell", "ref", "fees"):
+            elif arg in ("sell", "ref", "fees", "faq", "support"):
                 await self.on_callback(uid, arg)
             return
         self.db.touch_user(uid, username, first_name, lang)
         if text in ("/menu", "/help"):
             self.db.set_session(uid, "")
             await self.menu(uid)
+            return
+        if text == "/faq":
+            await self.on_callback(uid, "faq")
             return
         if text == "/balance":
             await self.on_callback(uid, "balance")
@@ -377,6 +380,8 @@ class ShopTelegram:
         elif head == "fees":
             r = shop.rates.snapshot()
             await self.send(uid, self.fees_text(r), [("◀️ В меню", "menu")])
+        elif head == "faq":
+            await self.send(uid, T.faq_text(), [[("🛟 Не нашли ответ? Поддержка", "support")], [("◀️ В меню", "menu")]])
         elif head == "orders":
             await self.orders(uid)
         elif head == "support":
