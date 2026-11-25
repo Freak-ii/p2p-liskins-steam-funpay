@@ -233,6 +233,12 @@ class ShopTelegram:
             self.db.audit(f"tg:{uid}", "adm_svc", data.get("order", ""), res)
             await self.send(uid, f"#{data.get('order')}: {res}")
             return
+        if state == "adm_famlink" and self.is_admin(uid):
+            self.db.set_session(uid, "")
+            res = await self.shop.admin_family_link(data.get("order", ""), text, who=f"tg:{uid}")
+            self.db.audit(f"tg:{uid}", "adm_famlink", data.get("order", ""), res)
+            await self.send(uid, f"#{data.get('order')}: {res}")
+            return
         if state in ("svc_amount", "svc_field"):
             await self.service_input(uid, state, data, text)
             return
@@ -344,6 +350,14 @@ class ShopTelegram:
             await self.service_renew_menu(uid, parts[1])
         elif head == "rv2" and len(parts) == 3:             # продлить ключ заказа parts[1] на вариант parts[2]
             await self.service_renew(uid, parts[1], parts[2])
+        elif head == "fj" and len(parts) == 2:              # Яндекс Плюс: «Я вступил»
+            await self.send(uid, await shop.family_joined(uid, parts[1]), [("◀️ В меню", "menu")])
+        elif head == "fp" and len(parts) == 2:              # «Не получается вступить»
+            await self.send(uid, await shop.family_problem(uid, parts[1]), [("◀️ В меню", "menu")])
+        elif head == "fr" and len(parts) == 2:              # продлить место в семье
+            await self.family_renew_menu(uid, parts[1])
+        elif head == "fr2" and len(parts) == 3:
+            await self.family_renew(uid, parts[1], parts[2])
         elif head == "code" and len(parts) == 2:
             o = self.db.order(parts[1])
             if o is not None and o["user_id"] == uid and o["product"] == "service" and o["status"] == "delivered":
@@ -452,6 +466,13 @@ class ShopTelegram:
                        "В конце можно указать реальную цену закупки: «… цена 2050»")
             elif action == "svcfail":
                 res = await shop.admin_service_fail(oid)
+            elif action == "famlink":
+                self.db.set_session(uid, "adm_famlink", {"order": oid})
+                res = "пришлите новую ссылку-приглашение в семью одним сообщением"
+            elif action == "famrm":
+                res = await shop.admin_family_removed(int(oid))
+            elif action == "famfail":
+                res = await shop.admin_family_refund(oid)
             else:
                 res = "?"
             self.db.audit(f"tg:{uid}", f"adm_{action}", oid, res)
@@ -692,6 +713,11 @@ class ShopTelegram:
         if not rows:
             await self.send(uid, T.CLOSED, [("◀️ Назад", "buy:service")])
             return
+        if it.get("kind") == "family":
+            for s in self.db.q("SELECT s.order_id, s.until FROM family_seats s WHERE s.user_id=? AND s.status IN "
+                               "('active','invited','leaving') ORDER BY s.until DESC LIMIT 2", (uid,)):
+                till = time.strftime("%d.%m", time.localtime(float(s["until"])))
+                rows.insert(0, [(f"🔄 Продлить моё место (до {till})", f"fr:{s['order_id']}")])
         if it.get("kind") == "vpn":
             for k in shop.services.active_keys(uid)[:2]:
                 till = time.strftime("%d.%m", time.localtime(float(k["expires_at"])))
@@ -755,6 +781,44 @@ class ShopTelegram:
              "consent": {"ts": time.time(), "hash": self.shop.services.catalog.notice_hash("vpn"), "renew": oid}}
         await self.show_quote(uid, d)
 
+    def _family_seat(self, uid: int, oid: str):
+        s = self.shop.services.family.seat(oid)
+        if s is None or s["user_id"] != uid or s["status"] not in ("active", "invited", "leaving"):
+            return None
+        return s
+
+    async def family_renew_menu(self, uid: int, oid: str) -> None:
+        shop = self.shop
+        o = self.db.order(oid)
+        sid = shop.services.catalog.split(o["item"])[0] if o is not None else ""
+        it = shop.services.catalog.item(sid)
+        if self._family_seat(uid, oid) is None or it is None or not shop.rtba.is_open(f"svc.{sid}"):
+            await self.send(uid, "Это место продлить нельзя — оформите новое.", [("🟡 Яндекс Плюс", "sv:yandex_plus")])
+            return
+        rows = []
+        for v in it.get("variants") or []:
+            ch = shop.services.choose(f"{sid}:{v['id']}")
+            if ch is None:
+                continue
+            price, _ = service_price(self.cfg, it, v, ch["cost_rub"])
+            rows.append([(f"+{v['title']} · {price:.0f} ₽", f"fr2:{oid}:{v['id']}")])
+        if not rows:
+            await self.send(uid, T.CLOSED, [("◀️ В меню", "menu")])
+            return
+        await self.send(uid, "🔄 <b>Продление Яндекс Плюса</b>\nСрок добавится к текущему. Если в вашей семье Плюс "
+                             "оплачен не на весь новый срок — пришлём приглашение в другую.",
+                        rows + [[("◀️ Назад", f"sv:{sid}")]])
+
+    async def family_renew(self, uid: int, oid: str, vid: str) -> None:
+        o = self.db.order(oid)
+        if o is None or self._family_seat(uid, oid) is None:
+            await self.send(uid, "Это место продлить нельзя — оформите новое.", [("🟡 Яндекс Плюс", "sv:yandex_plus")])
+            return
+        sid = self.shop.services.catalog.split(o["item"])[0]
+        d = {"product": "service", "item": f"{sid}:{vid}", "amount": 1, "recipient": f"renew:{oid}",
+             "consent": {"ts": time.time(), "hash": self.shop.services.catalog.notice_hash(sid), "renew": oid}}
+        await self.show_quote(uid, d)
+
     async def _service_next_field(self, uid: int, d: dict) -> None:
         shop = self.shop
         it = shop.services.catalog.item(d["item"].split(":")[0]) or {}
@@ -762,7 +826,8 @@ class ShopTelegram:
         if need:
             d["want"] = need[0]
             self.db.set_session(uid, "svc_field", d)
-            ask = STEAM_LOGIN_ASK if it.get("kind") == "topup" else FIELD_ASK[need[0]].format(title=it["title"])
+            ask = ((it.get("ask") or {}).get(need[0]) or
+                   (STEAM_LOGIN_ASK if it.get("kind") == "topup" else FIELD_ASK[need[0]].format(title=it["title"])))
             await self.send(uid, ask, [("◀️ Отмена", "menu")])
             return
         fields = d.pop("fields", {})
