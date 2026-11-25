@@ -24,6 +24,7 @@ POINTS: list[tuple[str, str, str]] = [
     ("svc.chatgpt_plus", "ChatGPT Plus через App Store", "Сервисы"),
     ("svc.spotify", "Spotify Premium на аккаунт", "Сервисы"), ("svc.steam_topup", "Пополнение Steam", "Сервисы"),
     ("svc.yandex_plus", "Яндекс Плюс (места в семьях)", "Сервисы"),
+    ("svc.yandex_promo", "Промокоды Яндекс Плюс", "Сервисы"),
     ("sell.stars", "Выкуп звёзд за крипту", "Выкуп"), ("sell.gift", "Выкуп подарков", "Выкуп"),
     ("pay.wallet", "Крипта на общий кошелёк", "Оплата"), ("pay.gift", "Оплата подарками", "Оплата"),
     ("pay.skins", "Оплата скинами Steam", "Оплата"),

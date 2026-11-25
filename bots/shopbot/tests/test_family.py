@@ -12,12 +12,12 @@ from tests.test_services import ADMIN, U, buttons, make, texts
 DAY = 86400
 
 
-def acc(shop, label, months_paid, cost=2600, **kw):
+def acc(shop, label, months_paid, cost=1990, **kw):
     return shop.services.family.add_account(label, login=f"{label}@yandex.ru", paid_until=time.time() + months_paid * 30 * DAY,
                                             cost_rub=cost, period_months=12, **kw)
 
 
-async def buy(shop, bot, vid="1", login="buyer@ya.ru", uid=U, money=10000):
+async def buy(shop, bot, vid="6", login="buyer@ya.ru", uid=U, money=10000):
     db = shop.db
     db.touch_user(uid, "buyer", "B")
     db.credit(uid, "rub", money, "topup", "", "тест")
@@ -73,15 +73,15 @@ def test_buy_with_invite_pool_is_automatic_and_joined(tmp_path):
     shop, bot = make(tmp_path)
     a = acc(shop, "fam1", 12)
     shop.services.family.add_invites(a, ["https://yandex.ru/family/invite/AAA", "not-a-link"])
-    o = asyncio.run(buy(shop, bot, "3"))
+    o = asyncio.run(buy(shop, bot, "6"))
     assert o["status"] == "delivered", o["fail_reason"]
     out = "\n".join(texts(bot, U))
     assert "https://yandex.ru/family/invite/AAA" in out and "14 дней" in out
     assert f"fj:{o['id']}" in buttons(bot, U)
     ev = {e["kind"]: json.loads(e["data"]) for e in shop.db.events(o["id"])}
     assert ev["terms_accepted"]["shown"] and ev["service_payload"]["source"] == "family"
-    # себестоимость места: 2600 ₽ / 12 мес / 3 места × 3 мес × 1.15 (простой)
-    assert abs(o["cost_rub"] - 249.17) < 0.01
+    # себестоимость места: промокод 1990 ₽ / 12 мес / 3 места × 6 мес × 1.15 (простой)
+    assert abs(o["cost_rub"] - 381.42) < 0.01 and o["price_rub"] == 449
     assert o["price_rub"] >= o["cost_rub"] * 1.08
     s = shop.services.family.seat(o["id"])
     assert s["status"] == "invited" and s["member"] == "buyer@ya.ru"
@@ -93,7 +93,7 @@ def test_buy_with_invite_pool_is_automatic_and_joined(tmp_path):
 def test_no_pool_operator_sends_link(tmp_path):
     shop, bot = make(tmp_path)
     acc(shop, "fam1", 12)
-    o = asyncio.run(buy(shop, bot, "1"))
+    o = asyncio.run(buy(shop, bot, "6"))
     assert o["status"] == "manual"
     task = texts(bot, ADMIN)[-1]
     assert "fam1" in task and "Поделиться ссылкой" in task
@@ -110,7 +110,7 @@ def test_no_pool_operator_sends_link(tmp_path):
 
 def test_no_seats_falls_back_to_resale_bot(tmp_path):
     shop, bot = make(tmp_path)
-    o = asyncio.run(buy(shop, bot, "2"))
+    o = asyncio.run(buy(shop, bot, "45"))
     assert o["status"] == "manual"
     job = shop.db.one("SELECT * FROM service_jobs WHERE order_id=?", (o["id"],))
     assert job["source"] == "resale" and "TavernaPokemona_Bot" in job["detail"]
@@ -121,7 +121,7 @@ def test_expiry_reminder_removal_and_renewal(tmp_path):
     fam = shop.services.family
     a = acc(shop, "fam1", 12)
     fam.add_invites(a, ["https://yandex.ru/inv/1"])
-    o = asyncio.run(buy(shop, bot, "1"))
+    o = asyncio.run(buy(shop, bot, "6"))
     asyncio.run(bot.on_callback(U, f"fj:{o['id']}"))
     s = fam.seat(o["id"])
     fam.mark(s["id"], until=time.time() + 2 * DAY)
@@ -129,11 +129,11 @@ def test_expiry_reminder_removal_and_renewal(tmp_path):
     assert f"fr:{o['id']}" in buttons(bot, U)
     # продление: то же место, срок +1 мес
     asyncio.run(bot.on_callback(U, f"fr:{o['id']}"))
-    asyncio.run(bot.on_callback(U, f"fr2:{o['id']}:1"))
+    asyncio.run(bot.on_callback(U, f"fr2:{o['id']}:6"))
     asyncio.run(bot.on_callback(U, "pay:balance"))
     asyncio.run(shop.poll_deliveries())
     s2 = fam.db.one("SELECT * FROM family_seats WHERE id=?", (s["id"],))
-    assert s2["until"] > time.time() + 30 * DAY and s2["status"] == "active"
+    assert s2["until"] > time.time() + 180 * DAY and s2["status"] == "active"
     assert "продлена" in "\n".join(texts(bot, U))
     # срок вышел → задача исключить → место свободно
     fam.mark(s["id"], until=time.time() - 1)
@@ -147,10 +147,10 @@ def test_expiry_reminder_removal_and_renewal(tmp_path):
 def test_ban_migrates_members(tmp_path):
     shop, bot = make(tmp_path)
     fam = shop.services.family
-    a = acc(shop, "fam1", 6)
+    a = acc(shop, "fam1", 8)
     b = acc(shop, "fam2", 12)
     fam.add_invites(a, ["https://yandex.ru/inv/a"])
-    o = asyncio.run(buy(shop, bot, "1"))
+    o = asyncio.run(buy(shop, bot, "6"))
     assert fam.seat(o["id"])["account_id"] == a
     fam.add_invites(b, ["https://yandex.ru/inv/b"])
     res = asyncio.run(shop.admin_family_ban(a))
@@ -166,7 +166,7 @@ def test_refund_before_join_frees_seat(tmp_path):
     fam = shop.services.family
     a = acc(shop, "fam1", 12)
     fam.add_invites(a, ["https://yandex.ru/inv/1"])
-    o = asyncio.run(buy(shop, bot, "1"))
+    o = asyncio.run(buy(shop, bot, "6"))
     assert asyncio.run(shop.admin_family_refund(o["id"])).startswith("деньги возвращены")
     assert fam.seats_used(a) == 0
     assert shop.db.order(o["id"])["status"] == "refunded"
@@ -201,3 +201,18 @@ def test_family_panel(tmp_path):
             await c.close()
             await app.shop.stop()
     asyncio.run(go())
+
+
+def test_short_periods_go_to_resale_when_own_seat_is_dearer(tmp_path):
+    """45 дней из своей семьи дороже рынка (1990/36×1.5×1.15 ≈ 95 ₽ > 59 ₽) — берём у Таверны за 40 ₽."""
+    shop, _ = make(tmp_path)
+    acc(shop, "fam1", 365 / 30)          # промокод только что активирован: 365 дней ≥ 360 + запас 3 дня
+    svc = shop.services
+    assert svc.choose("yandex_plus:45")["source"] == "resale"
+    assert svc.choose("yandex_plus:6")["source"] == "family"
+    assert svc.choose("yandex_plus:12")["source"] == "family"       # 763 ₽ себестоимость → 990 ₽
+    # без своих мест 12 мес. у Таверны (1100 ₽) дороже рынка 990 ₽ — RTBA не откроет вариант в минус
+    shop2, _ = make(tmp_path / "b")
+    from shopbot.services import service_price
+    it, v = shop2.services.catalog.variant("yandex_plus:12")
+    assert service_price(shop2.cfg, it, v, shop2.services.choose("yandex_plus:12")["cost_rub"])[0] > 990 * 1.05

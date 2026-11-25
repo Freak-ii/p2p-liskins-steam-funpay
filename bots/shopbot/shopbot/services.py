@@ -76,7 +76,7 @@ SPEND_ROUTE = {
     "stock": "склад куплен заранее (USDT из хаба / баланс площадки)",
     "panel": "VPS раз в месяц (USDT/крипта у хостера) — себестоимость ключа ≈ 0",
     "resale": "баланс GGSEL/FunPay (выручка FunPay тратится сразу, без вывода; GGSEL — пополнение СБП/картой)",
-    "family": "Плюс на свои аккаунты: код на 12 мес. (GGSEL/Маркет) раз в год на аккаунт — 3 места на продажу",
+    "family": "Плюс на свои аккаунты: промокод на 12 мес. (Таверна 1990 ₽, аккаунт без Плюса ≥2 недель) — 3 места",
 }
 
 
@@ -520,8 +520,13 @@ class ServiceSupplier:
         if not opts:
             return None
         own = [o for o in opts if o.get("own")]
-        if own:                 # места в своих семьях уже оплачены — пустое место потеряно, продаём их первыми
-            return own[0]
+        if own:                 # места в своих семьях уже оплачены — продаём их первыми, если цена в рынке
+            it, v = self.catalog.variant(key)
+            ref = market_ref(it, v) if it and v else 0
+            over = float(self.cfg.get("catalog.services.max_over_market_pct") or 0)
+            if not ref or service_price(self.cfg, it, v, own[0]["cost_rub"], amount)[0] <= ref * (1 + over / 100):
+                return own[0]
+            opts = [o for o in opts if not o.get("own")] or own
         cheapest = min(opts, key=lambda o: o["cost_rub"])
         within = float(self.cfg.get("catalog.services.prefer_auto_within_pct") or 0)
         autos = [o for o in opts if o["auto"]]
