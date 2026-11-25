@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%F0%9F%92%B0%3C/text%3E%3C/svg%3E">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Экономика системы</title>
+<link rel="stylesheet" href="/static/center.css">
+<style>
+  .eco-warn { margin: 0; padding-left: 18px; } .eco-warn li { margin: 3px 0; }
+  .circle { margin-bottom: 14px; }
+  .circle-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .circle-head h3 { margin: 0; }
+  .flow { display: flex; align-items: stretch; flex-wrap: wrap; gap: 6px; margin: 12px 0 6px; }
+  .node { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-weight: 600; align-self: center; white-space: nowrap; }
+  .leg { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 120px; flex: 1 1 120px; font-size: 12px; text-align: center; }
+  .leg .arrow { width: 100%; height: 2px; background: currentColor; position: relative; margin: 4px 0; opacity: .7; }
+  .leg .arrow::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left-color: currentColor; border-right: 0; }
+  .leg b { font-size: 13px; }
+  .leg.neg { color: var(--bad); } .leg.pos { color: var(--ok); } .leg.mid { color: var(--muted); }
+  .leg .muted { color: var(--muted); }
+  .wf { margin-top: 10px; }
+  .wf-row { display: grid; grid-template-columns: minmax(150px, 230px) 1fr 90px; gap: 8px; align-items: center; font-size: 12px; margin: 3px 0; }
+  .wf-track { height: 14px; background: var(--bg); border-radius: 4px; position: relative; overflow: hidden; }
+  .wf-track i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+  .wf-row b { text-align: right; }
+  .days { display: flex; align-items: flex-end; gap: 4px; height: 150px; padding-top: 10px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .days div { flex: 0 1 60px; min-width: 28px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; font-size: 10px; color: var(--muted); }
+  .days i { display: block; width: 70%; border-radius: 3px 3px 0 0; min-height: 1px; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .st-pending { color: var(--warn); } .st-estimate { color: var(--muted); font-style: italic; }
+  @media (max-width: 600px) { .wf-row { grid-template-columns: 110px 1fr 70px; } .leg { min-width: 90px; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="btn" href="/">← Центр</a>
+  <h1>Экономика</h1>
+  <span class="spacer"></span>
+  <span class="tabs" id="ecDays" style="margin:0"></span>
+  <span id="hdr" class="muted small"></span>
+</header>
+<main>
+  <div id="flash"></div>
+  <div class="kpi" id="kpi"></div>
+  <div class="card" id="warnCard" hidden><h3>На что обратить внимание</h3><ul class="eco-warn" id="warn"></ul></div>
+
+  <h2>Круги денег</h2>
+  <p class="muted small" style="margin-top:-6px">Каждый круг: откуда берутся деньги, во что превращаются и с чем возвращаются. Над стрелкой — сколько ₽ съел или принёс шаг, под ней — доля от выручки круга. Полоски ниже: из каждых 100 ₽ выручки сколько ушло на каждый шаг и сколько осталось.</p>
+  <div id="circles"></div>
+
+  <h2>По направлениям</h2>
+  <div class="card tablewrap"><table id="dirs"></table></div>
+
+  <h2>По дням</h2>
+  <div class="card"><div class="days" id="days"></div><div class="legend"><span><i class="swatch" style="background:var(--ok)"></i>прибыль после вывода</span><span><i class="swatch" style="background:var(--bad)"></i>убыток</span></div></div>
+
+  <div class="grid" style="margin-top:14px">
+    <div class="card"><h3>Деньги и товар в работе</h3><table id="positions" style="margin-top:8px"></table></div>
+    <div class="card"><h3>Сверка кошельков</h3><div id="wallets"></div><h3 style="margin-top:12px">Покупки TON</h3><table id="topups" style="margin-top:6px"></table></div>
+  </div>
+
+  <h2>Журнал операций</h2>
+  <div class="card">
+    <div class="row filters">
+      <input type="search" id="fq" placeholder="Поиск: заказ, @username, описание">
+      <select id="fbot"><option value="">Все боты</option></select>
+      <select id="fdir"><option value="">Все направления</option></select>
+      <select id="fkind"><option value="">Все операции</option></select>
+      <select id="fst"><option value="">Любой статус</option><option value="done">проведено</option><option value="pending">ждёт FunPay</option><option value="estimate">оценка</option></select>
+      <a class="btn" id="csv" href="/api/economy/export">CSV</a>
+    </div>
+    <div class="muted small" id="ledgerInfo"></div>
+    <div class="tablewrap"><table class="crm" id="ledger"></table></div>
+    <button class="btn" id="more" type="button" hidden style="margin-top:8px"></button>
+  </div>
+</main>
+<script src="/static/economy.js"></script>
+</body>
+</html>

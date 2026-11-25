@@ -18,6 +18,7 @@ from center import steamcheck, tgcheck
 from center.backup import routes as backup_routes
 from center.coordinator import routes as coordinator_routes
 from center.agents.web import routes as agents_routes
+from center.economy import routes as economy_routes
 from center.inventory import routes as inventory_routes
 from center.readiness import routes as readiness_routes
 from center.updates import routes as update_routes
@@ -365,6 +366,7 @@ def make_app(center: Center) -> web.Application:
     app.add_routes(monitor_routes(center))
     app.add_routes(coordinator_routes(center))
     app.add_routes(agents_routes(center))
+    app.add_routes(economy_routes(center))
     app.add_routes(backup_routes(center))
     app.add_routes(inventory_routes(center))
     app.add_routes(readiness_routes(center))
