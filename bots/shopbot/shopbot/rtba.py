@@ -108,6 +108,9 @@ class RTBA:
         self.db.exec("INSERT INTO supplier_fails(ts,supplier,error) VALUES(?,?,?)", (time.time(), supplier, error[:300]))
 
     async def check_product(self, product: str) -> Check:
+        orbit = getattr(self.shop, "orbit", None)
+        if orbit is not None and orbit.blocked(f"buy.{product}"):
+            return Check(False, "снято с продажи в Пульте Орбиты центра", hard=True)
         if not self.cfg.get(f"catalog.{CATALOG_KEY[product]}.enabled"):
             return Check(False, "выключено в каталоге", hard=True)
         sup_name = PRODUCT_SUPPLIER[product]

@@ -65,6 +65,8 @@ class Engine:
         self.nft = None                        # starsbot.nft_supply.NftSupplyManager — NFT-подарки для TG Gift
         self.premium = None                    # starsbot.premium.service.PremiumService — продажа Telegram Premium
         self.treasury = None                   # starsbot.treasury.service.Treasury — балансы и пополнение кошелька
+        from starsbot.orbit import StarsOrbit
+        self.orbit = StarsOrbit(self)          # Орбита центра: какие позиции сняты с продажи (starsbot/orbit.py)
         self.risk = RiskEngine(cfg.risk, db)
         self.rtba = RTBAEngine(cfg.rtba)
         self.queue: asyncio.Queue[str] = asyncio.Queue()
@@ -95,6 +97,10 @@ class Engine:
     @property
     def lots(self) -> list[dict]:
         return [l for l in (self.cfg.funpay.lots or []) if l.get("stars")]
+
+    def orbit_closed(self, *keys: str) -> bool:
+        """Позиция снята с орбиты в Центре (Пульт Орбиты): её лоты и товары держим выключенными."""
+        return self.orbit is not None and self.orbit.blocked(*keys)
 
     def _denominations(self) -> list[int]:
         active = sorted({int(l["stars"]) for l in self.lots if l.get("offer_id")})
@@ -1288,10 +1294,13 @@ class Engine:
                 continue
             stars = int(lot["stars"])
             amount = max(0, min(int(free_ton / (stars * per_star * 1.03)), int(self.cfg.funpay.max_display_amount)))
+            off = self.orbit_closed("stars")
+            if off:
+                amount = 0
             key = f"lot_amount:{lot['offer_id']}"
             if self.db.kv_get(key) == amount:
                 continue
-            active = amount > 0 or not self.cfg.funpay.deactivate_when_empty
+            active = not off and (amount > 0 or not self.cfg.funpay.deactivate_when_empty)
             try:
                 await self.fp.update_lot(int(lot["offer_id"]), int(self.cfg.funpay.node_id),
                                          amount=max(amount, 1 if active else 0), active=active)
@@ -2019,6 +2028,7 @@ class Engine:
             self.notifier.poll_commands(),
             self.lease_keeper(),
             self._loop("remote_inbox", 15, self.remote_inbox),
+            self._loop("orbit", 5, self.orbit.tick),
         ]
         if self.analytics:
             loops.append(self._loop("analytics", 600, self.analytics.tick))

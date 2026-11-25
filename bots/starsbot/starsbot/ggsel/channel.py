@@ -463,6 +463,8 @@ class GgselChannel:
                     amount = max(0, min(int(free_ton / (stars * per_star * 1.03)), cap))
                 if low and self.c.get("hide_below_min_margin", True):
                     amount = 0
+                if self.engine.orbit_closed("ggsel:premium" if months else "ggsel:stars"):
+                    amount = 0                   # позиция снята с орбиты в Центре
                 if self.db.kv_get(f"ggsel_stock:{p['offer_id']}") != amount:
                     fields["quantity"] = amount
                     fields["is_unlimited_quantity"] = False

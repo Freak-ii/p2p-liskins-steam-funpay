@@ -23,6 +23,7 @@ from center.readiness import routes as readiness_routes
 from center.updates import routes as update_routes
 from center.monitor import routes as monitor_routes
 from center.steamshare import routes as steamshare_routes
+from center.orbit import routes as orbit_routes
 
 STATIC = Path(__file__).resolve().parent / "static"
 COOKIE = "center_token"
@@ -370,6 +371,7 @@ def make_app(center: Center) -> web.Application:
     app.add_routes(readiness_routes(center))
     app.add_routes(update_routes(center))
     app.add_routes(steamshare_routes(center))
+    app.add_routes(orbit_routes(center))
     app.router.add_static("/static/", STATIC)
     return app
 

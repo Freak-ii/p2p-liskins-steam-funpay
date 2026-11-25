@@ -129,6 +129,7 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         await run_treasury_demo(sup)
         log.info("Демо-сценарий выполнен: заказы FunPay, Ozon, GGSEL, Авито и Wildberries в CRM")
     runner = await start_web(sup, host, port, mem)
+    sup.start_orbit_watch()
     from starsbot.app.watchdog import LoopWatchdog
     loop_ = asyncio.get_running_loop()
     _quiet_windows_resets(loop_)

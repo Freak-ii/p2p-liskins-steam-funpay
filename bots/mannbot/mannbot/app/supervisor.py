@@ -166,6 +166,22 @@ class Supervisor:
                 await asyncio.sleep(interval)
         self.remote_task = asyncio.create_task(loop())
 
+    def start_orbit_watch(self, interval: float = 5) -> None:
+        """Пульт Орбиты центра действует и при остановленной торговле: снятая позиция выключает лоты сразу,
+        а не при следующем запуске бота. Пока торговля идёт, это делает цикл orbit движка."""
+        if getattr(self, "orbit_task", None):
+            return
+
+        async def loop() -> None:
+            while True:
+                try:
+                    if self.state not in ("running", "starting") and self.engine is not None:
+                        await self.engine.orbit_tick()
+                except Exception:  # noqa: BLE001 — ошибка уйдёт в подтверждение центру при следующей попытке
+                    log.exception("orbit")
+                await asyncio.sleep(interval)
+        self.orbit_task = asyncio.create_task(loop())
+
     def ensure_token(self) -> str:
         token = str(self.cfg.dashboard.token or "")
         if len(token) < 12:

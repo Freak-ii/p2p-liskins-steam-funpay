@@ -514,10 +514,13 @@ class GiftService:
             stars = int(lot["stars"])
             cost = self.cost_for(stars)
             amount = max(0, min(int((free + extra) / cost) if cost else 0, int(g.get("max_display_amount") or 200)))
+            off = self.engine.orbit_closed("gifts")
+            if off:
+                amount = 0
             key = f"gift_lot_amount:{lot['offer_id']}"
             if self.db.kv_get(key) == amount:
                 continue
-            active = amount > 0 or not g.get("deactivate_when_empty", True)
+            active = not off and (amount > 0 or not g.get("deactivate_when_empty", True))
             try:
                 await self.engine.fp.update_lot(int(lot["offer_id"]), int(self.cfg.funpay.node_id),
                                                 amount=max(amount, 1 if active else 0), active=active)

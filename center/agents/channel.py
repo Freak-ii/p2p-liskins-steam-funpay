@@ -118,8 +118,14 @@ class ChannelAgent(Agent):
         return out
 
     def check(self, text: str) -> list[str]:
-        return guard.check(text, allow_prices=bool(self.cfg.get("allow_prices", False)),
-                           allowed_percents=self.allowed_percents(), extra_words=self.cfg.get("forbidden_words") or [])
+        issues = guard.check(text, allow_prices=bool(self.cfg.get("allow_prices", False)),
+                             allowed_percents=self.allowed_percents(), extra_words=self.cfg.get("forbidden_words") or [])
+        orbit = getattr(self.center, "orbit", None)       # Пульт Орбиты: о снятых позициях канал не пишет
+        if orbit is not None:
+            for title, rx in orbit.closed_keywords():
+                if rx.search(text):
+                    issues.append(f"«{title}» снята с продажи в Пульте Орбиты — уберите её из поста")
+        return issues
 
     async def draft(self, kind: str, key: str, task: dict, source_url: str = "") -> int | None:
         if self.has_key(key):

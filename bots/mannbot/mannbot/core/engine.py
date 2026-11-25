@@ -57,6 +57,9 @@ class Engine:
         self.stock_cache: dict[str, Any] = {"total": None, "ts": 0}
         self.ai = AIAgent(cfg, db, notifier, sender=self.say_text)
         self.share = CenterShare.from_env()      # реестр обменов центра: один аккаунт Steam с LisBot
+        from mannbot.orbit_gate import OrbitGate, OrbitTracker
+        self.orbit = OrbitGate("mannbot")        # Орбита центра: ключи сняты с продажи — лот выключен (ключ keys)
+        self.orbit_tracker = OrbitTracker(self.orbit)
 
     # ================================================================== helpers
     @property
@@ -872,8 +875,43 @@ class Engine:
             return
         await self._sync_lots(avail)
 
+    def orbit_closed(self, *keys: str) -> bool:
+        return self.orbit.blocked(*keys)
+
+    async def orbit_tick(self) -> None:
+        """Пульт Орбиты в Центре снял или вернул ключи: лот выключается сразу, даже на паузе; возвращает его
+        обычная сверка склада."""
+        if not self.orbit.enabled:
+            return
+        ch = self.orbit_tracker.changes()
+        if ch is None:
+            return
+        closed, opened = ch
+        applied = {k: "ok" for k in self.orbit.closed()}
+        if "keys" in closed or "keys" in opened:
+            for lot in self.cfg.funpay.lots:
+                if lot.get("offer_id"):
+                    self.db.kv_set(f"lot_amount:{lot['offer_id']}", None)
+            try:
+                if "keys" in closed:
+                    await self._sync_lots(0)
+                    if not any(l.get("offer_id") for l in self.cfg.funpay.lots):
+                        applied["keys"] = "skip: лота нет"
+                elif self.cfg.funpay.stock_sync and not self.paused:
+                    avail = await self.available_keys(force=True)
+                    if avail is not None:
+                        await self._sync_lots(avail)
+            except Exception as e:  # noqa: BLE001 — лот поправит следующая сверка склада
+                log.exception("orbit")
+                applied["keys"] = f"error: {e}"
+            self.db.add_event("-", "orbit", closed=sorted(closed), opened=sorted(opened))
+            if "keys" in closed:
+                await self.notifier.notify("INFO", "orbit_closed", "🪐 Орбита: ключи сняты с продажи — лот FunPay "
+                                           "выключен, магазин их больше не получает", throttle_key="orbit")
+        self.orbit.ack(applied, self.orbit_tracker.seen_version)
+
     async def _sync_lots(self, avail: int) -> None:
-        held = bool(self.db.kv_get("lots_hold"))
+        held = bool(self.db.kv_get("lots_hold")) or self.orbit_closed("keys")
         for lot in self.cfg.funpay.lots:
             if not lot.get("offer_id"):
                 continue
@@ -1288,6 +1326,7 @@ class Engine:
             self._loop("security", 60, self.security_watch),
             self._loop("timers", 30, self.timers),
             self._loop("stock", 120, self.stock_sync),
+            self._loop("orbit", 5, self.orbit_tick),
             self._loop("raise", 300, self.raise_lots),
             self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),
             self.deliver_worker(),

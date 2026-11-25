@@ -46,14 +46,20 @@ class Channel:
                                      message_id=row["message_id"], disable_notification=True)
         return res
 
+    def hidden(self) -> set[str]:
+        """Товары, снятые в Пульте Орбиты центра: их нет в постах и описаниях канала."""
+        orbit = getattr(self.shop, "orbit", None)
+        return orbit.post_hidden() if orbit is not None else set()
+
     async def price_rows(self) -> tuple[list[str], dict]:
         shop, rows, mins = self.shop, [], {}
+        hidden = self.hidden()
         try:
             q = await shop.suppliers["stars"].quote("stars", 100)
             per = float(q["cost_rub"]) / 100 if q.get("available") else None
         except SupplierError:
             per = None
-        if per and shop.rtba.is_open("buy.stars"):
+        if per and shop.rtba.is_open("buy.stars") and "stars" not in hidden:
             for n in [x for x in self.cfg.get("catalog.stars.denominations") or [] if x in (50, 100, 250, 500, 1000)]:
                 price, _ = shop_price(self.cfg, "stars", per * n, n)
                 rows.append(f"⭐ {n} — <b>{price:.0f} ₽</b>")
@@ -63,12 +69,12 @@ class Channel:
                 q = await shop.suppliers["premium"].quote("premium", 0, int(months))
             except SupplierError:
                 break
-            if q.get("available") and shop.rtba.is_open("buy.premium"):
+            if q.get("available") and shop.rtba.is_open("buy.premium") and "premium" not in hidden:
                 price, _ = shop_price(self.cfg, "premium", float(q["cost_rub"]), 1)
                 rows.append(f"💎 Premium {months} мес. — <b>{price:.0f} ₽</b>")
                 mins.setdefault("premium", price)
         gifts = sorted(shop.gifts(), key=lambda g: g["stars"])
-        if gifts and shop.rtba.is_open("buy.gift"):
+        if gifts and shop.rtba.is_open("buy.gift") and "gift" not in hidden:
             try:
                 q = await shop.suppliers["gifts"].quote("gift", int(gifts[0]["stars"]), gift=gifts[0])
                 if q.get("available"):
@@ -83,15 +89,21 @@ class Channel:
         rows, mins = await self.price_rows()
         c = self.cfg
         shop_name = c.get("general.shop_name")
+        hidden = self.hidden()
+        open_text = T.POST_OPEN.format(shop=shop_name)
+        if hidden:
+            open_text = open_text.replace("Telegram Stars, подарки, Premium и ключи Steam", T.goods_text(hidden), 1)
+        showcase = T.strip_lines(T.POST_SHOWCASE.format(shop=shop_name, stars_from=f"{mins.get('stars', 0):.0f}",
+                                                        gift_from=f"{mins.get('gift', 0):.0f}",
+                                                        prem_from=f"{mins.get('premium', 0):.0f}"),
+                                 hidden, T.SHOWCASE_LINE)
+        goods = [(t, {"url": self.link(p)}) for p, t in (("stars", "⭐ Звёзды"), ("gift", "🎁 Подарки"),
+                                                          ("premium", "💎 Premium"), ("steam_keys", "🎮 Steam"))
+                 if p not in hidden]
         posts = {
-            "open": (T.POST_OPEN.format(shop=shop_name),
-                     [[("🛒 Открыть магазин", {"url": self.app_link()})]]),
-            "showcase": (T.POST_SHOWCASE.format(shop=shop_name, stars_from=f"{mins.get('stars', 0):.0f}",
-                                                gift_from=f"{mins.get('gift', 0):.0f}",
-                                                prem_from=f"{mins.get('premium', 0):.0f}"),
-                         [[("⭐ Звёзды", {"url": self.link("stars")}), ("🎁 Подарки", {"url": self.link("gift")})],
-                          [("💎 Premium", {"url": self.link("premium")}), ("🎮 Steam", {"url": self.link("steam_keys")})],
-                          [("💸 Продать звёзды или подарок", {"url": self.link("sell")})]]),
+            "open": (open_text, [[("🛒 Открыть магазин", {"url": self.app_link()})]]),
+            "showcase": (showcase, [goods[i:i + 2] for i in range(0, len(goods), 2)] +
+                         [[("💸 Продать звёзды или подарок", {"url": self.link("sell")})]]),
             "prices": (T.POST_PRICES.format(rows="\n".join(rows) or "—"),
                        [[("🛒 Купить в боте", {"url": self.link("stars")})]]),
             "sell": (T.POST_SELL.format(fee=c.get("buyback.fee_pct")), [[("💸 Продать", {"url": self.link("sell")})]]),
@@ -133,6 +145,24 @@ class Channel:
         self.db.exec("UPDATE channel_posts SET message_id=?, status='published', published_at=? WHERE id=?",
                      (res["message_id"], time.time(), pid))
         return f"опубликовано, message_id {res['message_id']}"
+
+    async def refresh_published(self) -> str:
+        """Пересобрать посты и поправить в канале те опубликованные, у которых изменился текст (Пульт Орбиты)."""
+        before = {r["id"]: r["text"] for r in self.db.q("SELECT id, text FROM channel_posts")}
+        posts = await self.build()
+        if not self.cfg.get("channel.chat_id") or self.shop.bot is None or not getattr(self.shop.bot, "token", ""):
+            return "ok"
+        from shopbot.tg import kb
+        edited = 0
+        for p in posts:
+            if p.get("message_id") and p.get("status") == "published" and before.get(p["id"]) != p["text"]:
+                res = await self.shop.bot.call("editMessageText", chat_id=self.cfg.get("channel.chat_id"),
+                                               message_id=p["message_id"], text=p["text"], parse_mode="HTML",
+                                               reply_markup=kb(p["buttons"]), disable_web_page_preview=True)
+                if not res:
+                    return f"error: Telegram не принял правку поста «{p['title']}»"
+                edited += 1
+        return f"ok: поправлено постов {edited}" if edited else "ok"
 
     async def autoupdate(self) -> None:
         """RTBA-пункт channel.autopost: обновить опубликованный пост с ценами, когда цены заметно сдвинулись."""
