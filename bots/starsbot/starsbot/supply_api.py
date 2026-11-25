@@ -92,6 +92,8 @@ def _shop_gift(engine, amount: int, gift: str = "", title: str = "") -> tuple[di
 def quote(engine, product: str, amount: int = 0, months: int = 0, gift: str = "", title: str = "") -> dict:
     if engine.paused:
         return {"available": False, "reason": "StarsBot на паузе"}
+    if engine.orbit_closed(f"supply:{product}"):
+        return {"available": False, "reason": "снято с продажи в Пульте Орбиты", "orbit": True}
     if product == "premium":
         prem = getattr(engine, "premium", None)
         if prem is None:
@@ -133,6 +135,8 @@ def quote(engine, product: str, amount: int = 0, months: int = 0, gift: str = ""
 
 async def create(engine, ref: str, product: str, username: str, amount: int = 0, months: int = 0,
                  gift: str = "", title: str = "") -> dict:
+    if engine.orbit_closed(f"supply:{product}") and engine.db.get_order(supply_id(ref)) is None:
+        return {"ok": False, "error": "снято с продажи в Пульте Орбиты"}
     if product == "premium":
         prem = getattr(engine, "premium", None)
         if prem is None:

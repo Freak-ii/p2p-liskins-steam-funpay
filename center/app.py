@@ -21,6 +21,7 @@ from center.crm import Crm
 from center.coordinator import Coordinator
 from center.agents import Agents
 from center.events import EventStore
+from center.orbit import Orbit
 from center.vault import SecretStore
 from center.rtba import Rtba
 from center.steamshare import SteamShare
@@ -56,8 +57,9 @@ class Center:
         self.workers["tggift"] = TgGiftWorker(self.home / "tggift", self.events, port=wg.get("port", 8805),
                                               restart=restart, executable=wg.get("python") or "", demo=demo,
                                               vault=self.vault)
-        for w in self.workers.values():             # адрес и токен реестра обменов (center/steamshare.py)
-            w.extra_env = self.steamshare.bot_env
+        self.orbit = Orbit(self)                    # Пульт Орбиты: какие позиции сняты с продажи (shared/orbit.json)
+        for name, w in self.workers.items():        # адрес и токен реестра обменов (center/steamshare.py) + путь Орбиты
+            w.extra_env = (lambda n=name: {**self.steamshare.bot_env(), **self.orbit.bot_env(n)})
         if demo:                                    # история сделок LisBot за месяц; дальше он торгует на эмуляции LIS/Steam
             from center.demo import seed_lisbot
             seed_lisbot(self.workers["lisbot"].data_dir)
@@ -88,6 +90,7 @@ class Center:
         await self.monitor.start()
         await self.coordinator.start()
         await self.agents.start()
+        await self.orbit.start()
         await self.backup.start()
         await self.inventory.start()
         await self.tg.start()
@@ -116,6 +119,7 @@ class Center:
         await self.tg.stop()
         await self.updates.stop()
         await self.agents.stop()
+        await self.orbit.stop()
         await self.coordinator.stop()
         await self.monitor.stop()
         self.events.add("center", "info", "center.stop", "Центр остановлен")
@@ -144,7 +148,8 @@ class Center:
 
     # ------------------------------------------------------------------ удалённые команды файлом
     REMOTE_HELP = ("команды: status | <бот> start|stop|restart|autostart_on|autostart_off | "
-                   "<бот> bot_start|bot_stop|pause|resume (действия панели бота); боты: lisbot, mannbot, starsbot")
+                   "<бот> bot_start|bot_stop|pause|resume (действия панели бота); боты: lisbot, mannbot, starsbot | "
+                   "orbit status | orbit close <позиция> [канал] [причина] | orbit open <позиция> [канал]")
 
     async def remote_command(self, line: str) -> str:
         parts = line.split()
@@ -158,6 +163,8 @@ class Center:
                             f"{' · торговля ' + str(sm.get('bot_state')) if sm.get('bot_state') else ''}"
                             f" · автозапуск {'вкл' if self.cfg.autostart(name) else 'выкл'}")
             return "\n".join(rows)
+        if parts[0].lower() in ("orbit", "орбита"):
+            return await self.orbit.command(parts[1:], by="remote_cmd.txt")
         name, action = parts[0].lower(), (parts[1].lower() if len(parts) > 1 else "")
         w = self.workers.get(name)
         if w is None:

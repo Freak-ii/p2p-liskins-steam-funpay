@@ -199,7 +199,7 @@ async function system() {
   <h2>Фоновые задачи</h2>${table(loops, [['name', 'Задача'], ['runs', 'Запусков'], ['lastOk', 'Успех', dt], ['lastError', 'Ошибка', null, 'wrap']])}
   <h2 style="margin-top:16px">Пропуски закупки (с запуска)</h2>${table(Object.entries(r.buyer?.skips || {}).map(([k, n]) => ({ k, n })), [['k', 'Причина'], ['n', 'Раз']])}
   <div class="row" style="margin-top:16px"><button class="btn" onclick="api('/api/control',{action:'buyPause'}).then(refresh)">Пауза закупок</button><button class="btn" onclick="api('/api/control',{action:'buyResume'}).then(refresh)">Возобновить закупки</button><button class="btn" onclick="api('/api/control',{action:'sellPause'}).then(refresh)">Пауза продаж</button><button class="btn" onclick="api('/api/control',{action:'sellResume'}).then(refresh)">Возобновить продажи</button></div>
-  <p class="muted">Закупки: ${S.guard.buyPaused ? 'на паузе' : 'активны'} · Продажи: ${S.guard.sellPaused ? 'на паузе' : 'активны'}</p>`;
+  <p class="muted">Закупки: ${S.guard.orbitBlocked ? 'сняты с орбиты в центре' : S.guard.buyPaused ? 'на паузе' : 'активны'} · Продажи: ${S.guard.sellPaused ? 'на паузе' : 'активны'}</p>`;
 }
 
 async function settings() {

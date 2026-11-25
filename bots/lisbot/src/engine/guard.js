@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { esc } from '../notify/telegram.js';
 import { errMsg } from '../util/common.js';
+import { OrbitGate } from '../util/orbit.js';
 
 /**
  * Предохранитель (circuit breaker).
@@ -15,11 +16,15 @@ export class Guard extends EventEmitter {
     Object.assign(this, { db, notify, log, cfg });
     this.state = { halted: false, haltReason: null, haltCode: null, haltAt: null, paused: false, buyPaused: false, sellPaused: false, ...db.get('guard', {}) };
     this.errors = new Map();
+    this.orbit = new OrbitGate();
   }
+
+  /** Закупка снята с орбиты в центре: buy.arb в режиме арбитража, иначе buy.steam (скины под ТП Steam). */
+  get orbitBlocked() { return this.orbit.blocked(this.cfg?.arbitrage?.enabled ? 'buy.arb' : 'buy.steam'); }
 
   _save() { this.db.set('guard', this.state); this.emit('change', this.state); }
 
-  get canBuy() { return !this.state.halted && !this.state.paused && !this.state.buyPaused; }
+  get canBuy() { return !this.state.halted && !this.state.paused && !this.state.buyPaused && !this.orbitBlocked; }
   get canSell() { return !this.state.halted && !this.state.paused && !this.state.sellPaused; }
   /** Приём входящих трейдов от LIS продолжаем даже на паузе — иначе купленное потеряется. Но не при аварии. */
   get canAcceptTrades() { return !this.state.halted; }

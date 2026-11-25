@@ -12,6 +12,42 @@ WELCOME = (
     "💸 <b>Продать</b> — звёзды или подарки за крипту\n\n"
     "Оплата криптой на кошелёк TON, звёздами, подарками или скинами Steam. Все комиссии видны до оплаты."
 )
+PRODUCT_WORDS = {"stars": "звёзды", "gift": "подарки", "premium": "Premium", "steam_keys": "ключи Steam"}
+PRODUCT_LINE = {"stars": "⭐ <b>Звёзды</b>", "gift": "🎁 <b>Подарки</b>", "premium": "💎 <b>Premium</b>",
+                "steam_keys": "🎮 <b>Steam</b>"}
+PRODUCT_BUTTON = {"stars": ("⭐ Звёзды", "buy:stars"), "gift": ("🎁 Подарки", "buy:gift"),
+                  "premium": ("💎 Premium", "buy:premium"), "steam_keys": ("🎮 Steam", "buy:steam_keys")}
+
+
+def goods_text(hidden: set[str] | frozenset = frozenset(), *, capital: bool = True) -> str:
+    """«Звёзды, подарки и Premium» — только то, что сейчас продаётся (Пульт Орбиты центра)."""
+    words = [w for p, w in PRODUCT_WORDS.items() if p not in hidden] or ["товары для Telegram"]
+    text = words[0] if len(words) == 1 else ", ".join(words[:-1]) + " и " + words[-1]
+    return text[:1].upper() + text[1:] if capital else text
+
+
+def strip_lines(text: str, hidden: set[str] | frozenset, lines: dict[str, str]) -> str:
+    """Убрать строки текста, которые начинаются с маркера снятого товара."""
+    marks = [lines[p] for p in hidden if p in lines]
+    return "\n".join(ln for ln in text.split("\n") if not any(ln.startswith(m) for m in marks))
+
+
+def welcome(shop: str, hidden: set[str] | frozenset = frozenset()) -> str:
+    text = WELCOME.format(shop=shop)
+    if not hidden:
+        return text
+    text = strip_lines(text, hidden, PRODUCT_LINE)
+    tg = [p for p in ("stars", "gift", "premium") if p not in hidden]
+    head = goods_text(hidden | {"steam_keys"}) + " для Telegram" if tg else goods_text(hidden)
+    return text.replace("Звёзды, подарки и Premium для Telegram", head, 1)
+
+
+def menu_buttons(hidden: set[str] | frozenset = frozenset()) -> list:
+    goods = [PRODUCT_BUTTON[p] for p in PRODUCT_BUTTON if p not in hidden]
+    rows = [goods[i:i + 2] for i in range(0, len(goods), 2)]
+    return rows + MENU_BUTTONS[2:]
+
+
 MENU_BUTTONS = [
     [("⭐ Звёзды", "buy:stars"), ("🎁 Подарки", "buy:gift")],
     [("💎 Premium", "buy:premium"), ("🎮 Steam", "buy:steam_keys")],
@@ -84,6 +120,7 @@ POST_SHOWCASE = (
     "🧾 Комиссии видны до оплаты: карта, крипта по курсу Bybit, звёзды\n\n"
     "👇 Выберите, что нужно"
 )
+SHOWCASE_LINE = {"stars": "⭐ Звёзды —", "gift": "🎁 Подарки", "premium": "💎 Premium —", "steam_keys": "🎮 Ключи"}
 POST_PRICES = "📈 <b>Цены на сегодня</b>\n\n{rows}\n\nЦены обновляются автоматически. Комиссия оплаты — отдельной строкой при заказе."
 POST_SELL = (
     "💸 <b>Продайте звёзды или подарки</b>\n\n"

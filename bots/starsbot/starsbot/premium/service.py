@@ -248,10 +248,13 @@ class PremiumService:
             if not self.ton_for(months):
                 continue                         # себестоимость неизвестна — наличие не трогаем
             amount = max(0, min(self.capacity(months, free), int(self.c.get("max_display_amount") or 50)))
+            off = self.engine.orbit_closed("premium")
+            if off:
+                amount = 0
             key = f"premium_lot_amount:{lot['offer_id']}"
             if self.db.kv_get(key) == amount:
                 continue
-            active = amount > 0 or not self.c.get("deactivate_when_empty", True)
+            active = not off and (amount > 0 or not self.c.get("deactivate_when_empty", True))
             try:
                 await self.engine.fp.update_lot(int(lot["offer_id"]), self.node, amount=max(amount, 1 if active else 0),
                                                 active=active)
