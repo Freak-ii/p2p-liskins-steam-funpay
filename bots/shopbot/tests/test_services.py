@@ -111,7 +111,16 @@ def test_steam_topup_amount_and_login(tmp_path):
                          inputs=["50", "1000", "gaben_login"]))
     assert "Сумма от 100" in "\n".join(texts(bot, U))
     assert o["amount"] == 1000 and o["recipient"] == "gaben_login"
-    assert o["price_rub"] == 1100 and o["cost_rub"] == 1070
+    # дешевле всего FunPay по логину (1.04) — и платится балансом FunPay, без банка
+    assert o["price_rub"] == 1100 and o["cost_rub"] == 1040
+    assert "funpay.com/lots/1086" in "\n".join(texts(bot, ADMIN))
+    # оператор купил дороже (1060 ₽) → следующий заказ считается по фактическому курсу 1.06
+    asyncio.run(bot.on_callback(ADMIN, f"adm:svc:{o['id']}"))
+    asyncio.run(bot.on_text(ADMIN, "", "", "готово цена 1060"))
+    o = shop.db.order(o["id"])
+    assert o["status"] == "delivered" and o["cost_rub"] == 1060
+    r = [x for x in shop.services.options("steam_topup:rub", 2000) if x["source"] == "resale"][0]
+    assert r["learned"] and r["cost_rub"] == 2120 and r["config_cost_rub"] == 2080
 
 
 def test_operator_refund_and_rtba_closes_overpriced(tmp_path):

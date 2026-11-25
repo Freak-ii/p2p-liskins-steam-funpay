@@ -472,10 +472,14 @@ class ServiceSupplier:
             best = self.resale.best(it, v, amount, self.rates)
             if best is not None:
                 cost, learned = best["cost_rub"], None
-                if it.get("kind") != "topup":
+                if it.get("kind") == "topup":
+                    rate = self.learned_cost("rate:" + sku)
+                    if rate is not None:        # фактический курс последних пополнений
+                        learned = round(amount * rate + float(best.get("fee_rub") or 0), 2)
+                else:
                     learned = self.learned_cost(sku)
-                    if learned is not None:
-                        cost = learned          # фактическая цена последних закупок важнее цены из конфига
+                if learned is not None:
+                    cost = learned              # фактическая цена последних закупок важнее цены из конфига
                 out.append({"source": "resale", "auto": False, "cost_rub": cost,
                             "offer": {k: best.get(k) for k in ("market", "url", "title", "option")},
                             **({"learned": True, "config_cost_rub": best["cost_rub"]} if learned is not None else {})})
@@ -488,8 +492,15 @@ class ServiceSupplier:
         if job is None or cost_rub is None or cost_rub <= 0:
             return
         self._set(ref, cost_rub=round(float(cost_rub), 2))
+        sku, value = job["sku"], round(float(cost_rub), 2)
+        it, _ = self.catalog.variant(job["sku"])
+        if it is not None and it.get("kind") == "topup":     # для пополнения запоминаем курс (₽ за 1 ₽ Steam)
+            o = self.db.one("SELECT amount FROM orders WHERE id=?", (job["order_id"],))
+            if o is None or not int(o["amount"] or 0):
+                return
+            sku, value = "rate:" + job["sku"], round(float(cost_rub) / int(o["amount"]), 4)
         self.db.exec("INSERT INTO service_costs(sku, cost_rub, order_id, at) VALUES(?,?,?,?)",
-                        (job["sku"], round(float(cost_rub), 2), job["order_id"] or "", time.time()))
+                     (sku, value, job["order_id"] or "", time.time()))
 
     def learned_cost(self, sku: str) -> float | None:
         """Медиана последних 3 закупок за services.learned_cost_days (по умолчанию 14) дней."""

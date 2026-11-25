@@ -212,6 +212,11 @@ ITEMS: list[dict] = [
             # снимок 25.11.2026: лучшие продавцы 1 ₽ Steam = 1.07 ₽ (6.4 млн продаж)
             {"market": "ggsel", "title": "GGSEL, пополнение Steam РФ-СНГ",
              "url": "https://ggsel.net/catalog/steam-wallet", "rate": 1.07},
+            # снимок 25.11.2026: FunPay «Steam → Пополнение», RUB «По логину», продавцы с 80–95k отзывов —
+            # 0.0114 € за 1 ₽ (≈ 1.04 ₽ при 91 ₽/€). Платится балансом FunPay: выручка без вывода и без банка.
+            {"market": "funpay", "title": "FunPay, пополнение Steam по логину (баланс FunPay)",
+             "url": "https://funpay.com/lots/1086/", "rate": 1.04,
+             "option": "RUB · По логину · продавец 10k+ отзывов, онлайн · оплата балансом FunPay"},
         ],
         "notice": (
             "🎮 <b>Пополнение Steam — как это работает</b>\n\n"
