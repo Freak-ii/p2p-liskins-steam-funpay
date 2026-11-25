@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from starsbot import evidence as EV
 from starsbot.core import messages as M
 from starsbot.core.models import ChatMessage, FunPayOrder, OrderStatus as S
 from starsbot.core.risk import RiskEngine
@@ -125,7 +126,12 @@ class Engine:
         months = int(o["premium_months"] or 0) if "premium_months" in o.keys() else 0
         if is_premium(o) and last_hint:
             last_hint = last_hint.replace("the stars went to", "the order went to")
-        return {"order_id": o["order_id"], "buyer": o["buyer_username"], "stars": o["stars"],
+        if is_premium(o) and months:
+            what = f"Telegram Premium for {months_text(months, 'en')}" if en else \
+                f"Telegram Premium на {months_text(months)}"
+        else:
+            what = f"{o['stars']} ⭐ Telegram Stars"
+        return {"order_id": o["order_id"], "buyer": o["buyer_username"], "stars": o["stars"], "what": what,
                 "gifts": gifts, "value": value, "months": months,
                 "months_text": months_text(months, "en" if en else "ru") if months else "",
                 "gift": self.gift_title(o), "qty": o["quantity"] or 1,
@@ -314,7 +320,7 @@ class Engine:
                              premium_months=months or None)
         self.db.touch_customer(buyer_id, so.buyer_username, new_order_total=so.price, stars=stars)
         self.db.add_event(so.order_id, "created", price=so.price, stars=stars, tg_from_order=tg or "",
-                          imported=imported, **({"months": months} if premium else {}))
+                          imported=imported, params=dict(page.params or {}), **({"months": months} if premium else {}))
         self.coord.claim_chat(page.chat_id or so.chat_id, so.order_id)
         o = self.db.get_order(so.order_id)
         if imported:
@@ -466,6 +472,9 @@ class Engine:
             return
         o = self._set(oid, event="username_ok", tg_username=rec.username, tg_recipient=rec.recipient,
                       tg_name=rec.name, fail_reason="")
+        if self.needs_username_confirm(o, source):
+            await self.ask_username_confirm(o)
+            return
         if self._greeted(oid):
             await self.say(o, "username_ok")
         else:
@@ -495,6 +504,84 @@ class Engine:
         self._set(oid, S.READY, "ready")
         self.enqueue(oid)
 
+    # ------------------------------------------------------------------ подтверждение получателя
+    def needs_username_confirm(self, o, source: str = "") -> bool:
+        """Спрашивать ли «Да» на получателя до выдачи (доказательство для арбитража FunPay)."""
+        d = self.cfg.deal
+        mode = str(d.get("confirm_username") or "off").lower()
+        if mode == "off" or self.channel_of(o) is not None or is_gift(o) or o["approved"] or \
+                str(source).startswith("admin"):
+            return False
+        oid, user = o["order_id"], str(o["tg_username"] or "").lower()
+        if user and self.db.kv_get(f"ucfm_ok:{oid}") == user:
+            return False                         # этот получатель по заказу уже подтверждён
+        if mode == "always":
+            return True
+        if o["buyer_id"]:
+            if self.db.scalar("SELECT COUNT(*) FROM orders WHERE buyer_id=? AND order_id<>? AND lower(tg_username)=? "
+                              "AND (fp_status='closed' OR status='completed')", (o["buyer_id"], oid, user), 0):
+                return False                     # этот аккаунт покупатель уже получал и подтверждал заказ
+            new = not self.db.scalar("SELECT COUNT(*) FROM orders WHERE buyer_id=? AND order_id<>? AND "
+                                     "delivered_at IS NOT NULL", (o["buyer_id"], oid), 0)
+        else:
+            new = True
+        big = is_premium(o) or int(o["stars"] or 0) >= int(d.get("confirm_username_min_stars") or 1000)
+        return new or big
+
+    def _confirm_vars(self, o) -> dict:
+        d = self.cfg.deal
+        mins = int(float(d.get("confirm_username_timeout_minutes") or 15))
+        en = (o["lang"] or "ru") == "en"
+        if str(d.get("confirm_username_timeout_action") or "deliver") == "deliver":
+            line = (f"\nIf there is no reply, I'll send to @{o['tg_username']} in {mins} min." if en else
+                    f"\nБез ответа отправлю на @{o['tg_username']} через {mins} мин.")
+        else:
+            line = ""
+        return {"timeout_line": line}
+
+    async def ask_username_confirm(self, o) -> None:
+        oid = o["order_id"]
+        self.db.kv_set(f"ucfm:{oid}", time.time())
+        greeted = self._greeted(oid)
+        o = self._set(oid, S.AWAITING_USERNAME, "username_confirm_asked", reminded=1)
+        if greeted:
+            await self.say(o, "confirm_username", **self._confirm_vars(o))
+        else:
+            await self.say(o, "greeting_confirm_username", **self._confirm_vars(o))
+            self.db.add_event(oid, "greeting_with_username")
+
+    def confirm_pending(self, o) -> bool:
+        return bool(o is not None and o["tg_recipient"] and self.db.kv_get(f"ucfm:{o['order_id']}", 0))
+
+    async def username_confirmed(self, o, kind: str = "username_confirmed", **data: Any) -> None:
+        oid = o["order_id"]
+        self.db.kv_set(f"ucfm:{oid}", 0)
+        self.db.kv_set(f"ucfm_ok:{oid}", str(o["tg_username"] or "").lower())
+        self.db.add_event(oid, kind, username=o["tg_username"], **data)
+        if kind == "username_confirmed":
+            await self.say(o, "username_confirm_thanks")
+        await self._after_username_ok(self.db.get_order(oid))
+
+    async def on_confirm_reply(self, o, text: str, username: str | None) -> None:
+        oid = o["order_id"]
+        if username and username.lower() != str(o["tg_username"] or "").lower():
+            self.db.kv_set(f"ucfm:{oid}", 0)
+            self._set(oid, event="username_changed", old=o["tg_username"], new=username)
+            await self.accept_username(self.db.get_order(oid), username, source="chat_change")
+            return
+        if M.is_no(text):
+            self.db.kv_set(f"ucfm:{oid}", 0)
+            self._set(oid, event="username_rejected", tg_username=None, tg_recipient=None, tg_name=None)
+            await self.say(o, "username_confirm_no")
+            return
+        if username or M.is_yes(text):
+            await self.username_confirmed(o, text=str(text or "")[:200])
+            return
+        if M.detect_faq(text):
+            await self.answer_faq(o, text)
+            return
+        await self.say(o, "username_confirm_hint")
+
     async def bad_username(self, o, code: str, detail: str = "") -> None:
         oid = o["order_id"]
         attempts = int(o["username_attempts"] or 0) + 1
@@ -518,10 +605,118 @@ class Engine:
             self.db.set_last_seen_message(chat_id, msg.message_id)
             if msg.author_id == self.fp.user_id:
                 continue
+            if (not msg.is_system or (msg.author_id and not classify_system(msg.text))) and \
+                    await self.maybe_dispute(chat_id, msg):
+                continue
             if msg.is_system:
                 await self.on_system_message(chat_id, msg)
                 continue
             await self.on_buyer_message(chat_id, msg)
+
+    # ------------------------------------------------------------------ споры и доказательства
+    def evidence_cfg(self) -> dict:
+        return self.cfg.get("evidence") or {}
+
+    def evidence_folder(self) -> Path:
+        f = Path(str(self.evidence_cfg().get("folder") or "data/evidence"))
+        if f.is_absolute():
+            return f
+        ap = getattr(self, "autopilot", None)
+        if ap is not None:
+            return Path(ap.home) / f
+        return (Path(self.db.path).parent.parent if self.db.path != ":memory:" else Path(".")) / f
+
+    def _ev_kw(self) -> dict:
+        return {"wallet_address": str(getattr(self.wallet, "friendly_address", "") or "").replace("—", ""),
+                "seller": str(getattr(self.fp, "username", "") or "")}
+
+    def evidence(self, o) -> dict:
+        return EV.collect(self.db, o, **self._ev_kw())
+
+    def save_evidence(self, o) -> str:
+        if not self.evidence_cfg().get("enabled", True):
+            return ""
+        try:
+            path = EV.save_snapshot(self.db, o, self.evidence_folder(), **self._ev_kw())
+        except Exception as e:  # noqa: BLE001 — доказательства не должны ломать выдачу
+            log.warning("снимок доказательств #%s: %s", o["order_id"], e)
+            return ""
+        self.db.add_event(o["order_id"], "evidence_saved", path=str(path))
+        return str(path)
+
+    def support_pack(self, orders) -> str:
+        orders = [o for o in orders if o is not None]
+        if not orders:
+            return ""
+        path = EV.make_pack(self.db, orders, self.evidence_folder(), **self._ev_kw())
+        for o in orders:
+            self.db.add_event(o["order_id"], "support_pack", path=str(path))
+        return str(path)
+
+    def dispute_order(self, chat_id: str, msg: ChatMessage):
+        """Заказ, о котором пишет арбитраж/покупатель: по номеру в тексте, иначе последний заказ этого чата."""
+        ids = re.findall(r"#([A-Z0-9]{8})\b", msg.text or "")
+        for i in ids:
+            o = self.db.get_order(i)
+            if o is not None:
+                return o
+        if ids:
+            return None                          # речь о чужом заказе (другой бот аккаунта или ручная продажа)
+        o = self.db.active_order_for_chat(chat_id)
+        if o is None and self.coord.chat_is_foreign(chat_id):
+            return None
+        return o or self.db.last_order_for_chat(chat_id)
+
+    async def maybe_dispute(self, chat_id: str, msg: ChatMessage) -> bool:
+        """Сообщение арбитража/поддержки FunPay или требование доказательств — не отвечаем ему как покупателю."""
+        o = self.dispute_order(chat_id, msg)
+        if o is None:
+            return False
+        staff = bool(o["buyer_id"] and msg.author_id and msg.author_id != o["buyer_id"])
+        delivered = bool(o["delivered_at"]) and S(o["status"]) in (S.DELIVERED, S.COMPLETED)
+        if not staff and not (delivered and EV.STAFF_RE.search(msg.text or "")):
+            return False
+        await self.on_dispute_message(o, msg, staff=staff, delivered=delivered)
+        return True
+
+    async def on_dispute_message(self, o, msg: ChatMessage, *, staff: bool, delivered: bool) -> None:
+        oid = o["order_id"]
+        self.db.log_message(o["chat_id"], oid, "staff" if staff else "in", msg.text)
+        self.db.add_event(oid, "arbitration", author=msg.author_name, author_id=msg.author_id, staff=staff,
+                          text=str(msg.text or "")[:500])
+        if not o["confirm_reminded"]:
+            self.db.update_order(oid, confirm_reminded=1)    # во время спора «подтвердите заказ» не пишем
+        pack = ""
+        try:
+            pack = self.support_pack([self.db.get_order(oid)])
+        except Exception as e:  # noqa: BLE001
+            log.warning("пакет доказательств #%s: %s", oid, e)
+        posted = False
+        if delivered and self.evidence_cfg().get("auto_reply_arbitration", True) and not self.paused:
+            posted = await self.post_evidence(oid)
+        who = "Арбитраж/поддержка FunPay" if staff else f"Покупатель {o['buyer_username']}"
+        await self.notifier.notify(
+            "CRITICAL", "arbitration",
+            f"⚖️ #{oid}: {who} требует доказательства или возврат"
+            + (" — заказ ещё НЕ выдан, ответьте сами." if not delivered else ".")
+            + (" Доказательства уже отправлены в чат заказа." if posted else "")
+            + (f"\nПакет для поддержки: {pack}" if pack else "")
+            + "\nВозврат не делайте без проверки: звёзды, оплаченные на Fragment, вернуть нельзя."
+            + f"\n«{str(msg.text or '')[:300]}»", order_id=oid,
+            buttons=[("📄 Доказательства в чат", f"evidence {oid}")])
+
+    async def post_evidence(self, oid: str, force: bool = False) -> bool:
+        """Отправить доказательства в чат заказа (не чаще раза в 30 мин, если не force)."""
+        o = self.db.get_order(oid)
+        if o is None or not o["delivered_at"]:
+            return False
+        key = f"evidence_posted:{oid}"
+        if not force and time.time() - float(self.db.kv_get(key, 0) or 0) < 1800:
+            return False
+        self.db.kv_set(key, time.time())
+        await self.say_text(o, EV.arbitration_message(self.evidence(o)), dedupe=False)
+        self.db.add_event(oid, "evidence_posted")
+        return True
 
     async def on_system_message(self, chat_id: str, msg: ChatMessage) -> None:
         kind = classify_system(msg.text)
@@ -582,6 +777,9 @@ class Engine:
             await self.say(o, "off_platform")
             return
         username = username_from_text(msg.text)
+        if status == S.AWAITING_USERNAME and self.confirm_pending(o):
+            await self.on_confirm_reply(o, msg.text, username)
+            return
         if status == S.AWAITING_USERNAME:
             if username:
                 await self.accept_username(o, username, source="chat")
@@ -633,6 +831,8 @@ class Engine:
             if ap is not None:
                 try:
                     support = " Файл для поддержки: " + Path(ap.make_support_file([o])).name
+                    pack = self.support_pack([o])
+                    support += f"; пакет доказательств: {Path(pack).name}" if pack else ""
                 except Exception as e:  # noqa: BLE001
                     log.warning("файл для поддержки #%s: %s", o["order_id"], e)
             await self.notifier.notify("WARNING", "buyer_claims_not_received",
@@ -1169,6 +1369,7 @@ class Engine:
         self.db.kv_set(f"purchase_fail:{oid}", 0)
         self.wallet_info["ts"] = 0
         await self.say(o, "delivered")
+        self.save_evidence(self.db.get_order(oid))
         what = f"Premium {months_text(int(o['premium_months'] or 0))}" if is_premium(o) else f"{o['stars']} звёзд"
         await self.notifier.notify("INFO", "delivered", f"⭐ Заказ #{oid}: {what} → @{o['tg_username']} "
                                    f"({o['ton_amount'] or 0:.4f} TON)", order_id=oid)
@@ -1329,6 +1530,9 @@ class Engine:
                 break
             if self.waits_code(o):
                 continue                 # код Ozon ещё не активирован: напомнить покупателю некуда, это не просрочка
+            if self.confirm_pending(o):
+                await self._confirm_timeout(o, now)
+                continue
             if o["tg_username"] and not o["tg_recipient"] and o["fail_reason"] in ("fragment_auth", "network",
                                                                                    "rate_limit", "layout", "fragment",
                                                                                    "auth", "flood", "config"):
@@ -1363,6 +1567,22 @@ class Engine:
                 await self.notifier.notify("WARNING", "sla_total", f"#{o['order_id']} не выдан {total_m:.0f} мин. "
                                            f"(статус {o['status']})", order_id=o["order_id"],
                                            throttle_key=f"sla_total:{o['order_id']}")
+
+    async def _confirm_timeout(self, o, now: float) -> None:
+        d = self.cfg.deal
+        oid = o["order_id"]
+        asked = float(self.db.kv_get(f"ucfm:{oid}", 0) or 0)
+        mins = float(d.get("confirm_username_timeout_minutes") or 15)
+        if now - max(asked, float(o["last_buyer_msg_at"] or 0)) < mins * 60:
+            return
+        if str(d.get("confirm_username_timeout_action") or "deliver") == "deliver":
+            await self.username_confirmed(o, "username_confirm_timeout", minutes=mins)
+            return
+        self.db.kv_set(f"ucfm:{oid}", 0)
+        self._set(oid, S.MANUAL, "username_confirm_timeout", fail_reason="no_confirm")
+        await self.notifier.notify("WARNING", "username_no_confirm", f"#{oid}: покупатель {o['buyer_username']} "
+                                   f"не подтвердил получателя @{o['tg_username']} за {mins:g} мин. — выдайте "
+                                   f"вручную (/approve {oid}) или уточните в чате.", order_id=oid)
 
     async def raise_lots(self) -> None:
         if not self.cfg.funpay.auto_raise or self.paused or not int(self.cfg.funpay.game_id or 0):
@@ -1633,6 +1853,14 @@ class Engine:
             if cmd == "treasury":
                 await tr.refresh()
                 return tr.summary_text()
+        if cmd == "evidence" and a0:
+            o = self.db.get_order(a0)
+            if o is None:
+                return "заказ не найден"
+            pack = self.support_pack([o])
+            sent = await self.post_evidence(a0, force=True) if o["delivered_at"] else False
+            return (f"#{a0}: доказательства {'отправлены в чат' if sent else 'не отправлены (заказ не выдан)'}; "
+                    f"пакет {pack}")
         if cmd == "support" and ap is not None:
             due = ap.unconfirmed(float(ap.acfg.get("support_after_hours") or 72))
             return ap.make_support_file(due) if due else "неподтверждённых заказов старше порога нет"

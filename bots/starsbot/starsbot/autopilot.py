@@ -106,7 +106,9 @@ class Autopilot:
                              "сервис Telegram — fragment.com")
             if o["tx_hash"] and not str(o["tx_hash"]).startswith("dry"):
                 lines.append(f"Транзакция оплаты на Fragment (сеть TON): {o['tx_hash']}")
-                lines.append(f"Проверить: https://tonviewer.com/transaction/{o['tx_hash']}")
+                from starsbot.evidence import tonviewer_tx
+                if tonviewer_tx(o["tx_hash"]):
+                    lines.append(f"Проверить: {tonviewer_tx(o['tx_hash'])}")
             if o["fragment_ref"]:
                 lines.append(f"Комментарий платежа Fragment: {o['fragment_ref']}")
             if o["ton_amount"]:

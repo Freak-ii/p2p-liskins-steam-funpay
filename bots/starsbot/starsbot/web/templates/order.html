@@ -15,7 +15,7 @@
 {% if o.channel not in ('ozon', 'ggsel') %}<tr><td>Статус FunPay</td><td>{{o.fp_status}}</td></tr>{% endif %}
 <tr><td>Получатель</td><td>{% if o.tg_username %}<b>@{{o.tg_username}}</b>{% if o.tg_name %} · {{o.tg_name}}{% endif %} <span class="muted">({{o.username_source or '—'}}, попыток {{o.username_attempts}})</span>{% else %}—{% endif %}</td></tr>
 <tr><td>Fragment</td><td>{% if o.req_id %}req {{o.req_id}}{% else %}—{% endif %}{% if o.ton_amount %} · {{o.ton_amount|ton}} TON{% endif %}{% if o.ton_rate %} · курс {{o.ton_rate|money}} ₽{% endif %}</td></tr>
-<tr><td>Транзакция</td><td style="word-break:break-all">{% if o.tx_hash %}<a href="https://tonviewer.com/transaction/{{o.tx_hash}}" target="_blank" rel="noopener">{{o.tx_hash}}</a>{% elif o.tx_seqno is not none %}seqno {{o.tx_seqno}}, действительна до {{o.tx_valid_until|ts}}{% else %}—{% endif %}{% if o.tx_fee_ton %} <span class="muted">газ {{o.tx_fee_ton|ton}} TON</span>{% endif %}</td></tr>
+<tr><td>Транзакция</td><td style="word-break:break-all">{% if o.tx_hash %}{% if tx_link %}<a href="{{tx_link}}" target="_blank" rel="noopener">{{tx_link.rsplit('/',1)[1]}}</a>{% else %}{{o.tx_hash}}{% endif %}{% elif o.tx_seqno is not none %}seqno {{o.tx_seqno}}, действительна до {{o.tx_valid_until|ts}}{% else %}—{% endif %}{% if o.tx_fee_ton %} <span class="muted">газ {{o.tx_fee_ton|ton}} TON</span>{% endif %}</td></tr>
 <tr><td>Попыток покупки</td><td>{{o.purchase_attempts}}</td></tr>
 <tr><td>Риск</td><td>{{o.risk_score}}{% for r in risk %}<div class="muted">{{r}}</div>{% endfor %}</td></tr>
 <tr><td>Причина сбоя</td><td>{{o.fail_reason or '—'}}</td></tr>
@@ -43,6 +43,11 @@
 <button class="danger" name="action" value="refund" onclick="return confirm('Оформить ВОЗВРАТ денег покупателю?')">💸 Возврат</button>
 {% endif %}
 </form>
+<form method="post" class="row" style="margin-bottom:10px" title="Доказательства выдачи: транзакция, ссылка tonviewer, Ref Fragment, откуда взят username, хронология и переписка">
+<button name="action" value="evidence_pack">📄 Пакет для поддержки (zip)</button>
+{% if o.delivered_at %}<button name="action" value="evidence_post" onclick="return confirm('Отправить доказательства выдачи в чат заказа FunPay?')">⚖️ Доказательства в чат</button>{% endif %}
+{% for p in packs %}<a href="/evidence/{{p}}">⬇ {{p}}</a> {% endfor %}
+</form>
 <form method="post" class="row" style="margin-bottom:10px"><input type="hidden" name="action" value="set_username">
 <input name="username" placeholder="@username получателя" style="flex:1" value="{{ o.tg_username or '' }}"><button>Задать получателя</button></form>
 <form method="post"><input type="hidden" name="action" value="message"><textarea name="text" placeholder="{{ 'Сообщение покупателю в бот активации (дойдёт, если он активировал код через Telegram)' if o.channel == 'ozon' else ('Сообщение покупателю в чат заказа GGSEL (без ссылок и контактов — правила GGSEL)' if o.channel == 'ggsel' else 'Сообщение покупателю в чат FunPay (без контактов и сторонних ссылок!)') }}"></textarea>
@@ -57,7 +62,7 @@
 <div class="card"><h2>События</h2><div class="tw"><table>{% for e in events %}<tr><td class="muted" style="white-space:nowrap">{{e.ts|ts}}</td><td><b>{{e.kind}}</b>
 {% set d = e.data|jsonload %}{% if d %}<div class="muted">{% for k,v in d.items() if v not in (none,'') %}{{k}}={{ v|ts if k.endswith('_at') else v }} {% endfor %}</div>{% endif %}</td></tr>{% endfor %}</table></div></div>
 <div class="card"><h2>Переписка</h2>{% for m in msgs %}<div style="margin:6px 0;padding:6px 8px;border-radius:8px;background:var(--chip);{% if m.direction=='out' %}margin-left:30px{% else %}margin-right:30px{% endif %}">
-<div class="muted" style="font-size:11px">{{ 'бот' if m.direction=='out' else 'покупатель' }} · {{m.ts|ts}}</div><pre>{{m.text}}</pre></div>{% else %}<span class="muted">Нет сообщений</span>{% endfor %}</div>
+<div class="muted" style="font-size:11px">{{ 'бот' if m.direction=='out' else ('⚖️ поддержка FunPay' if m.direction=='staff' else 'покупатель') }} · {{m.ts|ts}}</div><pre>{{m.text}}</pre></div>{% else %}<span class="muted">Нет сообщений</span>{% endfor %}</div>
 </div>
 <script>const OID={{ o.order_id|tojson|safe }};onLive(ev=>{if(ev.order_id===OID&&!document.querySelector('textarea:focus,input:focus'))setTimeout(()=>location.reload(),800)})</script>
 {% endblock %}
