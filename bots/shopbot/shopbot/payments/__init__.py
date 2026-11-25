@@ -1,6 +1,7 @@
 """Способы оплаты магазина.
 
-  card    — ЮKassa, страница оплаты (confirmation.type=redirect). Тестовый магазин ЮKassa: shop_id тестового
+  card    — «Картой / СБП»: ЮKassa (нужен ИП/самозанятость) или P2P-шлюз для физлиц (CrystalPAY, AAIO) —
+            см. card_provider. Шлюз берёт 5–12 %, выводит в USDT → хаб; ЮKassa — страница оплаты (confirmation.type=redirect). Тестовый магазин ЮKassa: shop_id тестового
             магазина + секретный ключ вида test_…; деньги не списываются, карты из документации ЮKassa.
   crypto  — Crypto Pay API (@CryptoBot): счёт в USDT/TON на сумму, посчитанную по курсу Bybit + комиссия ≥2%.
             testnet=True → testnet-pay.crypt.bot (тестовые монеты). Через тот же API — выплаты при выкупе.
@@ -340,17 +341,128 @@ class ManualAsset:
         return PAID if payment_id in self.confirmed else PENDING
 
 
+class CrystalPay:
+    """CrystalPAY (P2P-шлюз для физлиц): СБП/карта РФ → баланс кассы → вывод в USDT на кошелёк/биржу.
+    API v3: POST /v3/invoice/create/ и /v3/invoice/info/ с auth_login + auth_secret (Secret 1 кассы).
+    Статусы счёта: notpayed / processing → ждём, payed → оплачен, cancelled/failed → отмена.
+    Вебхук не нужен: статус опрашивается, как у ЮKassa. Ключи — в кабинете кассы после KYC."""
+
+    name = "crystalpay"
+    API = "https://api.crystalpay.io/v3"
+
+    def __init__(self, login: str, secret: str, *, redirect_url: str = "", fetch=None):
+        self.login, self.secret = str(login or ""), str(secret or "")
+        self.redirect_url = redirect_url or "https://t.me"
+        self._fetch = fetch
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.login and self.secret)
+
+    async def _call(self, method: str, body: dict) -> dict:
+        if not self.configured:
+            raise PaymentError("CrystalPAY не настроен: логин кассы и Secret 1 (кабинет CrystalPAY → Кассы)")
+        body = {"auth_login": self.login, "auth_secret": self.secret, **body}
+        if self._fetch is not None:
+            d = await self._fetch(method, body)
+        else:
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                    async with s.post(f"{self.API}/{method}/", json=body) as r:
+                        d = await r.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                raise PaymentError(f"CrystalPAY недоступен: {e}") from e
+        if d.get("error"):
+            raise PaymentError(f"CrystalPAY {method}: {'; '.join(map(str, d.get('errors') or [])) or d}")
+        return d
+
+    async def create(self, order_id: str, amount_rub: float, description: str, *, ttl: int = 1800, **_) -> dict:
+        d = await self._call("invoice/create", {"amount": round(float(amount_rub), 2), "type": "purchase",
+                                                "currency": "RUB", "lifetime": max(5, int(ttl // 60)),
+                                                "description": description[:256], "extra": order_id,
+                                                "redirect_url": self.redirect_url})
+        return {"id": str(d["id"]), "url": d.get("url", ""), "status": PENDING}
+
+    async def check(self, payment_id: str) -> str:
+        st = str((await self._call("invoice/info", {"id": payment_id})).get("state") or "")
+        return PAID if st == "payed" else CANCELED if st in ("cancelled", "canceled", "failed", "expired") else PENDING
+
+
+class Aaio:
+    """AAIO (P2P-шлюз): ссылка на оплату с подписью sha256(merchant_id:amount:currency:secret1:order_id),
+    статус — POST /api/info-pay (X-Api-Key). success → оплачен, expired → отмена, in_process/hold → ждём
+    (hold — деньги у шлюза на проверке, товар не выдаём)."""
+
+    name = "aaio"
+    PAY = "https://aaio.so/merchant/pay"
+    INFO = "https://aaio.so/api/info-pay"
+
+    def __init__(self, merchant_id: str, secret1: str, api_key: str, *, lang: str = "ru", fetch=None):
+        self.merchant_id, self.secret1, self.api_key = str(merchant_id or ""), str(secret1 or ""), str(api_key or "")
+        self.lang = lang
+        self._fetch = fetch
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.merchant_id and self.secret1 and self.api_key)
+
+    def sign(self, amount: str, currency: str, order_id: str) -> str:
+        import hashlib
+        return hashlib.sha256(f"{self.merchant_id}:{amount}:{currency}:{self.secret1}:{order_id}".encode()).hexdigest()
+
+    async def create(self, order_id: str, amount_rub: float, description: str, **_) -> dict:
+        if not self.configured:
+            raise PaymentError("AAIO не настроен: ID магазина, секретный ключ №1 и API-ключ (кабинет AAIO)")
+        from urllib.parse import urlencode
+        amount = f"{float(amount_rub):.2f}"
+        q = {"merchant_id": self.merchant_id, "amount": amount, "currency": "RUB", "order_id": order_id,
+             "sign": self.sign(amount, "RUB", order_id), "desc": description[:250], "lang": self.lang}
+        return {"id": order_id, "url": f"{self.PAY}?{urlencode(q)}", "status": PENDING}
+
+    async def check(self, payment_id: str) -> str:
+        form = {"merchant_id": self.merchant_id, "order_id": payment_id}
+        if self._fetch is not None:
+            d = await self._fetch(form)
+        else:
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                    async with s.post(self.INFO, data=form, headers={"Accept": "application/json",
+                                                                     "X-Api-Key": self.api_key}) as r:
+                        d = await r.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                raise PaymentError(f"AAIO недоступен: {e}") from e
+        if d.get("type") == "error":
+            return PENDING                         # счёт ещё не открывали — заказ просто ждёт оплаты
+        st = str(d.get("status") or "")
+        return PAID if st == "success" else CANCELED if st == "expired" else PENDING
+
+
+GATEWAYS = ("crystalpay", "aaio")
+
+
+def card_provider(cfg):
+    """Провайдер способа «Картой / СБП»: ЮKassa (нужен ИП/самозанятость) или P2P-шлюз для физлиц."""
+    name = str(cfg.get("payments.card.provider") or "yookassa").lower()
+    if name == "crystalpay":
+        c = cfg.get("payments.card.crystalpay") or {}
+        return CrystalPay(c.get("login"), c.get("secret"), redirect_url=c.get("redirect_url") or "")
+    if name == "aaio":
+        a = cfg.get("payments.card.aaio") or {}
+        return Aaio(a.get("merchant_id"), a.get("secret1"), a.get("api_key"))
+    y = cfg.get("payments.card.yookassa") or {}
+    return YooKassa(y.get("shop_id"), y.get("secret_key"), return_url=y.get("return_url") or "",
+                    test=bool(y.get("test", True)), send_receipt=bool(y.get("send_receipt")),
+                    vat_code=int(y.get("vat_code") or 1), tax_system_code=int(y.get("tax_system_code") or 0))
+
+
 def build_providers(cfg, *, demo: bool) -> dict:
     gift_acc = cfg.get("payments.gift.account") or cfg.get("buyback.gifts.gift_account")
     if demo:
         wallet = TonWallet("UQ" + "D" * 46, fetch=_demo_ton_fetch)
         return {"card": DemoPay("card"), "crypto": DemoPay("crypto"), "stars": DemoPay("stars"),
                 "wallet": wallet, "gift": ManualAsset("gift", True), "skins": ManualAsset("skins", True)}
-    y = cfg.get("payments.card.yookassa") or {}
     c = cfg.get("payments.crypto.cryptopay") or {}
-    return {"card": YooKassa(y.get("shop_id"), y.get("secret_key"), return_url=y.get("return_url") or "",
-                             test=bool(y.get("test", True)), send_receipt=bool(y.get("send_receipt")),
-                             vat_code=int(y.get("vat_code") or 1), tax_system_code=int(y.get("tax_system_code") or 0)),
+    return {"card": card_provider(cfg),
             "crypto": CryptoPay(c.get("token"), testnet=bool(c.get("testnet", True))),
             "stars": TelegramStars(),
             "wallet": TonWallet(cfg.get("payments.wallet.address") or "",
