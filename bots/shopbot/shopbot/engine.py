@@ -21,6 +21,7 @@ from shopbot.loop import MoneyLoop
 from shopbot.pricing import METHODS, PRODUCT_TITLES, Quote, apply_method, referral_discount, sell_quote, shop_price
 from shopbot.rates import Rates
 from shopbot.rtba import RTBA, PRODUCT_SUPPLIER
+from shopbot.services import ServiceSupplier, delivery_text, mask, service_price, split_cost
 from shopbot.suppliers import SupplierError, build_suppliers
 
 log = logging.getLogger("shop")
@@ -70,6 +71,8 @@ class Shop:
         self.demo = demo
         self.rates = Rates(cfg, db, fetch=not demo)
         self.suppliers = build_suppliers(cfg, demo=demo)
+        self.services = ServiceSupplier(cfg, db, demo=demo, rates=self.rates)
+        self.suppliers["services"] = self.services
         self.providers = build_providers(cfg, demo=demo)
         self.rtba = RTBA(self)
         self.loop = MoneyLoop(self)
@@ -113,6 +116,8 @@ class Shop:
             return f"💎 Telegram Premium на {item} мес."
         if product == "steam_keys":
             return f"🔑 {self.cfg.get('catalog.steam_keys.title')} × {amount}"
+        if product == "service":
+            return self.services.catalog.title(item, amount)
         return PRODUCT_TITLES.get(product, product)
 
     def methods_for(self, product: str) -> list[str]:
@@ -126,6 +131,8 @@ class Shop:
 
     # ------------------------------------------------------------------ покупка
     async def quote_buy(self, user, product: str, item: str, amount: int) -> Quote:
+        if product == "service":
+            return await self._quote_service(user, item, amount)
         sup = self.suppliers[PRODUCT_SUPPLIER[product]]
         months = int(item) if product == "premium" else 0
         sup_amount = amount
@@ -146,6 +153,23 @@ class Shop:
         return Quote(product, self.product_title(product, item, amount), sup_amount, cost, price, round(disc + loyal, 2),
                      loyalty_rub=loyal, tier=tier.title if loyal else "")
 
+    async def _quote_service(self, user, item: str, amount: int) -> Quote:
+        it, v = self.services.catalog.variant(item)
+        if it is None or v is None:
+            raise ValueError("нет такого товара")
+        if not self.rtba.is_open(f"svc.{it['id']}"):
+            raise SupplierError("товар временно недоступен")
+        q = await self.services.quote_item(item, amount)
+        if not q.get("available"):
+            raise SupplierError(q.get("reason") or "товар временно недоступен")
+        cost = float(q["cost_rub"])
+        price, _ = service_price(self.cfg, it, v, cost, amount)
+        disc = referral_discount(self.cfg, user, price, cost, "service")
+        tier = E.tier_for(self.cfg, self.db, user)
+        loyal = E.loyalty_discount(self.cfg, tier, price, cost, "service", disc)
+        return Quote("service", self.product_title("service", item, amount), amount, cost, price,
+                     round(disc + loyal, 2), loyalty_rub=loyal, tier=tier.title if loyal else "")
+
     def validate_amount(self, product: str, amount: int) -> str:
         if product == "stars":
             lo, hi = int(self.cfg.get("catalog.stars.min") or 50), int(self.cfg.get("catalog.stars.max") or 20000)
@@ -158,9 +182,11 @@ class Shop:
         return ""
 
     async def create_buy(self, uid: int, product: str, item: str, amount: int, recipient: str, method: str,
-                         asset: str = "USDT") -> tuple[Any, dict]:
+                         asset: str = "USDT", *, secret: dict | None = None,
+                         consent: dict | None = None) -> tuple[Any, dict]:
         user = self.db.user(uid)
-        err = self.validate_amount(product, amount)
+        err = (self.services.catalog.validate(item, amount) if product == "service"
+               else self.validate_amount(product, amount))
         if err:
             raise ValueError(err)
         if method == "stars" and product == "stars":
@@ -186,6 +212,9 @@ class Shop:
             pay_currency=q.asset, pay_amount=q.pay_amount, rate=q.rate, breakdown=q.lines,
             supplier=PRODUCT_SUPPLIER[product], referrer_id=user["referred_by"], expires_at=time.time() + ttl,
             source=str(user["source"] or ""), loyalty_rub=q.loyalty_rub, tier=tier.id)
+        if product == "service":
+            self._service_consent(oid, item, consent)
+            self.services.save_secret(oid, secret or {})
         if method == "balance":
             await self._pay_from_balance(o)
             return self.db.order(oid), {"id": "balance", "url": ""}
@@ -210,6 +239,14 @@ class Shop:
                               "Проверьте поступление.",
                               [("✔ Получено", f"adm:asset:{oid}"), ("✋ Отклонить", f"adm:reject:{oid}")])
         return o, pay
+
+    def _service_consent(self, oid: str, item: str, consent: dict | None) -> None:
+        """Доказательство для спора: покупатель до оплаты видел, как получит товар, и нажал «Понятно»."""
+        sid, _ = self.services.catalog.split(item)
+        it = self.services.catalog.item(sid) or {}
+        c = consent or {}
+        self.db.event(oid, "terms_accepted", service=sid, notice_hash=self.services.catalog.notice_hash(sid),
+                      accepted_at=c.get("ts"), shown=bool(c), notice=str(it.get("notice") or "")[:1500])
 
     def _unique_usdt(self, amount: float) -> float:
         """USDT (TON) ищем по точной сумме: две открытые заявки не должны совпадать до цента."""
@@ -281,8 +318,11 @@ class Shop:
         sup = self.suppliers[o["supplier"]]
         months = int(o["item"]) if o["product"] == "premium" else 0
         try:
-            res = await sup.order(oid, "gift" if o["product"] == "gift" else o["product"], o["recipient"],
-                                  int(o["amount"]), months, gift=self._order_gift(o))
+            if o["product"] == "service":
+                res = await self.services.order_item(oid, oid, o["item"], o["recipient"], int(o["amount"]))
+            else:
+                res = await sup.order(oid, "gift" if o["product"] == "gift" else o["product"], o["recipient"],
+                                      int(o["amount"]), months, gift=self._order_gift(o))
         except SupplierError as e:
             self.rtba.supplier_failed(o["supplier"], str(e))
             first = not self.db.scalar("SELECT COUNT(*) FROM order_events WHERE order_id=? AND kind='supplier_retry'",
@@ -324,11 +364,62 @@ class Shop:
             else:
                 self.rtba.supplier_failed(o["supplier"], detail or "failed")
                 await self._fail(o, detail or "поставщик не смог выдать")
+        elif s == "manual" and o["status"] != "manual" and o["product"] == "service":
+            await self._service_task(o, st)
         elif s == "manual" and o["status"] != "manual":
             self.db.update_order(oid, status="manual", fail_reason=str(st.get("detail") or "ручная выдача"))
             await self.notify("WARNING", "order_manual", f"#{oid}: {o['product']} ждёт ручной выдачи → "
                                                          f"{o['recipient']}", [("✔ Выдано", f"adm:delivered:{oid}")])
             await self.tell(o["user_id"], f"🕐 Заказ <b>#{oid}</b> передан оператору, выдача обычно до 30 минут.")
+
+    async def _service_task(self, o, st: dict) -> None:
+        """Перепродажа: задача оператору — что купить, где и для кого. Данные входа — только админам в личку."""
+        oid = o["id"]
+        self.db.update_order(oid, status="manual", fail_reason=str(st.get("detail") or "ручная выдача"))
+        sid, _ = self.services.catalog.split(o["item"])
+        it = self.services.catalog.item(sid) or {}
+        who = ""
+        if it.get("kind") in ("account", "topup"):
+            sec = self.services.secret(oid)
+            who = f"\nЛогин: <code>{sec.get('login') or o['recipient']}</code>"
+            if sec.get("password"):
+                who += f"\nПароль: <tg-spoiler>{sec['password']}</tg-spoiler>"
+            if it.get("kind") == "topup":
+                who += f"\nСумма: <b>{o['amount']} ₽</b> Steam"
+        sla = int(self.cfg.get("services.resale_sla_minutes") or 120)
+        await self.notify("WARNING", "service_task",
+                          f"#{oid}: {o['product']} {self.product_title('service', o['item'], int(o['amount']))}\n"
+                          f"{st.get('detail') or ''} (себестоимость ≈ {float(st.get('cost_rub') or 0):.0f} ₽){who}\n"
+                          "Купите и пришлите код/ссылку кнопкой ниже (для подписки на аккаунт — «готово»).",
+                          [("📦 Выдать", f"adm:svc:{oid}"), ("↩️ Вернуть деньги", f"adm:svcfail:{oid}")])
+        await self.tell(o["user_id"], f"🕐 Заказ <b>#{oid}</b> принят в работу. Выдача обычно до {sla} минут — "
+                                      "пришлём сюда, как только будет готово.")
+
+    async def admin_service_deliver(self, oid: str, payload: str, who: str = "operator") -> str:
+        o = self.db.order(oid)
+        if o is None or o["product"] != "service" or o["status"] not in ("manual", "delivering"):
+            return "заказ не ждёт выдачи"
+        payload, real_cost = split_cost(payload)
+        if payload.lower() in ("готово", "done", "ok", "+"):
+            payload = ""
+        sid, _ = self.services.catalog.split(o["item"])
+        it = self.services.catalog.item(sid) or {}
+        if it.get("kind") in ("code", "vpn") and not payload:
+            return "для этого товара пришлите код/ключ"
+        if real_cost is not None:
+            self.services.record_cost(o["supplier_ref"] or oid, real_cost)
+        self.services.mark(o["supplier_ref"] or oid, "delivered", payload)
+        self.db.event(oid, "service_delivered_by", who=who, **({"cost_rub": real_cost} if real_cost else {}))
+        await self.on_delivered(oid)
+        return "выдано"
+
+    async def admin_service_fail(self, oid: str, reason: str = "не удалось купить у поставщика") -> str:
+        o = self.db.order(oid)
+        if o is None or o["product"] != "service" or o["status"] not in ("manual", "delivering", "paid"):
+            return "заказ не ждёт выдачи"
+        self.services.mark(o["supplier_ref"] or oid, "failed")
+        await self._fail(o, reason)
+        return "деньги возвращены на баланс клиента"
 
     async def set_recipient(self, oid: str, recipient: str) -> None:
         o = self.db.order(oid)
@@ -355,6 +446,8 @@ class Shop:
         self.db.update_order(oid, status="refunded", fail_reason=reason)
         paid = float(o["total_rub"])
         self.db.credit(o["user_id"], "rub", paid, "refund", oid, f"возврат: {reason}")
+        if o["product"] == "service":
+            self.services.wipe(oid)
         await self.tell(o["user_id"], f"↩️ Заказ <b>#{oid}</b> не удалось выдать ({reason}). "
                         f"<b>{paid:.2f} ₽</b> вернулись на ваш баланс магазина — оплатите ими другой заказ или "
                         "напишите в поддержку для возврата на карту/кошелёк.")
@@ -384,8 +477,35 @@ class Shop:
                 self.db.update_order(oid, ref_reward_rub=reward)
                 await self.tell(o["referrer_id"], f"🤝 Ваш друг оформил заказ — <b>+{reward:.2f} ₽</b> на бонусный "
                                 "баланс.")
+        if o["product"] == "service":
+            await self._service_delivered(o)
         await self.tell(o["user_id"], self.receipt(self.db.order(oid)))
         await self.ask_review(self.db.order(oid))
+
+    async def _service_delivered(self, o) -> None:
+        sid, _ = self.services.catalog.split(o["item"])
+        it = self.services.catalog.item(sid) or {}
+        payload = self.services.payload(o["id"])
+        job = self.db.one("SELECT source, cost_rub, expires_at, detail FROM service_jobs WHERE order_id=? "
+                          "ORDER BY updated_at DESC LIMIT 1", (o["id"],))
+        if job is not None and float(job["cost_rub"] or 0) and abs(float(job["cost_rub"]) - float(o["cost_rub"])) > 0.01:
+            cost = float(job["cost_rub"])            # фактическая себестоимость (склад FIFO) — маржа честная
+            self.db.update_order(o["id"], cost_rub=cost,
+                                 margin_rub=round(float(o["price_rub"]) - float(o["discount_rub"]) - cost, 2))
+        self.db.event(o["id"], "service_payload", source=job["source"] if job else "", payload=mask(payload))
+        self.services.wipe(o["id"])
+        exp = float(job["expires_at"] or 0) if job is not None else 0.0
+        renewed = job is not None and job["detail"] == "продление"
+        await self.tell(o["user_id"], delivery_text(it, payload, exp, renewed))
+
+    async def remind_expiring(self) -> None:
+        """За 3 дня до конца срока VPN-ключа — напоминание с кнопкой продления (один раз на ключ)."""
+        for j in self.services.expiring(3):
+            self.services.mark_reminded(j["ref"])
+            left = max(1, int((float(j["expires_at"]) - time.time()) // 86400) + 1)
+            await self.tell(j["user_id"], f"⏳ Ваш ключ VPN (заказ <b>#{j['order_id']}</b>) закончится через "
+                                          f"<b>{left} дн.</b> Продлите — ссылка в Happ останется той же.",
+                            [("🔄 Продлить", f"rn:{j['order_id']}")])
 
     # ------------------------------------------------------------------ отзывы
     async def ask_review(self, o) -> None:
@@ -428,7 +548,11 @@ class Shop:
     def receipt(self, o) -> str:
         lines = json.loads(o["breakdown"] or "[]")
         body = "\n".join(f"{a}: <b>{b}</b>" for a, b in lines)
-        to = f"\nПолучатель: <b>{'@' + o['recipient'] if o['product'] != 'steam_keys' else 'ваш Steam'}</b>"
+        to = ("\nПолучатель: <b>" + ("ваш Steam" if o["product"] == "steam_keys" else
+                                     "этот чат" if o["product"] == "service" and o["recipient"] in ("", "chat") else
+                                     "продление ключа" if o["product"] == "service" and
+                                     str(o["recipient"]).startswith("renew:") else
+                                     o["recipient"] if o["product"] == "service" else "@" + o["recipient"]) + "</b>")
         return f"🎉 <b>Заказ #{o['id']} выполнен</b>\n\n{body}{to}\n\nСпасибо! Оцените нас в канале 💬"
 
     # ------------------------------------------------------------------ опрос
@@ -456,6 +580,15 @@ class Shop:
             self.db.update_order(o["id"], status="expired")
 
     async def poll_deliveries(self) -> None:
+        await self.remind_expiring()
+        sla = float(self.cfg.get("services.resale_sla_minutes") or 120) * 60
+        for o in self.db.q("SELECT * FROM orders WHERE kind='buy' AND product='service' AND status='manual' AND "
+                           "paid_at<?", (time.time() - sla,)):
+            if not self.db.scalar("SELECT 1 FROM order_events WHERE order_id=? AND kind='sla_alert'", (o["id"],)):
+                self.db.event(o["id"], "sla_alert")
+                await self.notify("WARNING", "service_sla", f"#{o['id']}: сервис ждёт выдачи дольше "
+                                  f"{sla / 60:.0f} мин — выдайте или верните деньги",
+                                  [("📦 Выдать", f"adm:svc:{o['id']}"), ("↩️ Вернуть", f"adm:svcfail:{o['id']}")])
         for o in self.db.q("SELECT * FROM orders WHERE kind='buy' AND status IN ('delivering','paid','manual')"):
             if o["status"] == "paid":
                 retries = int(self.db.scalar("SELECT COUNT(*) FROM order_events WHERE order_id=? AND "
