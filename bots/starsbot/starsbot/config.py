@@ -212,6 +212,8 @@ DEFAULTS: dict[str, Any] = {
         "hide_lots_when_down": True,     # скрывать лоты, пока сессия Fragment истекла или нет KYC
         "cookies_set_at": 0,             # когда вставлены cookies (ставится автоматически)
         "session_warn_days": 14,         # напомнить обновить cookies заранее, после стольких дней (0 — не напоминать)
+        "keepalive_minutes": 30,         # проверять сессию и в простое (скрыть лоты до оплаты, продлить сессию); 0 — выкл.
+        "cookies_refreshed_at": 0,       # когда Fragment сам продлил cookie (ставится автоматически)
     },
     "ton": {
         "mnemonic": "", "address": "", "version": "v5r1",   # Tonkeeper по умолчанию создаёт W5 (v5r1)

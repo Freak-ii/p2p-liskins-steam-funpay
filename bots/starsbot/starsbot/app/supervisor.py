@@ -210,6 +210,21 @@ class Supervisor:
             else:
                 self._build()
 
+    def save_rotated_fragment_cookies(self, header: str) -> None:
+        """Fragment продлил сессию: пишем новые cookie в config.yaml без перезапуска бота.
+        cookies_set_at не трогаем (это «вставлены вручную»), возраст считается от cookies_refreshed_at."""
+        if not header or header == str((self.raw.get("fragment") or {}).get("cookies") or "").strip():
+            return
+        raw = copy.deepcopy(self.raw)
+        raw.setdefault("fragment", {})
+        raw["fragment"]["cookies"] = header
+        raw["fragment"]["cookies_refreshed_at"] = int(time.time())
+        tmp = self.config_path.with_suffix(".tmp")
+        tmp.write_text("# Настройки StarsBot (редактируются в приложении)\n" +
+                       yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        tmp.replace(self.config_path)
+        self.raw = raw
+
     def secret_is_set(self, section: str, key: str) -> bool:
         node: Any = self.cfg
         for part in section.split("."):
@@ -256,6 +271,7 @@ class Supervisor:
             fragment = FragmentClient(cfg.fragment.cookies, wallet,
                                       user_agent=cfg.fragment.get("user_agent") or cfg.funpay.user_agent,
                                       dry_run=cfg.general.dry_run, min_interval=cfg.fragment.min_interval)
+            fragment.on_cookies = self.save_rotated_fragment_cookies
             rates = RateProvider(cfg.rates, self.db)
         self.coord = coord
         if shop:

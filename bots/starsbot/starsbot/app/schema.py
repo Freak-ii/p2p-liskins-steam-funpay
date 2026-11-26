@@ -76,6 +76,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("user_agent", "User-Agent браузера с cookie", "str", "Если Fragment отвечает «Access denied»: откройте в том же браузере whatsmyua.info и вставьте строку User-Agent. Пусто — как у FunPay"),
         ("session_warn_days", "Напомнить обновить cookies через, дней", "int", "Сессия Fragment живёт 2–4 недели; 0 — не напоминать"),
         ("session_check_minutes", "Проверять сессию перед заказом, если прошло больше, мин", "int", ""),
+        ("keepalive_minutes", "Проверять сессию в простое, раз в мин", "int", "Истёкшая сессия скроет лоты до оплаты, а не после; новые cookie от Fragment сохраняются сами. 0 — выкл."),
         ("hide_lots_when_down", "Скрывать лоты, пока сессия истекла или нет KYC", "bool", ""),
         ("max_ton_per_star", "Не покупать дороже, TON за звезду", "float", "0 — без ограничения"),
         ("max_cost_share_pct", "Не покупать, если себестоимость больше, % суммы заказа", "float", "Защита от продажи в убыток"),
