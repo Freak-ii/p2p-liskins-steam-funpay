@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from center.analytics import Analytics
+from center.economy import Economy
 from center.backup import Backup
 from center.inventory import Inventory
 from center.readiness import Readiness
@@ -21,10 +22,12 @@ from center.crm import Crm
 from center.coordinator import Coordinator
 from center.agents import Agents
 from center.events import EventStore
+from center.orbit import Orbit
 from center.vault import SecretStore
 from center.rtba import Rtba
 from center.steamshare import SteamShare
 from center.monitor import Monitor
+from center.rollout import Rollout
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
 
 log = logging.getLogger("center")
@@ -56,8 +59,9 @@ class Center:
         self.workers["tggift"] = TgGiftWorker(self.home / "tggift", self.events, port=wg.get("port", 8805),
                                               restart=restart, executable=wg.get("python") or "", demo=demo,
                                               vault=self.vault)
-        for w in self.workers.values():             # адрес и токен реестра обменов (center/steamshare.py)
-            w.extra_env = self.steamshare.bot_env
+        self.orbit = Orbit(self)                    # Пульт Орбиты: какие позиции сняты с продажи (shared/orbit.json)
+        for name, w in self.workers.items():        # адрес и токен реестра обменов (center/steamshare.py) + путь Орбиты
+            w.extra_env = (lambda n=name: {**self.steamshare.bot_env(), **self.orbit.bot_env(n)})
         if demo:                                    # история сделок LisBot за месяц; дальше он торгует на эмуляции LIS/Steam
             from center.demo import seed_lisbot
             seed_lisbot(self.workers["lisbot"].data_dir)
@@ -67,6 +71,7 @@ class Center:
         self._poll_task: asyncio.Task | None = None
         self.started_at = time.time()
         self.analytics = Analytics(self)
+        self.economy = Economy(self.cfg.home, self.cfg.data.get("economy") or {})   # раздел «Экономика», только чтение
         self.crm = Crm(self)
         self.rtba = Rtba(self)
         self.monitor = Monitor(self)       # до записи «Центр запущен»: проверяет, не выключался ли центр аварийно
@@ -79,6 +84,7 @@ class Center:
         self.readiness = Readiness(self)
         self.tg = TelegramControl(self)
         self.updates = Updates(self)
+        self.rollout = Rollout(self)          # Орбита: обновление ботов на ходу (серверный режим)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))
@@ -88,6 +94,7 @@ class Center:
         await self.monitor.start()
         await self.coordinator.start()
         await self.agents.start()
+        await self.orbit.start()
         await self.backup.start()
         await self.inventory.start()
         await self.tg.start()
@@ -102,13 +109,27 @@ class Center:
                 continue
             if self.cfg.autostart(name):
                 await w.start("автозапуск центра")
+            elif w.detached and await self._still_running(w):
+                # серверный режим: бот продолжил работать, пока центр перезапускался на новой версии, —
+                # это не автозапуск, а подхват уже запущенного процесса (новый экземпляр не создаётся)
+                await w.start("подхват после перезапуска центра")
             elif not w.detail:
                 w._set(w.state, "не запущен: запустите кнопкой «Запустить»")
         self._poll_task = asyncio.create_task(self._poll_loop(), name="center-poll")
+        await self.rollout.start()
+
+    @staticmethod
+    async def _still_running(w) -> bool:
+        try:
+            return await w.find_running() is not None
+        except Exception:  # noqa: BLE001
+            return False
 
     async def shutdown(self, stop_timeout: float = 15) -> None:
         if self._poll_task:
             self._poll_task.cancel()
+        if self.rollout.task and not self.rollout.task.done():
+            self.rollout.task.cancel()
         await asyncio.gather(*(w.stop("завершение центра", timeout=stop_timeout) for w in self.workers.values()),
                              return_exceptions=True)
         await self.backup.stop()
@@ -116,9 +137,11 @@ class Center:
         await self.tg.stop()
         await self.updates.stop()
         await self.agents.stop()
+        await self.orbit.stop()
         await self.coordinator.stop()
         await self.monitor.stop()
-        self.events.add("center", "info", "center.stop", "Центр остановлен")
+        self.events.add("center", "info", "center.stop", "Центр перезапускается на новой версии (боты работают)"
+                        if self.rollout.handover else "Центр остановлен")
         self.events.close()
         self.steamshare.close()
 
@@ -144,7 +167,8 @@ class Center:
 
     # ------------------------------------------------------------------ удалённые команды файлом
     REMOTE_HELP = ("команды: status | <бот> start|stop|restart|autostart_on|autostart_off | "
-                   "<бот> bot_start|bot_stop|pause|resume (действия панели бота); боты: lisbot, mannbot, starsbot")
+                   "<бот> bot_start|bot_stop|pause|resume (действия панели бота); боты: lisbot, mannbot, starsbot | "
+                   "orbit status | orbit close <позиция> [канал] [причина] | orbit open <позиция> [канал]")
 
     async def remote_command(self, line: str) -> str:
         parts = line.split()
@@ -158,6 +182,8 @@ class Center:
                             f"{' · торговля ' + str(sm.get('bot_state')) if sm.get('bot_state') else ''}"
                             f" · автозапуск {'вкл' if self.cfg.autostart(name) else 'выкл'}")
             return "\n".join(rows)
+        if parts[0].lower() in ("orbit", "орбита"):
+            return await self.orbit.command(parts[1:], by="remote_cmd.txt")
         name, action = parts[0].lower(), (parts[1].lower() if len(parts) > 1 else "")
         w = self.workers.get(name)
         if w is None:

@@ -396,6 +396,8 @@ class OzonChannel:
             if not p.get("offer_id"):
                 continue
             amount = max(0, min(int(free_ton / (int(p["stars"]) * per_star * 1.03)), int(self.c.max_stock or 0)))
+            if self.engine.orbit_closed("ozon:stars"):
+                amount = 0                       # позиция снята с орбиты в Центре
             if self.db.kv_get(f"ozon_stock:{p['offer_id']}") != amount:
                 stocks[str(p["offer_id"])] = amount
         if not stocks:

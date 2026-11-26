@@ -21,7 +21,7 @@ import yaml
 
 from center.config import BOTS_DIR
 from center.vault import SecretStore, SecretStoreError
-from center.workers import CRASHED, MISSING_DEPS, NOT_CONFIGURED, STOPPED, Worker
+from center.workers import CRASHED, MISSING_DEPS, NOT_CONFIGURED, STOPPED, Worker, pid_by_port
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=8)
 
@@ -32,6 +32,27 @@ def _read_only(path: Path) -> sqlite3.Connection | None:
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
     con.row_factory = sqlite3.Row
     return con
+
+
+class BotSrc:
+    """Папка исходников бота внутри релиза воркера (worker.code_root/bots/<бот>).
+    У класса — папка текущего кода центра (как раньше BOTS_DIR / "<бот>")."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __get__(self, obj, owner=None) -> Path:
+        if obj is None:
+            return BOTS_DIR / self.name
+        return Path(obj.code_root) / "bots" / self.name
+
+
+def release_python(root: Path) -> str:
+    """Python релиза на сервере (releases/<имя>/.venv), иначе Python самого центра."""
+    for cand in (Path(root) / ".venv" / "bin" / "python", Path(root) / ".venv" / "Scripts" / "python.exe"):
+        if cand.exists():
+            return str(cand)
+    return sys.executable
 
 
 class BotWorker(Worker):
@@ -99,6 +120,8 @@ class BotWorker(Worker):
                 pid = await self.identify(f"http://127.0.0.1:{port}")
             except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
                 pid = None
+            if pid == 0 and self.detached:
+                pid = pid_by_port(port)          # бот не сообщает pid: узнать по слушающему порту (Linux)
             if pid is not None:
                 if port != self.port:
                     BotWorker.reserved_ports.add(port)
@@ -183,7 +206,7 @@ class MannBotWorker(BotWorker):
 
     name = "mannbot"
     title = "MannBot · FunPay"
-    src = BOTS_DIR / "mannbot"
+    src = BotSrc("mannbot")
     actions = {"bot_start": "Запустить торговлю", "bot_stop": "Остановить торговлю",
                "pause": "Пауза", "resume": "Продолжить"}
 
@@ -201,7 +224,7 @@ class MannBotWorker(BotWorker):
         return None
 
     def command(self) -> list[str]:
-        py = self.executable or sys.executable
+        py = self.executable or release_python(self.code_root)
         if Path(py).name.lower() == "pythonw.exe":            # центр в трее работает без консоли, бот — с выводом
             py = str(Path(py).with_name("python.exe"))
         cmd = [py, "-m", "mannbot.app.launcher", "--home", str(self.home), "--host", self.bind_host,
@@ -421,7 +444,7 @@ class StarsBotWorker(MannBotWorker):
 
     name = "starsbot"
     title = "StarsBot · Telegram Stars"
-    src = BOTS_DIR / "starsbot"
+    src = BotSrc("starsbot")
     package = "starsbot"
     cookie = "sb_token"
     extra_modules = ("pytoniq_core", "nacl")
@@ -534,7 +557,7 @@ class ShopBotWorker(BotWorker):
 
     name = "shopbot"
     title = "ShopBot · Telegram-магазин"
-    src = BOTS_DIR / "shopbot"
+    src = BotSrc("shopbot")
     cookie = "shop_token"
 
     def __init__(self, *a, demo: bool = False, **kw):
@@ -555,7 +578,7 @@ class ShopBotWorker(BotWorker):
         return None
 
     def command(self) -> list[str]:
-        py = self.executable or sys.executable
+        py = self.executable or release_python(self.code_root)
         if Path(py).name.lower() == "pythonw.exe":
             py = str(Path(py).with_name("python.exe"))
         cmd = [py, "-m", "shopbot", "--home", str(self.home), "--host", self.bind_host, "--port", str(self.port),
@@ -727,7 +750,7 @@ class LisBotWorker(BotWorker):
 
     name = "lisbot"
     title = "LisBot · LIS-SKINS → Steam"
-    src = BOTS_DIR / "lisbot"
+    src = BotSrc("lisbot")
     actions = {"pause": "Пауза", "resume": "Продолжить / снять остановку", "buyPause": "Пауза закупки",
                "buyResume": "Возобновить закупку", "halt": "Аварийная остановка"}
 

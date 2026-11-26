@@ -18,11 +18,14 @@ from center import steamcheck, tgcheck
 from center.backup import routes as backup_routes
 from center.coordinator import routes as coordinator_routes
 from center.agents.web import routes as agents_routes
+from center.economy import routes as economy_routes
 from center.inventory import routes as inventory_routes
 from center.readiness import routes as readiness_routes
 from center.updates import routes as update_routes
 from center.monitor import routes as monitor_routes
 from center.steamshare import routes as steamshare_routes
+from center.rollout import routes as rollout_routes
+from center.orbit import routes as orbit_routes
 
 STATIC = Path(__file__).resolve().parent / "static"
 COOKIE = "center_token"
@@ -365,11 +368,14 @@ def make_app(center: Center) -> web.Application:
     app.add_routes(monitor_routes(center))
     app.add_routes(coordinator_routes(center))
     app.add_routes(agents_routes(center))
+    app.add_routes(economy_routes(center))
     app.add_routes(backup_routes(center))
     app.add_routes(inventory_routes(center))
     app.add_routes(readiness_routes(center))
     app.add_routes(update_routes(center))
     app.add_routes(steamshare_routes(center))
+    app.add_routes(rollout_routes(center, web))
+    app.add_routes(orbit_routes(center))
     app.router.add_static("/static/", STATIC)
     return app
 

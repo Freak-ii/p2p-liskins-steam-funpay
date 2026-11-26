@@ -26,8 +26,10 @@ PAGE = Path(__file__).parent / "web" / "miniapp" / "index.html"
 TUNNEL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
 
-def page_query(cfg, bot_username: str) -> str:
+def page_query(cfg, bot_username: str, hidden: set[str] | frozenset = frozenset()) -> str:
     q = {"bot": bot_username}
+    if hidden:                                # товары, снятые в Пульте Орбиты: плиток в мини-приложении нет
+        q["hide"] = ",".join(sorted(hidden))
     name = str(cfg.get("general.shop_name") or "")
     if name:
         q["name"] = name
@@ -76,7 +78,13 @@ class MiniApp:
     def _full(self, base: str) -> str:
         base = base.rstrip("/") + "/"
         user = self.bot.bot_username if self.bot is not None else "your_shop_bot"
-        return f"{base}?{page_query(self.cfg, user)}"
+        orbit = getattr(self.shop, "orbit", None)
+        return f"{base}?{page_query(self.cfg, user, orbit.menu_hidden() if orbit is not None else frozenset())}"
+
+    async def refresh(self) -> None:
+        """Адрес мини-приложения с новым списком скрытых товаров (кнопка меню бота)."""
+        if self.url:
+            await self._apply(self.url.split("?", 1)[0], self.mode)
 
     async def _apply(self, base: str, mode: str) -> None:
         self.url, self.mode = self._full(base), mode

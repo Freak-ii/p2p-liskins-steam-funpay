@@ -58,7 +58,7 @@ export function startDashboard({ cfg, db, guard, bot, log }) {
   };
 
   const routes = {
-    'GET /api/summary': () => ({ ...summary(db, { tz: cfg.timezone, fx: bot.fx?.rate }), guard: guard.state, dryRun: cfg.dryRun, demo: !!bot.emu, runtime: bot.runtimeStats(), currency: cfg.steam.walletCurrencyCode }),
+    'GET /api/summary': () => ({ ...summary(db, { tz: cfg.timezone, fx: bot.fx?.rate }), guard: { ...guard.state, orbitBlocked: guard.orbitBlocked }, dryRun: cfg.dryRun, demo: !!bot.emu, runtime: bot.runtimeStats(), currency: cfg.steam.walletCurrencyCode }),
     'GET /api/daily': (u) => daily(db, { tz: cfg.timezone, days: Number(u.searchParams.get('days')) || 30 }),
     'GET /api/per-item': () => perItem(db),
     'GET /api/items': (u) => {

@@ -55,7 +55,7 @@
     <div class="logo">⚡</div>
     <div>
       <h1 id="name">DPB Fastchange</h1>
-      <p>Звёзды, подарки, Premium и Steam с автовыдачей</p>
+      <p id="tagline">Звёзды, подарки, Premium и Steam с автовыдачей</p>
     </div>
   </div>
 
@@ -84,6 +84,19 @@
   const BOT = clean(q.get("bot"), "DPBFastchange_bot");
   const CHANNEL = clean(q.get("channel"), "DPBFastchange");
   if (q.get("name")) document.getElementById("name").textContent = q.get("name").slice(0, 40);
+  // товары, снятые в Пульте Орбиты центра, — без плиток
+  (q.get("hide") || "").split(",").filter(Boolean).forEach(p => {
+    const t = document.querySelector('.tile[data-start="' + p.replace(/[^a-z_]/g, "") + '"]');
+    if (t) t.remove();
+  });
+  if (q.get("hide")) {
+    const names = {stars: "звёзды", gift: "подарки", premium: "Premium", steam_keys: "Steam"};
+    const left = [...document.querySelectorAll(".tile[data-start]")].map(t => names[t.dataset.start]).filter(Boolean);
+    if (left.length) {
+      const s = left.length === 1 ? left[0] : left.slice(0, -1).join(", ") + " и " + left[left.length - 1];
+      document.getElementById("tagline").textContent = s[0].toUpperCase() + s.slice(1) + " с автовыдачей";
+    }
+  }
   const tg = window.Telegram && window.Telegram.WebApp;
   if (tg) { tg.ready(); tg.expand(); }
 

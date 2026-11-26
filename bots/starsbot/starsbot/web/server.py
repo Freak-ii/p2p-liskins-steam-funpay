@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import csv
 import io
 import datetime as dt
@@ -222,7 +223,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         raise resp
 
     async def ping(request: web.Request):
-        return web.json_response({"app": "starsbot", "profile": "giftshop" if shop else "stars", "ok": True})
+        return web.json_response({"app": "starsbot", "profile": "giftshop" if shop else "stars", "ok": True,
+                                  "pid": os.getpid()})
 
     def back(request: web.Request, msg: str, default: str = "/") -> web.HTTPFound:
         ref = request.headers.get("Referer")
@@ -274,7 +276,11 @@ def make_app(sup, log_handler=None) -> web.Application:
         if not o:
             raise web.HTTPNotFound()
         flow = sup.econ.order_flow(o) if o["ton_amount"] else None
-        return render("order.html", request, o=o, events=db.events(oid), flow=flow,
+        from starsbot.evidence import tonviewer_tx
+        ev_dir = sup.engine.evidence_folder()
+        packs = sorted(ev_dir.glob(f"evidence_*{oid}*.zip"), reverse=True)[:5] if ev_dir.exists() else []
+        return render("order.html", request, o=o, events=db.events(oid), flow=flow, tx_link=tonviewer_tx(o["tx_hash"]),
+                      packs=[p.name for p in packs],
                       msgs=db.q("SELECT * FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 80", (o["chat_id"],)),
                       purchases=db.q("SELECT * FROM purchases WHERE order_id=? ORDER BY id", (oid,)),
                       customer=db.customer(o["buyer_id"]) if o["channel"] not in ("ozon", "ggsel") else None,
@@ -287,7 +293,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         oid = request.match_info["oid"]
         data = await request.post()
         act = str(data.get("action", ""))
-        needs_bot = act in ("approve", "set_username", "refund", "delivered", "message")
+        needs_bot = act in ("approve", "set_username", "refund", "delivered", "message", "evidence_post")
         if needs_bot and sup.state != "running" and not sup.status()["demo"]:
             raise web.HTTPFound(URL(f"/orders/{oid}").with_query(msg="Сначала запустите бота"))
         if act in ("refund", "delivered") and request[ROLE] != "admin" and not sup.cfg.dashboard.get(
@@ -305,6 +311,11 @@ def make_app(sup, log_handler=None) -> web.Application:
             msg = await engine.admin_mark_delivered(oid)
         elif act == "message" and str(data.get("text", "")).strip():
             msg = await engine.admin_message(oid, str(data["text"])[:1500])
+        elif act == "evidence_pack":
+            msg = "пакет готов: " + Path(engine.support_pack([db.get_order(oid)])).name
+        elif act == "evidence_post":
+            msg = "доказательства отправлены в чат" if await engine.post_evidence(oid, force=True) else \
+                "заказ ещё не выдан — доказательств выдачи нет"
         elif act == "note":
             db.update_order(oid, notes=str(data.get("text", ""))[:2000])
             msg = "заметка сохранена"
@@ -1236,6 +1247,22 @@ def make_app(sup, log_handler=None) -> web.Application:
         return web.Response(body=p.read_bytes(), content_type="text/plain", charset="utf-8",
                             headers={"Content-Disposition": f'attachment; filename="{p.name}"'})
 
+    async def evidence_download(request: web.Request):
+        need(request, "admin")
+        name = Path(request.match_info["name"]).name
+        p = sup.engine.evidence_folder() / name
+        if not (name.startswith("evidence_") and name.endswith(".zip") and p.exists()):
+            raise web.HTTPNotFound(text="файл не найден")
+        return web.Response(body=p.read_bytes(), content_type="application/zip",
+                            headers={"Content-Disposition": f'attachment; filename="{p.name}"'})
+
+    async def api_evidence(request: web.Request):
+        need(request, "admin")
+        o = sup.db.get_order(request.match_info["oid"])
+        if o is None:
+            raise web.HTTPNotFound()
+        return web.json_response(sup.engine.evidence(o), dumps=lambda d: json.dumps(d, ensure_ascii=False, default=str))
+
     # ------------------------------------------------------------------ Казначейство
     async def treasury_page(request: web.Request):
         tr = sup.engine.treasury
@@ -1492,7 +1519,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         web.get("/gifts", gifts_page), web.post("/gifts", gifts_action),
         web.get("/premium", premium_page), web.post("/premium", premium_action),
         web.get("/funpay", funpay_page), web.post("/funpay", funpay_action),
-        web.get("/support/{name}", support_download),
+        web.get("/support/{name}", support_download), web.get("/evidence/{name}", evidence_download),
+        web.get("/api/orders/{oid}/evidence", api_evidence),
         web.get("/crypto", crypto_page), web.post("/crypto", crypto_action),
         web.post("/api/wallet/addresses", api_wallet_addresses),
         *extra_routes,

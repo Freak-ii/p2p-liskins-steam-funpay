@@ -58,6 +58,9 @@ class MoneyLoop:
         if method == "skins":
             return "Steam магазина", "продать на Market.CSGO (LisBot) → USDT → хаб", "to_convert", now
         if method == "card":
+            prov = str(self.cfg.get("payments.card.provider") or "yookassa")
+            if prov != "yookassa":
+                return f"баланс шлюза {prov}", "вывод шлюза в USDT (TRC20/TON) → Bybit → хаб TON", "to_sweep", now
             return "банк (эквайринг)", "P2P USDT → Bybit → хаб TON", "to_convert", now
         return "баланс клиента", "уже учтено", "internal", now
 

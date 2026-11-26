@@ -59,6 +59,8 @@ async def quote(engine, sup_state: str, product: str, amount: int) -> dict:
         return {"available": False, "reason": "MannBot не запущен"}
     if engine.paused:
         return {"available": False, "reason": "MannBot на паузе"}
+    if engine.orbit_closed(f"supply:{product}"):
+        return {"available": False, "reason": "снято с продажи в Пульте Орбиты", "orbit": True}
     amount = max(1, int(amount or 1))
     if amount > int(engine.cfg.steam.max_keys_per_offer):
         return {"available": False, "reason": f"не больше {engine.cfg.steam.max_keys_per_offer} ключей за раз"}

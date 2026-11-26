@@ -247,6 +247,102 @@ def make_app(app_state) -> web.Application:
         st.db.audit(request["role"], "loop_done", str(f.get("id")), res)
         raise back(request, res)
 
+    async def services_page(request):
+        svc = st.shop.services
+        tasks = []
+        for j in st.db.q("SELECT j.*, o.item, o.amount FROM service_jobs j JOIN orders o ON o.id=j.order_id "
+                         "WHERE j.status='manual' AND o.status='manual' ORDER BY j.created_at"):
+            tasks.append({**dict(j), "title": st.shop.product_title("service", j["item"], int(j["amount"]))})
+        skus = sorted({svc.catalog.sku(f"{it['id']}:{v['id']}") for it in svc.catalog.items()
+                       if "stock" in (it.get("sources") or []) for v in it.get("variants") or []})
+        points = {p["key"]: p["state"] for p in st.shop.rtba.points()}
+        return render("services.html", request, econ=svc.economics(), stock=svc.stock_summary(), skus=skus,
+                      tasks=tasks, points=points, family=svc.family.summary(),
+                      fam_cfg=st.cfg.get("services.family") or {})
+
+    async def services_action(request):
+        f = await request.post()
+        action, svc = str(f.get("action") or ""), st.shop.services
+        if action == "stock":
+            codes = [c for c in str(f.get("codes") or "").splitlines() if c.strip()]
+            try:
+                cost = float(str(f.get("cost_rub") or "0").replace(",", "."))
+            except ValueError:
+                raise back(request, "себестоимость — число")
+            n = svc.stock.add(str(f.get("sku") or ""), codes, cost, str(f.get("note") or ""))
+            res = f"добавлено {n} из {len(codes)} (дубли пропущены)"
+            st.db.audit(request["role"], "stock_add", str(f.get("sku")), res)
+        elif action == "deliver":
+            res = await st.shop.admin_service_deliver(str(f.get("order") or ""), str(f.get("payload") or ""),
+                                                      who=f"panel:{request['role']}")
+            st.db.audit(request["role"], "svc_deliver", str(f.get("order")), res)
+        elif action == "fail":
+            res = await st.shop.admin_service_fail(str(f.get("order") or ""))
+            st.db.audit(request["role"], "svc_fail", str(f.get("order")), res)
+        elif action.startswith("fam_"):
+            res = await family_action(action, f)
+            st.db.audit(request["role"], action, str(f.get("account") or f.get("seat") or f.get("order") or ""), res)
+        else:
+            res = "?"
+        raise back(request, res)
+
+    def _num(f, key: str, default: float = 0.0) -> float:
+        try:
+            return float(str(f.get(key) or default).replace(",", ".").replace(" ", ""))
+        except ValueError:
+            return default
+
+    def _date(text: str) -> float:
+        """«31.12.2026» или «2026-12-31» → конец этого дня (локальное время)."""
+        text = str(text or "").strip()
+        for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+            try:
+                return time.mktime(time.strptime(text, fmt)) + 86399
+            except ValueError:
+                continue
+        return 0.0
+
+    async def family_action(action: str, f) -> str:
+        fam = st.shop.services.family
+        aid = int(_num(f, "account"))
+        if action == "fam_add":
+            paid = _date(f.get("paid_until")) or (time.time() + _num(f, "months", 12) * 30 * 86400
+                                                 if _num(f, "cost_rub") else 0)
+            new = fam.add_account(str(f.get("label") or "семья"), login=str(f.get("login") or ""),
+                                  seats=int(_num(f, "seats", 3)), paid_until=paid, cost_rub=_num(f, "cost_rub"),
+                                  period_months=_num(f, "months", 12), note=str(f.get("note") or ""))
+            return f"аккаунт #{new} добавлен"
+        if fam.account(aid) is None and action in ("fam_extend", "fam_status", "fam_invites", "fam_ban"):
+            return "нет такого аккаунта"
+        if action == "fam_extend":
+            fam.extend(aid, _num(f, "months", 12), _num(f, "cost_rub"))
+            return "срок Плюса продлён"
+        if action == "fam_status":
+            status = str(f.get("status") or "active")
+            if status == "banned":
+                return await st.shop.admin_family_ban(aid)
+            fam.update_account(aid, status=status if status in ("active", "paused", "retired") else "paused",
+                               risk=int(_num(f, "risk")))
+            return "сохранено"
+        if action == "fam_invites":
+            links = [x for x in str(f.get("links") or "").split() if x.strip()]
+            return f"добавлено ссылок: {fam.add_invites(aid, links)}"
+        if action == "fam_removed":
+            return await st.shop.admin_family_removed(int(_num(f, "seat")))
+        if action == "fam_link":
+            return await st.shop.admin_family_link(str(f.get("order") or ""), str(f.get("link") or ""),
+                                                   who="panel")
+        return "?"
+
+    async def api_services(request):
+        svc = st.shop.services
+        from shopbot.services import SPEND_ROUTE
+        return web.json_response({"economics": svc.economics(), "stock": svc.stock_summary(), "spend": SPEND_ROUTE,
+                                  "family": svc.family.summary(),
+                                  "pending": [dict(r) for r in st.db.q(
+                                      "SELECT ref, order_id, sku, source, status, detail, cost_rub, created_at "
+                                      "FROM service_jobs WHERE status='manual' ORDER BY created_at")]})
+
     async def customers(request):
         q = request.query.get("q", "")
         sql = "SELECT * FROM users"
@@ -398,6 +494,8 @@ def make_app(app_state) -> web.Application:
         web.get("/api/economy", api_economy), web.get("/", dashboard), web.get("/orders", orders),
         web.get("/orders/{oid}", order), web.post("/orders/{oid}", order_action), web.get("/customers", customers),
         web.get("/loop", loop_page), web.post("/loop", loop_action),
+        web.get("/services", services_page), web.post("/services", services_action),
+        web.get("/api/services", api_services),
         web.get(r"/customers/{uid:\d+}", customer), web.post(r"/customers/{uid:\d+}", customer_action),
         web.get("/rtba", rtba_page), web.post("/rtba", rtba_action), web.get("/channel", channel_page),
         web.post("/channel", channel_action), web.get("/settings", settings), web.post("/settings", settings),

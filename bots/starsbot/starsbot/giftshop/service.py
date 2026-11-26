@@ -351,11 +351,14 @@ class ShopGiftService(GiftService):
                                               "account": self.account.get("username") or "", "ts": time.time()})
 
     # ------------------------------------------------------------------ наличие лотов
-    async def _set_amount(self, lot: dict, amount: int, event: str) -> None:
+    async def _set_amount(self, lot: dict, amount: int, event: str, orbit_key: str = "") -> None:
+        off = bool(orbit_key) and self.engine.orbit_closed(orbit_key)
+        if off:
+            amount = 0
         key = f"shop_lot_amount:{lot['offer_id']}"
         if self.db.kv_get(key) == amount:
             return
-        active = amount > 0 or not self.gcfg.get("deactivate_when_empty", True)
+        active = not off and (amount > 0 or not self.gcfg.get("deactivate_when_empty", True))
         try:
             await self.engine.fp.update_lot(int(lot["offer_id"]), self.node_of(lot),
                                             amount=max(amount, 1 if active else 0), active=active)
@@ -376,22 +379,23 @@ class ShopGiftService(GiftService):
                 cost = self.topup_cost_for(int(lot["stars"]))
                 ok = bool(lot.get("sell", True))
                 await self._set_amount(lot, max(0, min(free // cost if cost else 0, cap)) if ok else 0,
-                                       "topup_lot_stock")
+                                       "topup_lot_stock", "topup")
         for lot in self.nft_lots:
             if lot.get("offer_id"):
                 await self._set_amount(lot, self.nft.stock_amount(lot) if self.nft is not None else 0,
-                                       "nft_lot_stock")
+                                       "nft_lot_stock", "nft")
         node = int(self.cfg.funpay.node_id)
         for lot in self.lots:
             if not lot.get("offer_id"):
                 continue
             stars = int(lot["stars"])
-            ok = bool(lot.get("sell", True)) and self.available(lot)
+            off = self.engine.orbit_closed("gifts")
+            ok = bool(lot.get("sell", True)) and self.available(lot) and not off
             amount = max(0, min(free // stars if stars else 0, int(g.get("max_display_amount") or 200))) if ok else 0
             key = f"shop_lot_amount:{lot['offer_id']}"
             if self.db.kv_get(key) == amount:
                 continue
-            active = amount > 0 or not g.get("deactivate_when_empty", True)
+            active = not off and (amount > 0 or not g.get("deactivate_when_empty", True))
             try:
                 await self.engine.fp.update_lot(int(lot["offer_id"]), node, amount=max(amount, 1 if active else 0),
                                                 active=active)

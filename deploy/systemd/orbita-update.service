@@ -1,0 +1,11 @@
+# Орбита: проверка новой версии в ветке и обновление на ходу (запускается таймером)
+[Unit]
+Description=Orbita — auto update from git
+After=network-online.target orbita-center.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/orbita/orbita.env
+ExecStart=/usr/local/bin/orbita auto
+TimeoutStartSec=1800
+Nice=10

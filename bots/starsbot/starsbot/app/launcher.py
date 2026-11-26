@@ -22,6 +22,7 @@ DEMO_OVERRIDES = {
     "funpay": {"lots": [{"stars": n, "offer_id": i + 1} for i, n in enumerate((50, 75, 100, 150, 250, 350, 500))],
                "game_id": 1},
     "risk": {"large_order_stars": 1500, "manual_review_score": 40},
+    "deal": {"confirm_username": "off"},       # демо-покупатели не отвечают «Да» — подтверждение проверяют тесты
     "rtba": {"enabled": True, "competitor_min_amount": 2, "min_margin_pct": 8},
     "notifications": {"telegram": {"enabled": False}},
     "premium": {"enabled": True, "pilot_orders": 0, "price_mode": "rtba", "target_position": 2,
@@ -129,6 +130,7 @@ async def run_app(home: Path, *, host: str, port: int, open_browser: bool, demo:
         await run_treasury_demo(sup)
         log.info("Демо-сценарий выполнен: заказы FunPay, Ozon, GGSEL, Авито и Wildberries в CRM")
     runner = await start_web(sup, host, port, mem)
+    sup.start_orbit_watch()
     from starsbot.app.watchdog import LoopWatchdog
     loop_ = asyncio.get_running_loop()
     _quiet_windows_resets(loop_)

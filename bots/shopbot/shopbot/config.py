@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+from shopbot.services_catalog import ITEMS as SERVICE_ITEMS
+
 DEFAULTS: dict[str, Any] = {
     "general": {
         "shop_name": "Stars Market",
@@ -64,6 +66,11 @@ DEFAULTS: dict[str, Any] = {
         "steam_keys": {"enabled": True, "margin_pct": 6, "min_margin_pct": 2, "max_qty": 50,
                        "title": "Ключ Mann Co. (TF2)",
                        "steam_value_usd": 1.87},   # ≈ сколько ключ даёт на балансе Steam после продажи на ТП (оценка)
+        # Сервисы (shopbot/services.py): VPN, карты App Store США, Claude/ChatGPT через карту, Spotify, Steam.
+        # prefer_auto_within_pct — склад/своя панель берутся, даже если дороже перепродажи не больше чем на N %;
+        # max_over_market_pct — вариант закрывается RTBA, если наша цена дороже рынка (market_ref_rub) на N %.
+        "services": {"enabled": True, "margin_pct": 12, "min_margin_pct": 4, "prefer_auto_within_pct": 5,
+                     "stock_low": 3, "max_over_market_pct": 5, "items": SERVICE_ITEMS},
     },
     # ---------------------------------------------------------------- выкуп у клиентов
     "buyback": {
@@ -87,7 +94,11 @@ DEFAULTS: dict[str, Any] = {
         "order_ttl_minutes": 30,
         # Карта — заготовка под эквайринг (ЮKassa сейчас; другой провайдер — новым классом в payments).
         # Выключена, пока нет договора: в меню клиента не показывается.
+        # provider: yookassa (ИП/самозанятость) | crystalpay | aaio (P2P-шлюзы для физлиц: KYC по паспорту,
+        # комиссия 5–12 % — fee_pct ставьте по тарифу из кабинета шлюза + ~1 % на вывод USDT; см. README).
         "card": {"enabled": False, "provider": "yookassa", "fee_pct": 3.5,
+                 "crystalpay": {"login": "", "secret": "", "redirect_url": ""},
+                 "aaio": {"merchant_id": "", "secret1": "", "api_key": ""},
                  "yookassa": {"shop_id": "", "secret_key": "", "test": True, "return_url": "",
                               "send_receipt": False, "vat_code": 1, "tax_system_code": 0}},
         "crypto": {"enabled": True, "provider": "cryptopay", "fee_pct": 2, "min_fee_pct": 2,
@@ -126,6 +137,32 @@ DEFAULTS: dict[str, Any] = {
         "gifts": {"kind": "http", "url": "http://127.0.0.1:8805", "token": ""},     # TG Gift (профиль giftshop)
         # MannBot /api/supply: ключи TF2 обменом Steam (kind: manual — выдача вручную по cost_rub)
         "steam_keys": {"kind": "http", "url": "http://127.0.0.1:8801", "token": "", "cost_rub": 165},
+    },
+    # Источники сервисов. panel — свой VPN-сервер (Marzban или 3x-ui): cost_month_rub — аренда VPS в месяц,
+    # capacity — сколько ключей держит сервер (себестоимость ключа = cost_month_rub / capacity × месяцы).
+    # resale_sla_minutes — за сколько оператор обещает выдать перепродажу; дольше — тревога и возврат на баланс.
+    "services": {
+        "secret_key": "",            # ключ шифрования логинов/паролей покупателей (создаётся сам)
+        # Свои VPN-серверы: блок на каждый сервер печатает bots/shopbot/vpn/install-3xui.sh. Ключ создаётся
+        # на всех сразу (один UUID), подписка — с первого. kind: 3xui | marzban.
+        "panels": [],
+        # общая экономика серверов (и старый формат одного сервера: url/username/password здесь же)
+        # Aeza NLs-1 (1 ядро, 2 ГБ, 1 Гбит/с, безлимит) — 5.93 €/мес ≈ 560 ₽; ~100 ключей на сервер
+        "panel": {"kind": "3xui", "url": "", "username": "", "password": "", "inbound_tags": [],
+                  "inbound_id": 1, "sub_base": "", "flow": "xtls-rprx-vision", "limit_ip": 3, "data_limit_gb": 0,
+                  "cost_month_rub": 560, "capacity": 100},
+        "resale_sla_minutes": 120,
+        "learned_cost_days": 14,   # цена закупки = медиана 3 последних реальных закупок за N дней (0 — выкл)
+        # Свои семьи Яндекс Плюс (shopbot/family.py): правила сортировки аккаунтов, куда можно добавлять людей.
+        "family": {
+            "seats_per_account": 3,    # Плюсом делятся с 3 близкими (владелец — наш, его место не продаём)
+            "reserve_days": 3,         # Плюс аккаунта должен быть оплачен на срок места + столько дней
+            "seat_cooldown_days": 1,   # после исключения участника место «остывает» столько дней
+            "max_adds_30d": 8,         # не больше стольких новых людей в аккаунт за 30 дней (меньше риск бана)
+            "max_risk": 2,             # аккаунты с риском ≥ этого (ставит оператор) не получают новых людей
+            "vacancy_pct": 15,         # надбавка к себестоимости места за простой свободных мест
+            "invite_ttl_hours": 24,    # ссылки-приглашения из пула старше этого не выдаются
+        },
     },
     # ---------------------------------------------------------------- RTBA: контроль каждого пункта
     "rtba": {
@@ -176,8 +213,10 @@ DEFAULTS: dict[str, Any] = {
 }
 
 SECRETS = [("telegram", "bot_token"), ("payments.card.yookassa", "secret_key"),
-           ("payments.crypto.cryptopay", "token"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
+           ("payments.crypto.cryptopay", "token"),
+           ("payments.card.crystalpay", "secret"), ("payments.card.aaio", "secret1"), ("payments.card.aaio", "api_key"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
            ("suppliers.gifts", "token"), ("suppliers.steam_keys", "token"),
+           ("services", "secret_key"), ("services.panel", "password"),
            ("dashboard", "token"), ("dashboard", "operator_token"), ("dashboard", "viewer_token")]
 
 

@@ -18,6 +18,13 @@ log = logging.getLogger("rtba")
 POINTS: list[tuple[str, str, str]] = [
     ("buy.stars", "Продажа звёзд", "Товары"), ("buy.gift", "Продажа подарков", "Товары"),
     ("buy.premium", "Продажа Premium", "Товары"), ("buy.steam_keys", "Ключи для Steam", "Товары"),
+    ("buy.service", "Сервисы (VPN, подписки, карты)", "Товары"),
+    ("svc.vpn", "VPN-ключи (Happ)", "Сервисы"), ("svc.appstore_us", "Карты App Store США", "Сервисы"),
+    ("svc.claude_pro", "Claude Pro через App Store", "Сервисы"),
+    ("svc.chatgpt_plus", "ChatGPT Plus через App Store", "Сервисы"),
+    ("svc.spotify", "Spotify Premium на аккаунт", "Сервисы"), ("svc.steam_topup", "Пополнение Steam", "Сервисы"),
+    ("svc.yandex_plus", "Яндекс Плюс (места в семьях)", "Сервисы"),
+    ("svc.yandex_promo", "Промокоды Яндекс Плюс", "Сервисы"),
     ("sell.stars", "Выкуп звёзд за крипту", "Выкуп"), ("sell.gift", "Выкуп подарков", "Выкуп"),
     ("pay.wallet", "Крипта на общий кошелёк", "Оплата"), ("pay.gift", "Оплата подарками", "Оплата"),
     ("pay.skins", "Оплата скинами Steam", "Оплата"),
@@ -27,8 +34,11 @@ POINTS: list[tuple[str, str, str]] = [
     ("referral", "Реферальная программа", "Функции"), ("channel.autopost", "Автопост цен в канал", "Функции"),
 ]
 TITLES = {k: t for k, t, _ in POINTS}
-PRODUCT_SUPPLIER = {"stars": "stars", "gift": "gifts", "premium": "premium", "steam_keys": "steam_keys"}
-CATALOG_KEY = {"stars": "stars", "gift": "gifts", "premium": "premium", "steam_keys": "steam_keys"}
+PRODUCT_SUPPLIER = {"stars": "stars", "gift": "gifts", "premium": "premium", "steam_keys": "steam_keys",
+                    "service": "services"}
+CATALOG_KEY = {"stars": "stars", "gift": "gifts", "premium": "premium", "steam_keys": "steam_keys",
+               "service": "services"}
+SERVICE_POINTS = [k for k, _, g in POINTS if g == "Сервисы"]
 
 
 @dataclass
@@ -108,8 +118,14 @@ class RTBA:
         self.db.exec("INSERT INTO supplier_fails(ts,supplier,error) VALUES(?,?,?)", (time.time(), supplier, error[:300]))
 
     async def check_product(self, product: str) -> Check:
+        orbit = getattr(self.shop, "orbit", None)
+        if orbit is not None and orbit.blocked(f"buy.{product}"):
+            return Check(False, "снято с продажи в Пульте Орбиты центра", hard=True)
         if not self.cfg.get(f"catalog.{CATALOG_KEY[product]}.enabled"):
             return Check(False, "выключено в каталоге", hard=True)
+        if product == "service":
+            n = sum(self.is_open(k) for k in SERVICE_POINTS)
+            return Check(n > 0, "" if n else "все сервисы закрыты", value=f"открыто {n} из {len(SERVICE_POINTS)}")
         sup_name = PRODUCT_SUPPLIER[product]
         fails, limit = self.recent_fails(sup_name), int(self.cfg.get("rtba.fail_threshold") or 3)
         if fails >= limit:
@@ -128,6 +144,63 @@ class RTBA:
         price, why = shop_price(self.cfg, product, float(q["cost_rub"]), probe[0] or 1)
         unit = {"stars": "100 ⭐", "gift": "подарок 50 ⭐", "premium": "3 мес", "steam_keys": "1 ключ"}[product]
         return Check(True, why, value=f"{unit} = {price:.2f} ₽")
+
+    async def check_service(self, sid: str) -> Check:
+        """Сервис открыт, если есть источник и хотя бы один вариант с маржой ≥ минимальной и не дороже рынка."""
+        from shopbot.services import market_ref, service_price
+        svc = self.shop.services
+        it = svc.catalog.item(sid)
+        if it is None:
+            return Check(False, "выключено в каталоге", hard=True)
+        fails, limit = self.recent_fails("services"), int(self.cfg.get("rtba.fail_threshold") or 3)
+        if fails >= limit:
+            return Check(False, f"{fails} сбоя выдачи за час — пауза")
+        over = float(it.get("max_over_market_pct", self.cfg.get("catalog.services.max_over_market_pct")) or 0)
+        ok, why, best = [], [], ""
+        for v in it.get("variants") or []:
+            key = f"{sid}:{v['id']}"
+            amount = int(v.get("example_rub") or 1000) if it.get("kind") == "topup" else 1
+            ch = svc.choose(key, amount)
+            if ch is None:
+                why.append(f"{v['title']}: нет источника")
+                continue
+            price, _ = service_price(self.cfg, it, v, ch["cost_rub"], amount)
+            ref = market_ref(it, v)
+            if ref and over and price > ref * (1 + over / 100) and it.get("kind") != "topup":
+                why.append(f"{v['title']}: {price:.0f} ₽ дороже рынка {ref:.0f} ₽")
+                continue
+            ok.append(v["id"])
+            best = best or f"{v['title']} = {price:.0f} ₽ ({ch['source']})"
+        low = int(self.cfg.get("catalog.services.stock_low") or 0)
+        if low and "stock" in (it.get("sources") or []):
+            for sku, n in svc.stock_summary().items():
+                if sku.startswith(f"{it.get('uses') or sid}:") and n < low:
+                    k = f"stock_low:{sku}"
+                    if time.time() - float(self.db.kv_get(k) or 0) > 6 * 3600:      # не чаще раза в 6 часов
+                        self.db.kv_set(k, time.time())
+                        self.log(f"svc.{sid}", "stock_low", f"{sku}: осталось {n}")
+                        await self.shop.notify("WARNING", "stock_low", f"Склад {sku}: осталось {n} — пополните "
+                                                                       "(после нуля заказы уйдут в перепродажу)")
+        if it.get("kind") == "family":
+            await self._family_watch(sid, it)
+        if not ok:
+            return Check(False, "; ".join(why) or "нет вариантов")
+        return Check(True, "; ".join(why), value=best)
+
+    async def _family_watch(self, sid: str, it: dict) -> None:
+        """Мало свободных мест или аккаунт скоро без Плюса — тревога не чаще раза в 6 часов."""
+        fam = self.shop.services.family
+        info = fam.summary(it.get("family_service") or sid)
+        low = int(fam.c("free_low", 2))
+        msgs = list(info["alerts"])
+        if info["accounts"] and info["free"] < low:
+            msgs.append(f"свободных мест {info['free']} — купите Плюс на ещё один аккаунт (3 места)")
+        for m in msgs:
+            k = f"family_alert:{m[:60]}"
+            if time.time() - float(self.db.kv_get(k) or 0) > 6 * 3600:
+                self.db.kv_set(k, time.time())
+                self.log(f"svc.{sid}", "family", m)
+                await self.shop.notify("WARNING", "family", f"Яндекс Плюс: {m}")
 
     async def check_payment(self, method: str) -> Check:
         if not self.cfg.get(f"payments.{method}.enabled"):
@@ -200,7 +273,9 @@ class RTBA:
         return Check(True, value=f"за сутки {today:.2f}/{cap:g} USDT")
 
     async def tick(self) -> None:
-        for product in ("stars", "gift", "premium", "steam_keys"):
+        for key in SERVICE_POINTS:
+            await self._apply(key, await self.check_service(key[4:]))
+        for product in ("stars", "gift", "premium", "steam_keys", "service"):
             await self._apply(f"buy.{product}", await self.check_product(product))
         for method in ("wallet", "gift", "skins", "card", "crypto", "stars", "balance"):
             await self._apply(f"pay.{method}", await self.check_payment(method))

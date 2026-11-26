@@ -1,0 +1,43 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h2>🛡 Сервисы</h2>
+<p class="mute">VPN, карты App Store США, Claude/ChatGPT через карту, Spotify, пополнение Steam. Источник выбирается по себестоимости: склад и свой VPN-сервер — автоматически, перепродажа GGSEL/FunPay — задачей оператору. Цены — из каталога (config.yaml → catalog.services).</p></div>
+{% if tasks %}<div class="card"><h3>Ждут выдачи ({{ tasks|length }})</h3><table><tr><th>Заказ</th><th>Товар</th><th>Что купить</th><th>Себест.</th><th>Выдать</th></tr>
+{% for t in tasks %}<tr><td><a href="/orders/{{ t.order_id }}">{{ t.order_id }}</a></td><td>{{ t.title }}</td><td class="mute" style="word-break:break-all">{{ t.detail }}</td><td>{{ '%.0f'|format(t.cost_rub) }} ₽</td>
+<td><form method="post"><input type="hidden" name="action" value="deliver"><input type="hidden" name="order" value="{{ t.order_id }}"><input name="payload" placeholder="код / ключ / «готово» [цена 2050]" required> <button>Выдать</button></form>
+<form method="post"><input type="hidden" name="action" value="fail"><input type="hidden" name="order" value="{{ t.order_id }}"><button class="ghost">Вернуть деньги</button></form></td></tr>{% endfor %}</table></div>{% endif %}
+<div class="card"><h3>Экономика по вариантам</h3><table><tr><th>Товар</th><th>Источник</th><th>Себестоимость</th><th>Цена</th><th>Маржа</th><th>Рынок</th><th>Почему цена</th><th>RTBA</th></tr>
+{% for r in econ %}<tr><td>{{ r.title }}</td><td>{{ r.source or '—' }}{% for o in r.sources %}{% if o.left %} · склад {{ o.left }}{% endif %}{% if o.learned %} · по факту (в конфиге {{ o.config_cost_rub|round|int }} ₽){% endif %}{% endfor %}</td>
+<td>{{ '%.0f'|format(r.cost_rub) if r.cost_rub is defined and r.cost_rub is not none else '—' }} ₽</td><td>{{ '%.0f'|format(r.price_rub) if r.price_rub else '—' }} ₽</td>
+<td>{% if r.margin_rub is defined and r.margin_rub is not none %}{{ '%.0f'|format(r.margin_rub) }} ₽ ({{ r.margin_pct }}%){% else %}—{% endif %}</td><td>{{ r.ref_rub or '—' }}</td><td class="mute">{{ r.why }}</td><td>{{ points.get('svc.' ~ r.key.split(':')[0], '') }}</td></tr>{% endfor %}</table></div>
+<div class="card"><h3>🟡 Яндекс Плюс — свои семьи</h3>
+<p class="mute">Каждый аккаунт: Плюс оплачен на нашем Яндекс ID, продаём {{ fam_cfg.seats_per_account or 3 }} места близких. Человек попадает только в аккаунт, где Плюс оплачен на весь срок + {{ fam_cfg.reserve_days or 3 }} дн., есть место, не превышен лимит {{ fam_cfg.max_adds_30d or 8 }} новых людей за 30 дней и риск ниже {{ fam_cfg.max_risk or 2 }}. Из подходящих — с самым коротким сроком. Ссылки-приглашения из пула выдаются автоматически (свежее {{ fam_cfg.invite_ttl_hours or 24 }} ч), без пула — задача оператору.</p>
+{% for m in family.alerts %}<p class="warn">⚠️ {{ m }}</p>{% endfor %}
+<p>Свободно мест для новых людей (на 1 мес): <b>{{ family.free }}</b></p>
+<table><tr><th>#</th><th>Аккаунт</th><th>Плюс до</th><th>Места</th><th>Ссылок</th><th>+30 дн.</th><th>Себест.</th><th>Продано</th><th>Статус</th><th>Куда нельзя (1 мес)</th></tr>
+{% for a in family.accounts %}<tr><td>{{ a.id }}</td><td>{{ a.label }}<br><span class="mute">{{ a.login }}</span></td><td>{{ a.paid_till }}</td>
+<td>{{ a.used }}/{{ a.seats }}</td><td>{{ a.invites }}</td><td>{{ a.adds_30d }}</td><td>{{ '%.0f'|format(a.cost_rub) }} ₽ / {{ a.period_months|int }} мес</td><td>{{ '%.0f'|format(a.sold_rub) }} ₽</td>
+<td>{{ a.status_title }}{% if a.risk %} · риск {{ a.risk }}{% endif %}</td><td class="mute">{{ a.why|join('; ') or '✅ можно' }}</td></tr>
+{% for m in a.members %}<tr class="mute"><td></td><td colspan="3">↳ {{ m.member or '—' }} · <a href="/orders/{{ m.order_id }}">{{ m.order_id }}</a> · {{ m.status }}</td><td colspan="3">до {{ m.until|ts }}</td>
+<td colspan="3">{% if m.status in ('reserved','invited') %}<form method="post"><input type="hidden" name="action" value="fam_link"><input type="hidden" name="order" value="{{ m.order_id }}"><input name="link" placeholder="новая ссылка" required> <button class="ghost">Отправить</button></form>{% endif %}
+{% if m.status == 'leaving' %}<form method="post"><input type="hidden" name="action" value="fam_removed"><input type="hidden" name="seat" value="{{ m.id }}"><button>Исключён из семьи</button></form>{% endif %}</td></tr>{% endfor %}
+{% else %}<tr><td colspan="10" class="mute">аккаунтов нет — добавьте ниже</td></tr>{% endfor %}</table>
+{% if family.accounts %}<details style="margin-top:10px"><summary>Действия с аккаунтом</summary>
+<form method="post"><input type="hidden" name="action" value="fam_invites"><select name="account">{% for a in family.accounts %}<option value="{{ a.id }}">#{{ a.id }} {{ a.label }}</option>{% endfor %}</select>
+<textarea name="links" rows="3" style="width:100%" placeholder="ссылки «Поделиться ссылкой» из семейной группы, по одной в строке" required></textarea><button>Добавить ссылки в пул</button></form>
+<form method="post"><input type="hidden" name="action" value="fam_extend"><select name="account">{% for a in family.accounts %}<option value="{{ a.id }}">#{{ a.id }} {{ a.label }}</option>{% endfor %}</select>
+<input name="months" value="12" size="3"> мес за <input name="cost_rub" placeholder="цена, ₽" required size="6"> <button>Плюс продлён</button></form>
+<form method="post"><input type="hidden" name="action" value="fam_status"><select name="account">{% for a in family.accounts %}<option value="{{ a.id }}">#{{ a.id }} {{ a.label }}</option>{% endfor %}</select>
+<select name="status"><option value="active">активен</option><option value="paused">пауза (не добавлять)</option><option value="retired">вывести (не добавлять)</option><option value="banned">бан / потерян — переселить всех</option></select>
+риск <input name="risk" value="0" size="2"> <button>Сохранить</button></form></details>{% endif %}
+<details style="margin-top:10px"><summary>Добавить аккаунт</summary><form method="post"><input type="hidden" name="action" value="fam_add">
+<input name="label" placeholder="название (семья 1)" required> <input name="login" placeholder="логин Яндекс ID (для оператора)">
+мест <input name="seats" value="{{ fam_cfg.seats_per_account or 3 }}" size="2"> Плюс до <input name="paid_until" placeholder="31.12.2027">
+за <input name="cost_rub" placeholder="цена Плюса, ₽" size="7"> на <input name="months" value="12" size="3"> мес <button>Добавить</button></form>
+<p class="mute">Пароли аккаунтов в бот не вносите — оператор заходит сам. Без даты «Плюс до» срок считается от сегодня на указанные месяцы.</p></details></div>
+<div class="card"><h3>Склад кодов</h3>
+<table><tr><th>SKU</th><th>Свободно</th></tr>{% for sku, n in stock.items() %}<tr><td>{{ sku }}</td><td>{{ n }}</td></tr>{% else %}<tr><td colspan="2" class="mute">пусто</td></tr>{% endfor %}</table>
+<form method="post" style="margin-top:10px"><input type="hidden" name="action" value="stock">
+<select name="sku">{% for s in skus %}<option>{{ s }}</option>{% endfor %}</select>
+<input name="cost_rub" placeholder="себестоимость за 1, ₽" required> <input name="note" placeholder="где куплено (Bitrefill, оптом…)">
+<textarea name="codes" rows="5" style="width:100%" placeholder="по одному коду/ключу в строке" required></textarea><button>Добавить на склад</button></form></div>
+{% endblock %}

@@ -71,7 +71,7 @@ def tier_for(cfg, db, user) -> Tier:
 def bounded_discount(cfg, price_rub: float, cost_rub: float, product: str, want_rub: float,
                      already_rub: float = 0.0) -> float:
     """Скидка не опускает маржу заказа ниже loyalty.min_margin_after_pct (и минимальной маржи товара)."""
-    key = {"gift": "gifts"}.get(product, product)
+    key = {"gift": "gifts", "service": "services"}.get(product, product)
     floor_pct = max(float(cfg.get("loyalty.min_margin_after_pct") or 0),
                     float(cfg.get(f"catalog.{key}.min_margin_pct") or 0) / 2)
     floor = cost_rub * (1 + floor_pct / 100)
