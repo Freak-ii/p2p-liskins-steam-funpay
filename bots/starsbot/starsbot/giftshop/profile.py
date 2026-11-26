@@ -60,7 +60,7 @@ PROFILE_DEFAULTS: dict = {
     "rtba": {"enabled": True, "strategy": "topN", "target_position": 3, "min_margin_pct": 5.0,
              "method_filter": "giftshop", "undercut_abs": 0.3, "min_change": 0.2, "competitor_min_amount": 1},
     "safety": {"pilot_orders": 0},
-    "fragment": {"hide_lots_when_down": False, "session_warn_days": 0},
+    "fragment": {"hide_lots_when_down": False, "session_warn_days": 0, "keepalive_minutes": 0},
     "dashboard": {"port": 8805},
     "notifications": {"prefix": "🎁 TG Gift"},
     "supply": {"enabled": False},        # TG Gift звёзды не покупает — просит их у StarsBot

@@ -274,3 +274,60 @@ def test_review_reply(tmp_path):
     good, bad = asyncio.run(go())
     assert list(fp.review_replies) == [good] and "Alice" in fp.review_replies[good]
     assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code='bad_review'") == 1
+
+
+def test_fragment_keepalive_hides_lots_before_payment(tmp_path):
+    """Сессия истекла в простое: проверка по таймеру скрывает лоты до того, как кто-то оплатит."""
+    sup, e, fp, wallet = make(tmp_path)
+    e.cfg.general.dry_run = False
+    e.cfg.fragment.keepalive_minutes = 30
+
+    async def go():
+        await boot(e)
+        await e.stock_sync(wallet.balance, e.cost_per_star_ton() or 0.01, 0)
+        e.fragment.logged_in = False
+        await e.fragment_keepalive()                     # проверяли только что — не дёргаем Fragment
+        first = e.fragment_status["session"]
+        e._fragment_state(checked_at=time.time() - 31 * 60)
+        await e.fragment_keepalive()
+        return first
+    first = asyncio.run(go())
+    assert first == "ok" and e.fragment_status["session"] == "expired"
+    assert all(l["amount"] == "0" for l in fp.lots.values() if l)
+    e.cfg.fragment.keepalive_minutes = 0                 # выключено — ничего не делает
+    e._fragment_state(session="ok", checked_at=0)
+    asyncio.run(e.fragment_keepalive())
+    assert e.fragment_status["session"] == "ok"
+
+
+def test_fragment_rotated_cookies_saved(tmp_path):
+    """Fragment продлил cookie через Set-Cookie: они попадают в config.yaml и сбрасывают возраст сессии."""
+    from http.cookies import SimpleCookie
+
+    import aiohttp
+    import yaml
+
+    from starsbot.fragment.client import FragmentClient
+    sup, e, fp, wallet = make(tmp_path)
+    sup.save({"fragment": {"cookies": "stel_ssid=a; stel_dt=1; stel_token=old; stel_ton_token=t"}}, rebuild=False)
+    set_at = sup.cfg.fragment.cookies_set_at
+    fr = FragmentClient(sup.cfg.fragment.cookies, None, user_agent="ua")
+    fr.on_cookies = sup.save_rotated_fragment_cookies
+
+    async def go():
+        await fr._sess()
+        assert not fr.harvest_cookies()                  # ничего не поменялось — не пишем
+        c = SimpleCookie()
+        c["stel_token"] = "new"
+        c["other"] = "x"
+        fr.session.cookie_jar.update_cookies(c, aiohttp.client.URL("https://fragment.com/"))
+        changed = fr.harvest_cookies()
+        await fr.close()
+        return changed
+    assert asyncio.run(go())
+    raw = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert raw["fragment"]["cookies"] == "stel_ssid=a; stel_dt=1; stel_token=new; stel_ton_token=t"
+    assert raw["fragment"]["cookies_set_at"] == set_at and raw["fragment"]["cookies_refreshed_at"] > 0
+    e.fragment = fr
+    e.cfg.fragment.cookies_set_at = time.time() - 20 * 86400
+    assert e.fragment_cookie_age_days() < 1

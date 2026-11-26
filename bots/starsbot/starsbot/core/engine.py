@@ -1965,8 +1965,24 @@ class Engine:
                 "checks": checks, "fragment_age_days": self.fragment_cookie_age_days()}
 
     def fragment_cookie_age_days(self) -> float | None:
-        ts = float(self.cfg.fragment.get("cookies_set_at") or 0)
+        """Возраст сессии: с момента, когда cookie вставили, или когда Fragment сам их продлил."""
+        ts = max(float(self.cfg.fragment.get("cookies_set_at") or 0),
+                 float(self.cfg.fragment.get("cookies_refreshed_at") or 0),
+                 float(getattr(self.fragment, "rotated_at", 0) or 0))
         return round((time.time() - ts) / 86400, 1) if ts else None
+
+    async def fragment_keepalive(self) -> None:
+        """Проверять сессию Fragment и в простое. Иначе истёкшую сессию бот замечает только на оплаченном заказе:
+        покупатель ждёт, а лоты висят. Проверка заранее скрывает лоты до оплаты (hide_lots_when_down),
+        а запрос к Fragment продлевает сессию — новые cookie сохраняются в настройки."""
+        minutes = float(self.cfg.fragment.get("keepalive_minutes") or 0)
+        if minutes <= 0 or self.cfg.general.dry_run:
+            return
+        if time.time() - float(self.fragment_status.get("checked_at") or 0) < minutes * 60:
+            return
+        if self._in_flight():
+            return                                   # идёт покупка — она сама проверяет сессию
+        await self.ensure_fragment(force=True)
 
     async def fragment_age_reminder(self) -> None:
         """Cookies Fragment живут 2–4 недели: напомнить заранее, а не узнать по скрытым лотам."""
@@ -2247,6 +2263,7 @@ class Engine:
             self._loop("wallet", 90, self.wallet_watch),
             self._loop("timers", 30, self.timers),
             self._loop("watchdog", 120, self.watchdog),
+            self._loop("fragment_keepalive", 120, self.fragment_keepalive),
             self._loop("backup", 3600, self.backup_db),
             self._loop("raise", 300, self.raise_lots),
             self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),

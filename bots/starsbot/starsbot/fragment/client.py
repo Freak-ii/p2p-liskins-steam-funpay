@@ -157,6 +157,8 @@ class FragmentClient:
         self.wallet_address: str = ""
         self._lock = asyncio.Lock()
         self._last = 0.0
+        self.on_cookies = None          # callback(dict): Fragment выдал новые cookie — сохранить их в настройки
+        self.rotated_at = 0.0           # когда сервер последний раз обновил cookie сессии
 
     # ------------------------------------------------------------------ http
     async def _sess(self) -> aiohttp.ClientSession:
@@ -165,6 +167,28 @@ class FragmentClient:
                 timeout=aiohttp.ClientTimeout(total=30), cookies=self.cookies,
                 headers={"User-Agent": self.user_agent, "Accept-Language": "en,ru;q=0.8"})
         return self.session
+
+    def cookie_header(self) -> str:
+        return "; ".join(f"{k}={self.cookies[k]}" for k in COOKIE_NAMES if self.cookies.get(k))
+
+    def harvest_cookies(self) -> bool:
+        """Fragment продлевает сессию через Set-Cookie. Без сохранения после перезапуска бот снова берёт
+        старые cookie из настроек и сессия «истекает» раньше, чем могла бы."""
+        if self.session is None:
+            return False
+        jar = {c.key: c.value for c in self.session.cookie_jar if c.key in COOKIE_NAMES and c.value}
+        changed = {k: v for k, v in jar.items() if self.cookies.get(k) != v}
+        if not changed:
+            return False
+        self.cookies.update(changed)
+        self.rotated_at = time.time()
+        log.info("Fragment обновил cookie: %s", ", ".join(sorted(changed)))
+        if self.on_cookies is not None:
+            try:
+                self.on_cookies(self.cookie_header())
+            except Exception as e:  # noqa: BLE001 — сохранить не вышло: сессия в памяти всё равно новая
+                log.warning("не удалось сохранить новые cookie Fragment: %s", e)
+        return True
 
     async def close(self) -> None:
         if self.session and not self.session.closed:
@@ -190,6 +214,7 @@ class FragmentClient:
                     raise FragmentError(f"Fragment HTTP {r.status}", "network")
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise FragmentError(f"Fragment недоступен: {e}", "network") from e
+        self.harvest_cookies()
         h = parse_api_hash(page)
         if not h:
             raise FragmentError("на странице Fragment не найден адрес API (разметка изменилась?)", "layout")
@@ -222,6 +247,7 @@ class FragmentClient:
                     text = await r.text()
                     if r.status == 429 or r.status >= 500:
                         raise FragmentError(f"Fragment HTTP {r.status}", "network")
+                self.harvest_cookies()
             except (aiohttp.ClientError, asyncio.TimeoutError, FragmentError) as e:
                 if attempt == 3:
                     raise FragmentError(f"{method}: {e}", "network") from e
