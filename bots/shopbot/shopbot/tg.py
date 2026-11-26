@@ -302,7 +302,8 @@ class ShopTelegram:
         await self.menu(uid)
 
     async def menu(self, uid: int) -> None:
-        await self.send(uid, T.WELCOME.format(shop=self.cfg.get("general.shop_name")), T.MENU_BUTTONS)
+        hidden = self.shop.orbit.menu_hidden() if getattr(self.shop, "orbit", None) is not None else set()
+        await self.send(uid, T.welcome(self.cfg.get("general.shop_name"), hidden), T.menu_buttons(hidden))
 
     # ------------------------------------------------------------------ кнопки
     async def on_callback(self, uid: int, data: str) -> None:

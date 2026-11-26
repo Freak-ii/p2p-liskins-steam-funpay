@@ -74,6 +74,8 @@ class Shop:
         self.services = ServiceSupplier(cfg, db, demo=demo, rates=self.rates)
         self.suppliers["services"] = self.services
         self.providers = build_providers(cfg, demo=demo)
+        from shopbot.orbit import ShopOrbit
+        self.orbit = ShopOrbit(self)        # Пульт Орбиты центра: снятые товары пропадают из бота и канала
         self.rtba = RTBA(self)
         self.loop = MoneyLoop(self)
         self.bot = None                     # shopbot.tg.bot.ShopTelegram
@@ -968,7 +970,7 @@ class Shop:
         loops = [("rates", float(self.cfg.get("rates.refresh_seconds") or 120), self.rates.refresh),
                  ("rtba", float(self.cfg.get("rtba.interval_seconds") or 30), self.rtba.tick),
                  ("payments", 5, self.poll_payments), ("deliveries", 5, self.poll_deliveries),
-                 ("loop", 600, self._loop_tick)]
+                 ("loop", 600, self._loop_tick), ("orbit", 5, self.orbit.tick)]
         if self.channel is not None:
             loops.append(("channel", 300, self.channel.autoupdate))
         for name, every, fn in loops:

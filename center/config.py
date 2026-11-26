@@ -144,6 +144,12 @@ DEFAULTS: dict = {
             "cooldown_hours": 6,     # одна и та же аномалия не чаще
         },
     },
+    "orbit": {                       # Пульт Орбиты (center/orbit.py): позиции по всем каналам и круги денег
+        "auto_park": True,           # канал продажи, через который нет ни одного круга, закрывать у ботов сам
+        "min_loop_pct": 0.0,         # лучший круг позиции ниже — подсказка «в минусе, снять с орбиты?»
+        "margins": {},               # своя оценка маржи канала, %: {"stars@funpay": 2.4, "mann_keys@funpay": -22}
+        "transfers": {},             # переводы: {"fp_rub>usdt": {"enabled": true, "pct": -4.3}}
+    },
     "agents": {                      # раздел «Агенты» (center/agents/): при старте центра агенты сами не запускаются
         "trends": {                  # center/agents/trends.py — тренды NFT-подарков, скинов CS2 и звёзд FunPay
             "enabled": True,
