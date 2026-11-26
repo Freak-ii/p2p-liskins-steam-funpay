@@ -29,9 +29,11 @@ from typing import Any
 
 import aiohttp
 
+from shopbot.family import FamilySource
+
 log = logging.getLogger("services")
 
-KIND_FIELDS = {"code": [], "vpn": [], "account": ["login", "password"], "topup": ["login"]}
+KIND_FIELDS = {"code": [], "vpn": [], "account": ["login", "password"], "topup": ["login"], "family": ["login"]}
 FIELD_ASK = {
     "login": "👤 Пришлите <b>логин</b> (почту или имя пользователя) от аккаунта {title}.",
     "password": "🔑 Пришлите <b>пароль</b> от аккаунта {title}.\nОн шифруется и удаляется сразу после выдачи. "
@@ -74,6 +76,7 @@ SPEND_ROUTE = {
     "stock": "склад куплен заранее (USDT из хаба / баланс площадки)",
     "panel": "VPS раз в месяц (USDT/крипта у хостера) — себестоимость ключа ≈ 0",
     "resale": "баланс GGSEL/FunPay (выручка FunPay тратится сразу, без вывода; GGSEL — пополнение СБП/картой)",
+    "family": "Плюс на свои аккаунты: промокод на 12 мес. (Таверна 1990 ₽, аккаунт без Плюса ≥2 недель) — 3 места",
 }
 
 
@@ -437,6 +440,7 @@ class ServiceSupplier:
         self.stock = StockSource(db)
         self.panel = PanelSource(cfg, demo=demo)
         self.resale = ResaleSource()
+        self.family = FamilySource(cfg, db)
         self.vault = Vault(cfg)
 
     # совместимость с общим интерфейсом (RTBA пингует поставщика)
@@ -459,6 +463,11 @@ class ServiceSupplier:
                         "left": self.stock.count(sku)})
         if "panel" in srcs and it.get("kind") == "vpn" and self.panel.configured:
             out.append({"source": "panel", "auto": True, "cost_rub": self.panel.cost(int(v.get("months") or 1))})
+        if "family" in srcs and it.get("kind") == "family":
+            fq = self.family.quote(it.get("family_service") or it["id"], float(v.get("months") or 1))
+            if fq is not None:      # свои семьи: «auto» для выбора (свой товар), instant — есть готовая ссылка
+                out.append({"source": "family", "auto": True, "own": True, "instant": fq["auto"], "cost_rub": fq["cost_rub"],
+                            "account": fq["account"]})
         if "resale" in srcs:
             best = self.resale.best(it, v, amount, self.rates)
             if best is not None:
@@ -510,6 +519,14 @@ class ServiceSupplier:
         opts = self.options(key, amount)
         if not opts:
             return None
+        own = [o for o in opts if o.get("own")]
+        if own:                 # места в своих семьях уже оплачены — продаём их первыми, если цена в рынке
+            it, v = self.catalog.variant(key)
+            ref = market_ref(it, v) if it and v else 0
+            over = float(self.cfg.get("catalog.services.max_over_market_pct") or 0)
+            if not ref or service_price(self.cfg, it, v, own[0]["cost_rub"], amount)[0] <= ref * (1 + over / 100):
+                return own[0]
+            opts = [o for o in opts if not o.get("own")] or own
         cheapest = min(opts, key=lambda o: o["cost_rub"])
         within = float(self.cfg.get("catalog.services.prefer_auto_within_pct") or 0)
         autos = [o for o in opts if o["auto"]]
@@ -559,6 +576,8 @@ class ServiceSupplier:
         ch = self.choose(key, amount)
         if self.renewable(recipient) is not None and self.panel.configured:     # продление — только своим сервером
             ch = {"source": "panel", "auto": True, "cost_rub": self.panel.cost(int(v.get("months") or 1))}
+        if it.get("kind") == "family" and str(recipient).startswith("renew:") and "family" in (it.get("sources") or []):
+            ch = {"source": "family", "auto": True, "cost_rub": (ch or {}).get("cost_rub", 0.0)}
         if ch is None:
             return {"ok": False, "error": "нет источника товара"}
         now = time.time()
@@ -585,11 +604,45 @@ class ServiceSupplier:
             except Exception as e:  # noqa: BLE001
                 log.warning("панель VPN: %s", e)
                 self._set(ref, status="manual", source="resale", detail=f"панель VPN: {e}"[:200])
+        elif ch["source"] == "family":
+            self._order_family(ref, oid, it, v, recipient, amount)
         else:
             off = ch.get("offer") or {}
             self._set(ref, status="manual", detail=f"купить: {off.get('market', '')} {off.get('url', '')} "
-                                                   f"{off.get('option', '')}".strip())
+                                                   f"{off.get('option') or ''}".strip())
         return {"ok": True, "order_id": ref, **self._state(self._job(ref))}
+
+    def _order_family(self, ref: str, oid: str, it: dict, v: dict, recipient: str, amount: int) -> None:
+        """Место в своей семье: продление того же места, готовая ссылка из пула или задача оператору."""
+        o = self.db.one("SELECT user_id FROM orders WHERE id=?", (oid,))
+        uid = int(o["user_id"]) if o else 0
+        months = float(v.get("months") or 1)
+        renew_of = recipient[6:] if str(recipient).startswith("renew:") else ""
+        res = self.family.reserve(it.get("family_service") or it["id"], oid, uid,
+                                  "" if renew_of else str(recipient), months, renew_of=renew_of)
+        if not res.get("ok"):
+            best = self.resale.best(it, v, amount, self.rates) if "resale" in (it.get("sources") or []) else None
+            if best is not None:            # мест нет — перепродажа у поставщика (бот/площадка)
+                self._set(ref, source="resale", cost_rub=best["cost_rub"],
+                          offer=json.dumps({k: best.get(k) for k in ("market", "url", "title")}, ensure_ascii=False),
+                          status="manual", detail=f"мест в своих семьях нет — купить: {best.get('market', '')} "
+                                                  f"{best.get('url', '')}".strip())
+            else:
+                self._set(ref, status="manual", detail="нет свободных мест в семьях — добавьте аккаунт или верните "
+                                                       "деньги")
+            return
+        meta = json.dumps({"account": res["account"], "seat": res["seat"]})
+        if res.get("renewed"):
+            self._set(ref, status="delivered", detail="продление", meta=meta, expires_at=res["until"],
+                      cost_rub=res["cost_rub"])
+        elif res.get("invite"):
+            self._set(ref, status="delivered", payload=res["invite"], meta=meta, expires_at=res["until"],
+                      cost_rub=res["cost_rub"])
+        else:
+            a = self.family.account(res["account"])
+            self._set(ref, status="manual", meta=meta, expires_at=res["until"], cost_rub=res["cost_rub"],
+                      detail=f"Семья «{a['label']}» {a['login']}: «Поделиться ссылкой» в семейной группе и пришлите "
+                             f"ссылку".strip())
 
     def renewable(self, recipient: str):
         """recipient «renew:<заказ>» — продлить ключ того заказа (тот же UUID и ссылка подписки)."""
@@ -626,7 +679,13 @@ class ServiceSupplier:
     def mark(self, ref: str, status: str, payload: str = "") -> None:
         if self._job(ref) is None:
             return
+        job = self._job(ref)
         self._set(ref, status=status, **({"payload": payload} if payload else {}))
+        if job["source"] == "family":
+            if status == "delivered" and payload:
+                self.family.set_invite(job["order_id"], payload)
+            elif status == "failed":
+                self.family.release(job["order_id"])
 
     def payload(self, oid: str) -> str:
         r = self.db.one("SELECT payload FROM service_jobs WHERE order_id=? AND payload!='' ORDER BY updated_at DESC "
@@ -660,6 +719,10 @@ class ServiceSupplier:
 
 def delivery_text(it: dict, payload: str, expires_at: float = 0, renewed: bool = False) -> str:
     """Сообщение покупателю с кодом/ключом и инструкцией. Код в <code> — копируется одним нажатием."""
+    if renewed and it.get("kind") == "family":
+        return (f"🔄 <b>{it.get('title', 'Подписка')} продлена до "
+                f"{time.strftime('%d.%m.%Y', time.localtime(expires_at))}</b>\n"
+                "Ничего делать не нужно — вы остаётесь в той же семье.")
     if renewed:
         return (f"🔄 <b>Ключ VPN продлён до {time.strftime('%d.%m.%Y', time.localtime(expires_at))}</b>\n"
                 "Ничего менять не нужно — Happ продолжит работать с той же подпиской.")
@@ -668,6 +731,7 @@ def delivery_text(it: dict, payload: str, expires_at: float = 0, renewed: bool =
     body = "\n".join(f"<code>{p}</code>" for p in str(payload).splitlines() if p.strip()) if payload else ""
     instr = str(it.get("instructions") or "")
     head = {"vpn": "🛡 <b>Ваш ключ VPN</b>", "code": "🎟 <b>Ваш код</b>", "account": "✅ <b>Подписка подключена</b>",
-            "topup": "✅ <b>Баланс Steam пополнен</b>"}.get(it.get("kind", "code"), "✅ <b>Готово</b>")
+            "topup": "✅ <b>Баланс Steam пополнен</b>",
+            "family": f"👨‍👩‍👧 <b>Приглашение в семью {it.get('title', '')}</b>"}.get(it.get("kind", "code"), "✅ <b>Готово</b>")
     return f"{head}{till}\n{body}\n\n{instr}".strip()
 

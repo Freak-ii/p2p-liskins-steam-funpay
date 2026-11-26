@@ -406,6 +406,8 @@ class Shop:
         it = self.services.catalog.item(sid) or {}
         if it.get("kind") in ("code", "vpn") and not payload:
             return "для этого товара пришлите код/ключ"
+        if it.get("kind") == "family" and not payload.startswith("http"):
+            return "пришлите ссылку-приглашение в семью (https://…)"
         if real_cost is not None:
             self.services.record_cost(o["supplier_ref"] or oid, real_cost)
         self.services.mark(o["supplier_ref"] or oid, "delivered", payload)
@@ -448,6 +450,7 @@ class Shop:
         self.db.credit(o["user_id"], "rub", paid, "refund", oid, f"возврат: {reason}")
         if o["product"] == "service":
             self.services.wipe(oid)
+            self.services.family.release(oid)
         await self.tell(o["user_id"], f"↩️ Заказ <b>#{oid}</b> не удалось выдать ({reason}). "
                         f"<b>{paid:.2f} ₽</b> вернулись на ваш баланс магазина — оплатите ими другой заказ или "
                         "напишите в поддержку для возврата на карту/кошелёк.")
@@ -496,7 +499,10 @@ class Shop:
         self.services.wipe(o["id"])
         exp = float(job["expires_at"] or 0) if job is not None else 0.0
         renewed = job is not None and job["detail"] == "продление"
-        await self.tell(o["user_id"], delivery_text(it, payload, exp, renewed))
+        btns = None
+        if it.get("kind") == "family" and not renewed:
+            btns = [[("✅ Я вступил", f"fj:{o['id']}")], [("⚠️ Не получается", f"fp:{o['id']}")]]
+        await self.tell(o["user_id"], delivery_text(it, payload, exp, renewed), btns)
 
     async def remind_expiring(self) -> None:
         """За 3 дня до конца срока VPN-ключа — напоминание с кнопкой продления (один раз на ключ)."""
@@ -506,6 +512,136 @@ class Shop:
             await self.tell(j["user_id"], f"⏳ Ваш ключ VPN (заказ <b>#{j['order_id']}</b>) закончится через "
                                           f"<b>{left} дн.</b> Продлите — ссылка в Happ останется той же.",
                             [("🔄 Продлить", f"rn:{j['order_id']}")])
+
+    # ------------------------------------------------------------------ семьи Яндекс Плюс
+    def _family_item(self, oid: str):
+        o = self.db.order(oid)
+        if o is None or o["product"] != "service":
+            return o, None
+        it = self.services.catalog.item(self.services.catalog.split(o["item"])[0]) or {}
+        return o, (it if it.get("kind") == "family" else None)
+
+    async def family_tick(self) -> None:
+        fam = self.services.family
+        for s in fam.expiring(3):                       # за 3 дня — напоминание с продлением
+            fam.mark(s["id"], reminded=1)
+            left = max(1, int((float(s["until"]) - time.time()) // 86400) + 1)
+            await self.tell(s["user_id"], f"⏳ Яндекс Плюс (заказ <b>#{s['order_id']}</b>) закончится через "
+                                          f"<b>{left} дн.</b> Продлите — останетесь в той же семье.",
+                            [("🔄 Продлить", f"fr:{s['order_id']}")])
+        for s in fam.expired():                         # срок вышел — исключить из семьи
+            fam.mark(s["id"], status="leaving")
+            await self.notify("WARNING", "family_remove",
+                              f"Яндекс Плюс: срок места вышел — исключите <b>{s['member'] or 'участника'}</b> из "
+                              f"семьи «{s['label']}» {s['login']} (заказ #{s['order_id']})",
+                              [("✔ Исключён", f"adm:famrm:{s['id']}")])
+            await self.tell(s["user_id"], f"⌛ Срок Яндекс Плюса по заказу <b>#{s['order_id']}</b> закончился. "
+                                          "Оформите новый — пришлём приглашение.", [("🟡 Яндекс Плюс", "sv:yandex_plus")])
+        for s in fam.unconfirmed():                     # ссылку выдали, «Я вступил» не нажато
+            fam.mark(s["id"], reminded=1)
+            await self.tell(s["user_id"], f"👋 Получилось вступить в семью по заказу <b>#{s['order_id']}</b>? "
+                                          "Ссылка действует ограниченное время.",
+                            [[("✅ Я вступил", f"fj:{s['order_id']}")], [("⚠️ Не получается", f"fp:{s['order_id']}")]])
+
+    async def family_joined(self, uid: int, oid: str) -> str:
+        o, it = self._family_item(oid)
+        if o is None or it is None or o["user_id"] != uid:
+            return "Заказ не найден."
+        fam = self.services.family
+        if not fam.joined(oid):
+            return "Уже отмечено 👌"
+        s = fam.seat(oid)
+        a = fam.account(s["account_id"])
+        fam.mark(s["id"], reminded=0)
+        self.db.event(oid, "family_joined", account=a["label"], member=s["member"])
+        await self.notify("INFO", "family_joined", f"#{oid}: {s['member'] or 'покупатель'} вступил в семью "
+                                                   f"«{a['label']}» — проверьте в списке близких")
+        till = time.strftime("%d.%m.%Y", time.localtime(float(s["until"])))
+        return f"🎉 Готово! Плюс действует до <b>{till}</b>. Не выходите из семьи до конца срока."
+
+    async def family_problem(self, uid: int, oid: str) -> str:
+        o, it = self._family_item(oid)
+        if o is None or it is None or o["user_id"] != uid:
+            return "Заказ не найден."
+        fam = self.services.family
+        s = fam.seat(oid)
+        a = fam.account(s["account_id"]) if s else None
+        self.db.event(oid, "family_problem")
+        await self.notify("WARNING", "family_problem",
+                          f"#{oid}: покупатель {s['member'] if s else ''} не может вступить в семью "
+                          f"«{a['label'] if a else '?'}». Проверьте: не был ли он в другой семье последние 14 дней, "
+                          "тот ли аккаунт. Пришлите новую ссылку или переведите в другую семью.",
+                          [("🔗 Новая ссылка", f"adm:famlink:{oid}"), ("↩️ Вернуть деньги", f"adm:famfail:{oid}")])
+        return ("🛠 Передали оператору — пришлём новую ссылку. Проверьте, что входите в нужный Яндекс ID и что "
+                "не выходили из другой семьи последние 14 дней.")
+
+    async def admin_family_link(self, oid: str, link: str, who: str = "operator") -> str:
+        o, it = self._family_item(oid)
+        link = str(link or "").strip()
+        if o is None or it is None:
+            return "это не заказ Яндекс Плюса"
+        if not link.startswith("http"):
+            return "пришлите ссылку https://…"
+        if o["status"] in ("manual", "delivering"):
+            return await self.admin_service_deliver(oid, link, who)
+        fam = self.services.family
+        s = fam.seat(oid)
+        if s is None or s["status"] not in ("reserved", "invited"):
+            return "место не ждёт приглашения"
+        fam.set_invite(oid, link)
+        fam.mark(s["id"], reminded=0)
+        self.db.event(oid, "family_new_link", who=who)
+        await self.tell(o["user_id"], f"🔗 Новая ссылка-приглашение по заказу <b>#{oid}</b>:\n<code>{link}</code>",
+                        [[("✅ Я вступил", f"fj:{oid}")], [("⚠️ Не получается", f"fp:{oid}")]])
+        return "ссылка отправлена"
+
+    async def admin_family_removed(self, seat_id: int) -> str:
+        return "место освобождено" if self.services.family.removed(seat_id) else "место не найдено"
+
+    async def admin_family_refund(self, oid: str) -> str:
+        """Не смог вступить — возврат на баланс (до вступления место освобождается сразу)."""
+        o, it = self._family_item(oid)
+        if o is None or it is None or o["status"] != "delivered":
+            return await self.admin_service_fail(oid)
+        s = self.services.family.seat(oid)
+        if s is None or s["status"] not in ("reserved", "invited"):
+            return "участник уже вступил — возврат вручную"
+        self.db.update_order(oid, status="manual")
+        return await self.admin_service_fail(oid, "не удалось вступить в семью")
+
+    async def admin_family_ban(self, aid: int) -> str:
+        """Аккаунт потерян (бан, Яндекс отключил семью): всех участников — в другие семьи на оставшийся срок."""
+        fam = self.services.family
+        a = fam.account(aid)
+        if a is None:
+            return "нет аккаунта"
+        fam.update_account(aid, status="banned")
+        moved = waiting = 0
+        for s in fam.to_migrate(aid):
+            left = (float(s["until"]) - time.time()) / (30 * 86400)
+            fam.mark(s["id"], status="moved", note="аккаунт потерян")
+            res = fam.reserve(a["service"], s["order_id"], s["user_id"], s["member"], left, exclude=aid,
+                              until=float(s["until"]))
+            if not res.get("ok"):
+                waiting += 1
+                await self.notify("WARNING", "family_migrate", f"#{s['order_id']}: некуда перевести "
+                                  f"{s['member'] or 'участника'} — купите Плюс на новый аккаунт или верните деньги")
+                continue
+            moved += 1
+            if res.get("invite"):
+                await self.tell(s["user_id"], f"🔄 Семья Яндекс Плюса по заказу <b>#{s['order_id']}</b> отключена. "
+                                f"Бесплатно переводим вас в другую на оставшийся срок:\n<code>{res['invite']}</code>",
+                                [[("✅ Я вступил", f"fj:{s['order_id']}")], [("⚠️ Не получается",
+                                                                             f"fp:{s['order_id']}")]])
+            else:
+                b = fam.account(res["account"])
+                await self.notify("WARNING", "family_migrate", f"#{s['order_id']}: переселение в «{b['label']}» "
+                                  f"{b['login']} — пришлите ссылку", [("🔗 Ссылка", f"adm:famlink:{s['order_id']}")])
+                await self.tell(s["user_id"], f"🔄 Семья Яндекс Плюса по заказу <b>#{s['order_id']}</b> отключена. "
+                                "Переводим вас в другую бесплатно — ссылка придёт сюда в ближайшее время.")
+        await self.notify("WARNING", "family_ban", f"Яндекс Плюс: аккаунт «{a['label']}» выведен, переселено "
+                                                   f"{moved}, ждут места {waiting}")
+        return f"переселено {moved}, ждут места {waiting}"
 
     # ------------------------------------------------------------------ отзывы
     async def ask_review(self, o) -> None:
@@ -581,6 +717,7 @@ class Shop:
 
     async def poll_deliveries(self) -> None:
         await self.remind_expiring()
+        await self.family_tick()
         sla = float(self.cfg.get("services.resale_sla_minutes") or 120) * 60
         for o in self.db.q("SELECT * FROM orders WHERE kind='buy' AND product='service' AND status='manual' AND "
                            "paid_at<?", (time.time() - sla,)):

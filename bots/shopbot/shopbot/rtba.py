@@ -23,6 +23,8 @@ POINTS: list[tuple[str, str, str]] = [
     ("svc.claude_pro", "Claude Pro через App Store", "Сервисы"),
     ("svc.chatgpt_plus", "ChatGPT Plus через App Store", "Сервисы"),
     ("svc.spotify", "Spotify Premium на аккаунт", "Сервисы"), ("svc.steam_topup", "Пополнение Steam", "Сервисы"),
+    ("svc.yandex_plus", "Яндекс Плюс (места в семьях)", "Сервисы"),
+    ("svc.yandex_promo", "Промокоды Яндекс Плюс", "Сервисы"),
     ("sell.stars", "Выкуп звёзд за крипту", "Выкуп"), ("sell.gift", "Выкуп подарков", "Выкуп"),
     ("pay.wallet", "Крипта на общий кошелёк", "Оплата"), ("pay.gift", "Оплата подарками", "Оплата"),
     ("pay.skins", "Оплата скинами Steam", "Оплата"),
@@ -176,9 +178,26 @@ class RTBA:
                         self.log(f"svc.{sid}", "stock_low", f"{sku}: осталось {n}")
                         await self.shop.notify("WARNING", "stock_low", f"Склад {sku}: осталось {n} — пополните "
                                                                        "(после нуля заказы уйдут в перепродажу)")
+        if it.get("kind") == "family":
+            await self._family_watch(sid, it)
         if not ok:
             return Check(False, "; ".join(why) or "нет вариантов")
         return Check(True, "; ".join(why), value=best)
+
+    async def _family_watch(self, sid: str, it: dict) -> None:
+        """Мало свободных мест или аккаунт скоро без Плюса — тревога не чаще раза в 6 часов."""
+        fam = self.shop.services.family
+        info = fam.summary(it.get("family_service") or sid)
+        low = int(fam.c("free_low", 2))
+        msgs = list(info["alerts"])
+        if info["accounts"] and info["free"] < low:
+            msgs.append(f"свободных мест {info['free']} — купите Плюс на ещё один аккаунт (3 места)")
+        for m in msgs:
+            k = f"family_alert:{m[:60]}"
+            if time.time() - float(self.db.kv_get(k) or 0) > 6 * 3600:
+                self.db.kv_set(k, time.time())
+                self.log(f"svc.{sid}", "family", m)
+                await self.shop.notify("WARNING", "family", f"Яндекс Плюс: {m}")
 
     async def check_payment(self, method: str) -> Check:
         if not self.cfg.get(f"payments.{method}.enabled"):
