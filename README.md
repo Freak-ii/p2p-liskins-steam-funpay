@@ -37,6 +37,7 @@
 
 * **Windows, готовое приложение:** скачайте `Center-Windows-x64-portable.zip` (GitHub Actions → «Center Windows» → артефакт), распакуйте и запустите `Центр.vbs`. Python и Node.js уже внутри, центр работает в фоне со значком у часов (правый клик: панель, папка данных, выход). Собрать самому: `python packaging/build_center_windows.py`.
 * **Windows из исходников:** запустите `Center.bat`. Он сам поставит Python-пакеты и зависимости LisBot, затем откроет панель в браузере.
+* **Сервер 24/7 с обновлением на ходу («Орбита»):** `deploy/orbita install` на Ubuntu-VPS: systemd, авто-деплой из ветки, боты обновляются по одному без остановки остальных, откат сам при сбое, перенос данных с ПК одним зашифрованным файлом. Подробно: [docs/server.md](docs/server.md).
 * **VPS 24/7 в Docker:** `CENTER_SECRET_KEY=длинный-пароль docker compose up -d`, панели слушают 127.0.0.1 сервера, заходить через SSH-туннель (подробности в `docker-compose.yml`).
 * **Linux / macOS / VPS без Docker:** `./center.sh` (на сервере: `./center.sh --no-browser --host 0.0.0.0`).
 * Вручную: `pip install -r requirements.txt`, `cd bots/lisbot && npm ci --omit=dev`, затем `python -m center`.

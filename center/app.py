@@ -26,6 +26,7 @@ from center.vault import SecretStore
 from center.rtba import Rtba
 from center.steamshare import SteamShare
 from center.monitor import Monitor
+from center.rollout import Rollout
 from center.workers import DISABLED, MISSING_DEPS, RUNNING
 
 log = logging.getLogger("center")
@@ -81,6 +82,7 @@ class Center:
         self.readiness = Readiness(self)
         self.tg = TelegramControl(self)
         self.updates = Updates(self)
+        self.rollout = Rollout(self)          # Орбита: обновление ботов на ходу (серверный режим)
 
     def enabled(self, name: str) -> bool:
         return bool(self.cfg.worker(name).get("enabled", True))
@@ -104,13 +106,27 @@ class Center:
                 continue
             if self.cfg.autostart(name):
                 await w.start("автозапуск центра")
+            elif w.detached and await self._still_running(w):
+                # серверный режим: бот продолжил работать, пока центр перезапускался на новой версии, —
+                # это не автозапуск, а подхват уже запущенного процесса (новый экземпляр не создаётся)
+                await w.start("подхват после перезапуска центра")
             elif not w.detail:
                 w._set(w.state, "не запущен: запустите кнопкой «Запустить»")
         self._poll_task = asyncio.create_task(self._poll_loop(), name="center-poll")
+        await self.rollout.start()
+
+    @staticmethod
+    async def _still_running(w) -> bool:
+        try:
+            return await w.find_running() is not None
+        except Exception:  # noqa: BLE001
+            return False
 
     async def shutdown(self, stop_timeout: float = 15) -> None:
         if self._poll_task:
             self._poll_task.cancel()
+        if self.rollout.task and not self.rollout.task.done():
+            self.rollout.task.cancel()
         await asyncio.gather(*(w.stop("завершение центра", timeout=stop_timeout) for w in self.workers.values()),
                              return_exceptions=True)
         await self.backup.stop()
@@ -120,7 +136,8 @@ class Center:
         await self.agents.stop()
         await self.coordinator.stop()
         await self.monitor.stop()
-        self.events.add("center", "info", "center.stop", "Центр остановлен")
+        self.events.add("center", "info", "center.stop", "Центр перезапускается на новой версии (боты работают)"
+                        if self.rollout.handover else "Центр остановлен")
         self.events.close()
         self.steamshare.close()
 

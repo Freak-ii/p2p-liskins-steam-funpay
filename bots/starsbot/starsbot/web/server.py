@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import csv
 import io
 import datetime as dt
@@ -222,7 +223,8 @@ def make_app(sup, log_handler=None) -> web.Application:
         raise resp
 
     async def ping(request: web.Request):
-        return web.json_response({"app": "starsbot", "profile": "giftshop" if shop else "stars", "ok": True})
+        return web.json_response({"app": "starsbot", "profile": "giftshop" if shop else "stars", "ok": True,
+                                  "pid": os.getpid()})
 
     def back(request: web.Request, msg: str, default: str = "/") -> web.HTTPFound:
         ref = request.headers.get("Referer")

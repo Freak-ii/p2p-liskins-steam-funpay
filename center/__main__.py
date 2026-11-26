@@ -20,6 +20,10 @@ log = logging.getLogger("center")
 
 def _port_free(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if sys.platform != "win32":
+            # как и сам веб-сервер: после перезапуска центра порт держат соединения в TIME_WAIT (до минуты),
+            # занятым его это не делает (на Windows SO_REUSEADDR значит другое — там не ставим)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((host, port))
             return True
