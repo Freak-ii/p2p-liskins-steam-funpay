@@ -644,21 +644,22 @@ class Engine:
         await self._verify_offer(o, sent.offer_id)
 
     CONFIRM_RETRY_DELAYS = (60, 120, 240)    # Steam 429 на подтверждении: повтор через 1, 2 и 4 минуты
+    CONFIRM_RETRY_CODES = ("rate_limit", "network", "timeout", "server")   # как горячая правка на ПК 28.11
 
     async def confirm_with_retry(self, oid: str, offer_id: str) -> bool:
-        """Подтвердить трейд в Steam Guard. На 429 (Steam ограничил частоту — обычно после частых входов) не роняем
+        """Подтвердить трейд в Steam Guard. На 429 (Steam ограничил частоту — обычно после частых входов) и сбоях сети не роняем
         выдачу, а ждём и пробуем снова: трейд уже создан, второй отправлять нельзя."""
         delays = list(self.CONFIRM_RETRY_DELAYS)
         while True:
             try:
                 return await self.steam.confirm_offer(offer_id)
             except SteamError as e:
-                if e.code != "rate_limit" or not delays:
+                if e.code not in self.CONFIRM_RETRY_CODES or not delays:
                     log.warning("подтверждение трейда %s: %s", offer_id, e)
                     return False
                 wait = delays.pop(0)
                 self.db.add_event(oid, "confirm_rate_limit", offer_id=offer_id, retry_in=wait)
-                log.warning("подтверждение трейда %s: Steam 429, повтор через %d с", offer_id, wait)
+                log.warning("подтверждение трейда %s: %s, повтор через %d с", offer_id, e, wait)
                 await asyncio.sleep(wait)
 
     def _is_lost_offer(self, off: dict, o, link, need: int) -> bool:
