@@ -500,7 +500,7 @@ class GiftService:
 
     async def stock_sync(self, balance: int | None) -> None:
         g = self.gcfg
-        if not g.get("stock_sync", True) or self.engine.paused:
+        if not g.get("stock_sync", True) or self.engine.paused or not getattr(self.engine, "funpay_on", True):
             return
         free = self.capacity(balance)
         extra = 0
@@ -523,7 +523,7 @@ class GiftService:
             active = not off and (amount > 0 or not g.get("deactivate_when_empty", True))
             try:
                 await self.engine.fp.update_lot(int(lot["offer_id"]), int(self.cfg.funpay.node_id),
-                                                amount=max(amount, 1 if active else 0), active=active)
+                                                amount=max(amount, 1), active=active)
                 self.db.kv_set(key, amount)
                 self.db.add_event("-", "gift_lot_stock", offer_id=lot["offer_id"], stars=stars, amount=amount,
                                   active=active)

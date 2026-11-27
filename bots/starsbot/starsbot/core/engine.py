@@ -99,6 +99,11 @@ class Engine:
     def lots(self) -> list[dict]:
         return [l for l in (self.cfg.funpay.lots or []) if l.get("stars")]
 
+    @property
+    def funpay_on(self) -> bool:
+        """false — режим «Только поставщик»: на FunPay бот не заходит (starsbot/funpay/off.py)."""
+        return bool((self.cfg.get("funpay") or {}).get("enabled", True))
+
     def orbit_closed(self, *keys: str) -> bool:
         """Позиция снята с орбиты в Центре (Пульт Орбиты): её лоты и товары держим выключенными."""
         return self.orbit is not None and self.orbit.blocked(*keys)
@@ -1227,7 +1232,7 @@ class Engine:
     async def price_guard(self) -> None:
         """Цена лота не ниже безубытка + минимальная маржа (растёт TON или Fragment — растёт и цена)."""
         s = self.cfg.get("safety") or {}
-        if not s.get("price_guard", True) or self.econ is None or self.paused:
+        if not self.funpay_on or not s.get("price_guard", True) or self.econ is None or self.paused:
             return
         if not self.cost_per_star_ton() or not self.econ.effective_rate()[0]:
             return
@@ -1485,7 +1490,7 @@ class Engine:
             balance = balance - self.premium.committed_ton()   # TON под заказы Premium звёздам не обещаем
         for ch in self.channels.values():          # кошелёк общий: остатки на других площадках — по тому же балансу
             await ch.stock_sync(balance, per_star, committed)
-        if not self.cfg.funpay.stock_sync or self.paused or not per_star:
+        if not self.funpay_on or not self.cfg.funpay.stock_sync or self.paused or not per_star:
             return
         free_ton = max(0.0, balance - float(self.cfg.ton.fee_reserve_ton) - committed * per_star)
         if not self.fragment_ok and self.cfg.fragment.hide_lots_when_down:
@@ -1504,7 +1509,7 @@ class Engine:
             active = not off and (amount > 0 or not self.cfg.funpay.deactivate_when_empty)
             try:
                 await self.fp.update_lot(int(lot["offer_id"]), int(self.cfg.funpay.node_id),
-                                         amount=max(amount, 1 if active else 0), active=active)
+                                         amount=max(amount, 1), active=active)
                 self.db.kv_set(key, amount)
                 self.db.add_event("-", "lot_stock", offer_id=lot["offer_id"], stars=stars, amount=amount, active=active)
             except FunPayError as e:
@@ -1594,7 +1599,7 @@ class Engine:
                                    f"вручную (/approve {oid}) или уточните в чате.", order_id=oid)
 
     async def raise_lots(self) -> None:
-        if not self.cfg.funpay.auto_raise or self.paused or not int(self.cfg.funpay.game_id or 0):
+        if not self.funpay_on or not self.cfg.funpay.auto_raise or self.paused or not int(self.cfg.funpay.game_id or 0):
             return
         last = float(self.db.kv_get("last_raise", 0))
         if time.time() - last < float(self.cfg.funpay.raise_interval_minutes) * 60:
@@ -1634,7 +1639,7 @@ class Engine:
 
     async def rtba_step(self) -> None:
         cfg = self.cfg.rtba
-        if self.paused:
+        if self.paused or not self.funpay_on:
             return
         gift_lots = self.gifts.lots if self.gifts is not None and self.gifts.enabled else []
         entries = [(l, "username") for l in self.lots] + [(l, "gift") for l in gift_lots]
@@ -2218,7 +2223,60 @@ class Engine:
     def no_lots_yet(self) -> bool:
         return not any(l.get("offer_id") for l in (self.cfg.funpay.lots or []))
 
+    async def park_funpay(self) -> str:
+        """Режим «Только поставщик»: один раз выключить свои лоты FunPay, чтобы покупатели не платили за лоты,
+        которые бот больше не обслуживает. Потом бот на FunPay не заходит, пока FunPay снова не включат."""
+        from starsbot.orbit import lot_groups
+        targets = [(prefix, lot, node) for _k, lots, prefix, node in lot_groups(self)
+                   for lot in lots if lot.get("offer_id")]
+        ids = sorted({str(l["offer_id"]) for _p, l, _n in targets})
+        parked = self.db.kv_get("funpay_parked") or {}
+        if not ids:
+            return "лотов FunPay нет"
+        if set(ids) <= set(parked.get("lots") or []):
+            return "лоты FunPay уже выключены"
+        if self.cfg.general.dry_run:
+            return "тестовый режим: лоты FunPay выключатся при запуске в боевом режиме"
+        client = self.fp.park_client() if hasattr(self.fp, "park_client") else None
+        if client is None:
+            await self.notifier.notify("WARNING", "funpay_park", "Режим «Только поставщик»: golden_key не задан, "
+                                       f"поэтому лоты FunPay ({', '.join(ids)}) бот выключить не может — выключите "
+                                       "их на FunPay вручную", throttle_key="funpay_park")
+            return "нет golden_key"
+        done, failed = [], []
+        try:
+            await client.login()
+            for prefix, lot, node in targets:
+                oid = str(lot["offer_id"])
+                try:
+                    await client.update_lot(int(oid), int(node), amount=1, active=False)
+                    self.db.kv_set(f"{prefix}:{oid}", 0)
+                    done.append(oid)
+                except FunPayError as e:
+                    failed.append(f"{oid}: {e}")
+        except FunPayError as e:
+            failed.append(str(e))
+        finally:
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self.db.kv_set("funpay_parked", {"ts": time.time(), "lots": sorted(set(done) | set(parked.get("lots") or []))})
+        self.db.add_event("-", "funpay_parked", lots=done, failed=failed)
+        if failed:
+            await self.notifier.notify("WARNING", "funpay_park", "Режим «Только поставщик»: не все лоты FunPay "
+                                       "выключены — " + "; ".join(failed) + ". Выключите их вручную или "
+                                       "перезапустите бота", throttle_key="funpay_park")
+        else:
+            await self.notifier.notify("INFO", "funpay_park", f"Режим «Только поставщик»: лоты FunPay выключены "
+                                       f"({len(done)}). Дальше бот на FunPay не заходит")
+        return f"выключено {len(done)}, ошибок {len(failed)}"
+
     def start_banner(self) -> str:
+        if not self.funpay_on:
+            return (f"🤖 Бот запущен в режиме «Только поставщик» (FunPay выключен), кошелёк: "
+                    f"{self.wallet.friendly_address}, Fragment: {'ok' if self.fragment_ok else 'нет связи'}"
+                    f"{' · DRY-RUN' if self.cfg.general.dry_run else ''}")
         return (f"🤖 Бот запущен. FunPay: {self.fp.username}, кошелёк: {self.wallet.friendly_address}, Fragment: "
                 f"{'ok' if self.fragment_ok else 'нет связи'}{' · DRY-RUN' if self.cfg.general.dry_run else ''}")
 
@@ -2232,14 +2290,22 @@ class Engine:
         if other:
             raise RuntimeError(f"уже работает другой экземпляр StarsBot на этой базе (pid {other.get('pid')}). "
                                "Закройте его (диспетчер задач → python.exe) и запустите бота снова.")
-        await self.fp.login()
+        fp_on = self.funpay_on
+        if fp_on:
+            await self.fp.login()
+            self.db.kv_set("funpay_parked", None)
         await self.recover()
         await self.ensure_fragment(force=True)
-        if not self.cfg.general.dry_run:
+        if not fp_on:
+            try:
+                log.info("режим «Только поставщик»: %s", await self.park_funpay())
+            except Exception as e:  # noqa: BLE001 — снабжение магазина важнее
+                log.warning("выключение лотов FunPay: %s", e)
+        elif not self.cfg.general.dry_run:
             # остатки, записанные в тестовом режиме, на FunPay не отправлялись: первая синхронизация
             # в боевом режиме должна выставить наличие и включить лоты заново
             self.reset_lot_amounts()
-        lm = getattr(self, "lot_manager", None)
+        lm = getattr(self, "lot_manager", None) if fp_on else None
         if lm is not None:
             try:
                 msg = await lm.refresh_texts()
@@ -2257,24 +2323,24 @@ class Engine:
                 log.warning("автовыставление лотов: %s", e)
         await self.notifier.notify("INFO", "started", self.start_banner())
         self.notifier.command_handler = self.handle_command
-        loops = [
-            self._loop("funpay", float(self.cfg.funpay.poll_interval), self.funpay_poll),
+        loops = ([self._loop("funpay", float(self.cfg.funpay.poll_interval), self.funpay_poll)] if fp_on else []) + [
             self._loop("ton_watch", 8, self.watch_purchases),
             self._loop("wallet", 90, self.wallet_watch),
             self._loop("timers", 30, self.timers),
             self._loop("watchdog", 120, self.watchdog),
             self._loop("fragment_keepalive", 120, self.fragment_keepalive),
             self._loop("backup", 3600, self.backup_db),
-            self._loop("raise", 300, self.raise_lots),
-            self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),
-            self._loop("price_guard", 60 * float((self.cfg.get("safety") or {}).get("price_guard_minutes") or 10),
-                       self.price_guard),
             self.deliver_worker(),
             self.notifier.poll_commands(),
             self.lease_keeper(),
             self._loop("remote_inbox", 15, self.remote_inbox),
             self._loop("orbit", 5, self.orbit.tick),
         ]
+        if fp_on:                                # цены, подъём и защита цены — только для лотов FunPay
+            loops += [self._loop("raise", 300, self.raise_lots),
+                      self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),
+                      self._loop("price_guard", 60 * float((self.cfg.get("safety") or {}).get("price_guard_minutes")
+                                                           or 10), self.price_guard)]
         if self.analytics:
             loops.append(self._loop("analytics", 600, self.analytics.tick))
         if self.gifts is not None and self.gifts.enabled:

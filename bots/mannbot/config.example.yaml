@@ -16,6 +16,7 @@ general:
   log_level: INFO
 
 funpay:
+  enabled: true           # false — «Только поставщик»: ключи только магазину ShopBot, на FunPay не заходит
   golden_key: ${FUNPAY_GOLDEN_KEY}   # cookie golden_key из браузера
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
   poll_interval: 6        # сек между запросами к runner (не ставьте < 4)

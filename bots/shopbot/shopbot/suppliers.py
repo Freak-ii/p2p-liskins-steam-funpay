@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -31,8 +33,9 @@ class HttpSupplier:
 
     async def _call(self, method: str, path: str, **kw) -> dict:
         if len(self.token or "") < 16:
-            raise SupplierError(f"{self.name}: не задан suppliers.*.token (≥16 символов), такой же как supply.token "
-                                "в config.yaml бота-поставщика")
+            raise SupplierError(f"{self.name}: нет общего секрета поставщиков. Запустите магазин из Центра (секрет он "
+                                "передаёт сам) или впишите один и тот же ключ (≥16 символов) в ShopBot → Настройки "
+                                "→ «Общий секрет поставщиков» и в supply.token бота-поставщика")
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15),
                                              headers={"X-Supply-Token": self.token}) as s:
@@ -146,14 +149,41 @@ class DemoSupplier:
         return dict(o)
 
 
+ENV_TOKEN = "ORBITA_SUPPLY_TOKEN"      # общий секрет поставщиков: Центр создаёт его сам и передаёт всем ботам
+ENV_URLS = "ORBITA_SUPPLY_URLS"        # {"stars": "http://127.0.0.1:8804", ...} — настоящие порты ботов в Центре
+NAMES = ("stars", "premium", "gifts", "steam_keys")
+
+
+def supply_token(cfg, name: str) -> tuple[str, str]:
+    """(ключ, откуда). Под Центром — общий секрет Центра (его не нужно никуда вписывать), без Центра —
+    suppliers.<name>.token из config.yaml."""
+    env = os.environ.get(ENV_TOKEN, "")
+    if len(env) >= 16:
+        return env, "center"
+    own = str((cfg.get(f"suppliers.{name}") or {}).get("token") or "")
+    return own, ("config" if own else "")
+
+
+def supply_url(cfg, name: str) -> str:
+    """Адрес поставщика: свой из config.yaml, если его меняли, иначе тот, что сообщил Центр."""
+    from shopbot.config import DEFAULTS
+    own = str((cfg.get(f"suppliers.{name}") or {}).get("url") or "")
+    default = str(((DEFAULTS.get("suppliers") or {}).get(name) or {}).get("url") or "")
+    try:
+        center = json.loads(os.environ.get(ENV_URLS, "") or "{}").get(name) or ""
+    except (ValueError, AttributeError):
+        center = ""
+    return center if center and own in ("", default) else (own or default)
+
+
 def build_suppliers(cfg, *, demo: bool) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for name in ("stars", "premium", "gifts", "steam_keys"):
+    for name in NAMES:
         s = cfg.get(f"suppliers.{name}") or {}
         if demo:
             out[name] = DemoSupplier(name)
         elif s.get("kind") == "manual":
             out[name] = ManualSupplier(name, s.get("cost_rub") or 0)
         else:
-            out[name] = HttpSupplier(name, s.get("url") or "", s.get("token") or "")
+            out[name] = HttpSupplier(name, supply_url(cfg, name), supply_token(cfg, name)[0])
     return out

@@ -238,7 +238,8 @@ class PremiumService:
 
     # ------------------------------------------------------------------ наличие лотов
     async def stock_sync(self, balance: float, per_star: float | None, committed: int) -> None:
-        if not self.enabled or not self.c.get("stock_sync", True) or self.engine.paused:
+        if not self.enabled or not self.c.get("stock_sync", True) or self.engine.paused or \
+                not getattr(self.engine, "funpay_on", True):
             return
         free = self.free_ton(balance, per_star, committed)
         for lot in self.lots:
@@ -256,7 +257,7 @@ class PremiumService:
                 continue
             active = not off and (amount > 0 or not self.c.get("deactivate_when_empty", True))
             try:
-                await self.engine.fp.update_lot(int(lot["offer_id"]), self.node, amount=max(amount, 1 if active else 0),
+                await self.engine.fp.update_lot(int(lot["offer_id"]), self.node, amount=max(amount, 1),
                                                 active=active)
                 self.db.kv_set(key, amount)
                 self.db.add_event("-", "premium_lot_stock", offer_id=lot["offer_id"], months=months, amount=amount,
@@ -328,7 +329,7 @@ class PremiumService:
         return {"target": target, "reason": reason, "floor": floor, "best": best, "n": len(comps), "rank": rank}
 
     async def rtba_step(self) -> None:
-        if not self.enabled or self.engine.paused:
+        if not self.enabled or self.engine.paused or not getattr(self.engine, "funpay_on", True):
             return
         lots = [l for l in self.lots if l.get("offer_id")]
         if not lots:

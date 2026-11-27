@@ -45,15 +45,17 @@ pre{white-space:pre-wrap;margin:0;font:12px/1.4 ui-monospace,monospace}
 {% if app.demo %}<div class="banner" style="background:var(--blue)">ДЕМО: эмуляция FunPay и Steam, реальные аккаунты не используются</div>
 {% elif dry_run %}<div class="banner">Тестовый режим (dry-run): бот не отправляет сообщения и трейды
   <form method="post" action="/control" style="display:inline"><button name="action" value="dry_off" class="btn-mini" onclick="return confirm('Включить боевой режим? Бот начнёт отправлять сообщения и трейды.')">Включить боевой режим</button></form></div>{% endif %}
+{% if funpay_on is defined and not funpay_on %}<div class="banner" style="background:var(--blue)">Режим «Только поставщик»: FunPay выключен — ключи получает только Telegram-магазин, на FunPay бот не заходит · <a href="/settings#idle" style="color:inherit">включить FunPay</a></div>{% endif %}
 {% if paused %}<div class="banner" style="background:var(--red)">⏸ Бот на паузе — заказы фиксируются, но не обрабатываются</div>{% endif %}
 {% if app.restart_required %}<div class="banner" style="background:var(--blue)">Настройки изменены —
   <form method="post" action="/control" style="display:inline"><button name="action" value="restart" class="btn-mini">перезапустить бота</button></form></div>{% endif %}
 <header>
   <span class="logo">🔑 MannBot</span>
   <nav>
-    {% for href, name in [('/', 'Дашборд'), ('/orders', 'Заказы'), ('/customers', 'Клиенты'), ('/pricing', 'Цены / RTBA'), ('/messages', 'Сообщения'), ('/settings', 'Настройки'), ('/logs', 'Журнал')] %}
+    {% set funpay_on = funpay_on if funpay_on is defined else true %}
+    {% for href, name in [('/', 'Дашборд'), ('/orders', 'Заказы'), ('/customers', 'Клиенты')] + ([('/pricing', 'Цены / RTBA'), ('/messages', 'Сообщения')] if funpay_on else []) + [('/settings', 'Настройки'), ('/logs', 'Журнал')] %}
     <a href="{{href}}" class="{{ 'active' if path == href else '' }}">{{name}}</a>{% endfor %}
-    <a href="/ai" class="{{ 'active' if path == '/ai' else '' }}">ИИ-ответы{% if ai_pending %} <span class="chip c-amber">{{ai_pending}}</span>{% endif %}</a>
+    {% if funpay_on %}<a href="/ai" class="{{ 'active' if path == '/ai' else '' }}">ИИ-ответы{% if ai_pending %} <span class="chip c-amber">{{ai_pending}}</span>{% endif %}</a>{% endif %}
     <a href="/alerts" class="{{ 'active' if path == '/alerts' else '' }}">Алерты{% if alerts_open %} <span class="chip c-red">{{alerts_open}}</span>{% endif %}</a>
   </nav>
   <div class="row" style="margin-left:auto">

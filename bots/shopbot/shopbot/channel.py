@@ -98,7 +98,7 @@ class Channel:
                                                         prem_from=f"{mins.get('premium', 0):.0f}"),
                                  hidden, T.SHOWCASE_LINE)
         goods = [(t, {"url": self.link(p)}) for p, t in (("stars", "⭐ Звёзды"), ("gift", "🎁 Подарки"),
-                                                          ("premium", "💎 Premium"), ("steam_keys", "🎮 Steam"))
+                                                          ("premium", "💎 Premium"), ("steam_keys", "🔑 Ключи TF2"))
                  if p not in hidden]
         posts = {
             "open": (open_text, [[("🛒 Открыть магазин", {"url": self.app_link()})]]),

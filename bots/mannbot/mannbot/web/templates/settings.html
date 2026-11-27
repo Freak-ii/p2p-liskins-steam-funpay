@@ -3,8 +3,7 @@
 <div class="row" style="justify-content:space-between"><h1>Настройки</h1><a class="btn" href="/setup">Мастер настройки</a></div>
 {% if problems %}<div class="card" style="border-left:4px solid var(--amber)"><b>Проблемы конфигурации:</b><ul>{% for p in problems %}<li>{{p}}</li>{% endfor %}</ul></div>{% endif %}
 <div class="row" style="margin-bottom:12px">{% for section, fields in sections %}<a class="chip" href="#s-{{section}}">{{ titles[section] }}</a>{% endfor %}</div>
-<form method="post" autocomplete="off">
-{% for section, fields in sections %}
+{% macro cards(list) %}{% for section, fields in list %}
 <div class="card" id="s-{{section}}"><h2>{{ titles[section] }}</h2>
 <div class="cols">
 {% for key, label, typ, help in fields %}{% set name = section ~ '__' ~ key %}{% set value = val(section, key) %}
@@ -24,6 +23,12 @@
 {% endfor %}
 </div></div>
 {% endfor %}
+{% endmacro %}
+<form method="post" autocomplete="off">
+{{ cards(sections) }}
+{% if idle_sections %}<details class="card" id="idle"><summary><b>Выключено</b> — разделы FunPay: сейчас бот работает только поставщиком. Откройте, чтобы снова включить FunPay</summary>
+{{ cards(idle_sections) }}
+</details>{% endif %}
 <div style="position:sticky;bottom:0;padding:10px 0;background:var(--bg)"><button class="primary" style="font-size:15px;padding:9px 22px">Сохранить</button>
 <span class="muted" style="margin-left:10px">Файл: {{ config_path }}</span></div>
 </form>

@@ -269,7 +269,7 @@ class Assortment:
         return "assort [scan | pin <slug> | unpin <slug> | ban <slug> | unban <slug> | max N]"
 
     async def tick(self) -> None:
-        if self.enabled and self.due() and not self.engine.paused:
+        if self.enabled and self.due() and not self.engine.paused and getattr(self.engine, "funpay_on", True):
             try:
                 await self.scan()
             except Exception as e:  # noqa: BLE001

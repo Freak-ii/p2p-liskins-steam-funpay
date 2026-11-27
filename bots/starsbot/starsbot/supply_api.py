@@ -4,7 +4,8 @@ ShopBot продаёт в Telegram звёзды, подарки и Premium, а �
 обычным заказом StarsBot с channel='shop', поэтому кошелёк TON, seqno, очередь покупок, лимиты и риск-проверки
 общие с FunPay/Ozon/GGSEL — двойной траты нет.
 
-Доступ: заголовок X-Supply-Token = supply.token из config.yaml (минимум 16 символов; пусто — API выключен).
+Доступ: заголовок X-Supply-Token = общий секрет поставщиков от Центра (ORBITA_SUPPLY_TOKEN) или supply.token из
+config.yaml (минимум 16 символов; нет ни того, ни другого — API выключен).
   GET  /api/supply/ping                         → {app, ok, products}
   GET  /api/supply/quote?product=stars&amount=N → {available, cost_rub, cost_ton, reason}
        product=gift&amount=<звёзд в подарке>[&gift=<эмодзи>&gift_title=<название>], product=premium&months=3|6|12
@@ -16,6 +17,7 @@ ref идемпотентен: повторный POST с тем же ref воз�
 from __future__ import annotations
 
 import hmac
+import os
 import re
 import time
 from typing import Any
@@ -177,6 +179,16 @@ def status(engine, ref: str) -> dict:
     return order_status(o)
 
 
+ENV_TOKEN = "ORBITA_SUPPLY_TOKEN"
+
+
+def supply_tokens(cfg) -> list[str]:
+    """Какие ключи принимает /api/supply/*: общий секрет поставщиков от Центра (ORBITA_SUPPLY_TOKEN, его не нужно
+    вписывать руками) и supply.token из config.yaml, если задан. Короче 16 символов — не принимается."""
+    own = str((cfg.get("supply") or {}).get("token") or "")
+    return [t for t in (os.environ.get(ENV_TOKEN, ""), own) if len(t) >= 16]
+
+
 def install(app: web.Application, sup) -> None:
     """Регистрирует /api/supply/* и канал «shop». Вызывается из web/server.py одной строкой."""
 
@@ -187,9 +199,8 @@ def install(app: web.Application, sup) -> None:
         return e
 
     def check(request: web.Request) -> None:
-        token = str((sup.cfg.get("supply") or {}).get("token") or "")
         given = request.headers.get("X-Supply-Token", "")
-        if len(token) < 16 or not hmac.compare_digest(given, token):
+        if not any(hmac.compare_digest(given, t) for t in supply_tokens(sup.cfg)):
             raise web.HTTPUnauthorized(text="bad supply token")
 
     async def ping(request):

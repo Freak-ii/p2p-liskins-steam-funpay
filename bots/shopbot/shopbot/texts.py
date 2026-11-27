@@ -17,7 +17,8 @@ PRODUCT_WORDS = {"stars": "звёзды", "gift": "подарки", "premium": "
 PRODUCT_LINE = {"stars": "⭐ <b>Звёзды</b>", "gift": "🎁 <b>Подарки</b>", "premium": "💎 <b>Premium</b>",
                 "steam_keys": "🎮 <b>Steam</b>"}
 PRODUCT_BUTTON = {"stars": ("⭐ Звёзды", "buy:stars"), "gift": ("🎁 Подарки", "buy:gift"),
-                  "premium": ("💎 Premium", "buy:premium"), "steam_keys": ("🎮 Steam", "buy:steam_keys")}
+                  "premium": ("💎 Premium", "buy:premium"), "steam_keys": ("🔑 Ключи TF2", "buy:steam_keys")}
+STEAM_TOPUP_BUTTON = ("💳 Пополнить Steam", "sv:steam_topup")   # услуга «Пополнение Steam» прямо с главного экрана
 
 
 def goods_text(hidden: set[str] | frozenset = frozenset(), *, capital: bool = True) -> str:
@@ -43,15 +44,17 @@ def welcome(shop: str, hidden: set[str] | frozenset = frozenset()) -> str:
     return text.replace("Звёзды, подарки и Premium для Telegram", head, 1)
 
 
-def menu_buttons(hidden: set[str] | frozenset = frozenset()) -> list:
+def menu_buttons(hidden: set[str] | frozenset = frozenset(), *, steam_topup: bool = False) -> list:
     goods = [PRODUCT_BUTTON[p] for p in PRODUCT_BUTTON if p not in hidden]
     rows = [goods[i:i + 2] for i in range(0, len(goods), 2)]
+    if steam_topup:
+        rows.append([STEAM_TOPUP_BUTTON])
     return rows + MENU_BUTTONS[2:]
 
 
 MENU_BUTTONS = [
     [("⭐ Звёзды", "buy:stars"), ("🎁 Подарки", "buy:gift")],
-    [("💎 Premium", "buy:premium"), ("🎮 Steam", "buy:steam_keys")],
+    [("💎 Premium", "buy:premium"), ("🔑 Ключи TF2", "buy:steam_keys")],
     [("🛡 VPN и подписки", "buy:service")],
     [("💸 Продать", "sell"), ("👛 Баланс", "balance")],
     [("🤝 Пригласить друга", "ref"), ("ℹ️ Комиссии", "fees")],

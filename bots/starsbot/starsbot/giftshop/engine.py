@@ -124,7 +124,8 @@ class GiftShopEngine(Engine):
     def start_banner(self) -> str:
         acc = (self.gifts.account if self.gifts is not None else {}) or {}
         bal = self.gifts.balance if self.gifts is not None else None
-        return (f"🎁 TG Gift запущен. FunPay: {self.fp.username}, аккаунт подарков: "
+        fp = f"FunPay: {self.fp.username}" if self.funpay_on else "режим «Только поставщик» (FunPay выключен)"
+        return (f"🎁 TG Gift запущен. {fp}, аккаунт подарков: "
                 f"@{acc.get('username') or '?'}, звёзд: {bal if bal is not None else '?'}"
                 f"{' · DRY-RUN' if self.cfg.general.dry_run else ''}")
 
@@ -248,7 +249,7 @@ class GiftShopEngine(Engine):
         return stars, self.cost_per_star_rub(), "giftshop"
 
     async def rtba_step(self) -> None:
-        if self.paused or self.gifts is None:
+        if self.paused or self.gifts is None or not self.funpay_on:
             return
         entries = self.rtba_entries()
         if not entries:
@@ -342,7 +343,7 @@ class GiftShopEngine(Engine):
     async def price_guard(self) -> None:
         """Цена лота не ниже себестоимости подарка + минимальная маржа (дорожают звёзды — дорожает и подарок)."""
         s = self.cfg.get("safety") or {}
-        if not s.get("price_guard", True) or self.paused or self.gifts is None:
+        if not s.get("price_guard", True) or self.paused or self.gifts is None or not self.funpay_on:
             return
         for lot in self.gifts.all_lots:
             if not lot.get("offer_id"):

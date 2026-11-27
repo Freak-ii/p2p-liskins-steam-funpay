@@ -70,6 +70,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("app", sup.status())
         ctx.setdefault("paused", sup.engine.paused)
         ctx.setdefault("dry_run", sup.cfg.general.dry_run)
+        ctx.setdefault("funpay_on", schema.gate_on(sup.cfg, "funpay"))
         ctx.setdefault("ai_pending", db.scalar("SELECT COUNT(*) FROM ai_replies WHERE status='pending'"))
         ctx.setdefault("alerts_open", db.scalar("SELECT COUNT(*) FROM alerts WHERE acknowledged=0 AND level!='INFO'"))
         ctx.setdefault("flash", request.query.get("msg", "") if request is not None else "")
@@ -426,7 +427,8 @@ def make_app(sup, log_handler=None) -> web.Application:
             sup.save(upd)
             raise web.HTTPFound("/settings?msg=" + ("Сохранено. Перезапустите бота, чтобы применить"
                                                     if sup.restart_required else "Сохранено"))
-        return render("settings.html", request, sections=schema.SETTINGS, titles=schema.SECTION_TITLES,
+        active, idle = schema.split_sections(sup.cfg)
+        return render("settings.html", request, sections=active, idle_sections=idle, titles=schema.SECTION_TITLES,
                       val=lambda s, k: schema.get_value(sup.cfg, s, k),
                       secret=lambda s, k: sup.secret_is_set(s, k), problems=sup.problems,
                       config_path=str(sup.config_path))
@@ -495,7 +497,9 @@ def make_app(sup, log_handler=None) -> web.Application:
                 else:
                     f["value"] = schema.get_value(sup.cfg, section, key)
                 out.append(f)
-            sections.append({"id": section, "title": schema.SECTION_TITLES.get(section, section), "fields": out})
+            gate = schema.SECTION_GATE.get(section)
+            sections.append({"id": section, "title": schema.SECTION_TITLES.get(section, section), "fields": out,
+                             "idle": bool(gate and not schema.gate_on(sup.cfg, gate))})
         lots = [{k: l.get(k) for k in ("offer_id", "node_id", "game_id", "keys_per_unit")}
                 for l in (sup.cfg.funpay.lots or []) if l.get("offer_id")]
         return web.json_response({"sections": sections, "lots": lots, "problems": sup.problems,

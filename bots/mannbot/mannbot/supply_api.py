@@ -5,7 +5,8 @@ kind=http, url=http://127.0.0.1:8801 и одного токена. Заказ м
 SHOP-<ref>: тот же склад, резерв assetid, подтверждение Steam Guard, реестр обменов с LisBot и защита от
 двойной выдачи. Чата FunPay у такого заказа нет, покупателю пишет ShopBot.
 
-Доступ: заголовок X-Supply-Token = supply.token из config.yaml MannBot (минимум 16 символов; пусто — API выключен).
+Доступ: заголовок X-Supply-Token = общий секрет поставщиков от Центра (ORBITA_SUPPLY_TOKEN) или supply.token из
+config.yaml MannBot (минимум 16 символов; нет ни того, ни другого — API выключен).
   GET  /api/supply/ping                                   → {app, ok, products}
   GET  /api/supply/quote?product=steam_keys&amount=N      → {available, cost_rub, free, reason}
   POST /api/supply/orders {ref, product, username|trade_url, amount} → {ok, order_id, status}
@@ -16,6 +17,7 @@ detail: ShopBot просит новую ссылку и создаёт новы�
 from __future__ import annotations
 
 import hmac
+import os
 import re
 from typing import Any
 
@@ -95,13 +97,22 @@ async def create(engine, sup_state: str, ref: str, product: str, trade_url: str,
     return {"ok": True, **order_status(engine.db.get_order(oid))}
 
 
+ENV_TOKEN = "ORBITA_SUPPLY_TOKEN"
+
+
+def supply_tokens(cfg) -> list[str]:
+    """Какие ключи принимает /api/supply/*: общий секрет поставщиков от Центра (ORBITA_SUPPLY_TOKEN, его не нужно
+    вписывать руками) и supply.token из config.yaml, если задан. Короче 16 символов — не принимается."""
+    own = str((cfg.get("supply") or {}).get("token") or "")
+    return [t for t in (os.environ.get(ENV_TOKEN, ""), own) if len(t) >= 16]
+
+
 def install(app: web.Application, sup) -> None:
     """Регистрирует /api/supply/*. Вызывается из web/server.py; путь /api/supply/ — без входа в панель."""
 
     def check(request: web.Request) -> None:
-        token = str((sup.cfg.get("supply") or {}).get("token") or "")
         given = request.headers.get("X-Supply-Token", "")
-        if len(token) < 16 or not hmac.compare_digest(given, token):
+        if not any(hmac.compare_digest(given, t) for t in supply_tokens(sup.cfg)):
             raise web.HTTPUnauthorized(text="bad supply token")
 
     async def ping(request):

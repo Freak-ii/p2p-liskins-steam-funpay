@@ -303,7 +303,17 @@ class ShopTelegram:
 
     async def menu(self, uid: int) -> None:
         hidden = self.shop.orbit.menu_hidden() if getattr(self.shop, "orbit", None) is not None else set()
-        await self.send(uid, T.welcome(self.cfg.get("general.shop_name"), hidden), T.menu_buttons(hidden))
+        await self.send(uid, T.welcome(self.cfg.get("general.shop_name"), hidden),
+                        T.menu_buttons(hidden, steam_topup=self.steam_topup_open()))
+
+    def steam_topup_open(self) -> bool:
+        """Кнопка «💳 Пополнить Steam» на главном экране: услуга есть в каталоге и открыта RTBA."""
+        svc = getattr(self.shop, "services", None)
+        try:
+            return svc is not None and svc.catalog.item("steam_topup") is not None and \
+                self.shop.rtba.is_open("svc.steam_topup")
+        except Exception:  # noqa: BLE001 — кнопка не должна ломать меню
+            return False
 
     # ------------------------------------------------------------------ кнопки
     async def on_callback(self, uid: int, data: str) -> None:

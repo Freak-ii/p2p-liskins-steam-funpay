@@ -83,6 +83,8 @@ class StarsOrbit:
             lots = [l for l in lots if l.get("offer_id")]
             if not lots:
                 return "skip: лотов нет"
+            if not getattr(e, "funpay_on", True):
+                return "skip: FunPay выключен (только поставщик)"
             for lot in lots:
                 await e.fp.update_lot(int(lot["offer_id"]), node, active=False)
                 e.db.kv_set(f"{prefix}:{lot['offer_id']}", 0)

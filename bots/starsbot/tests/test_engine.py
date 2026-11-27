@@ -92,7 +92,8 @@ def test_fragment_session_expired_hides_lots_and_blocks_purchases(tmp_path):
     assert not ok and e.fragment_status["session"] == "expired"
     assert not wallet.history
     assert sup.db.get_order(oid)["status"] in (S.READY.value, S.AWAITING_USERNAME.value)
-    assert all(l["amount"] == "0" for l in fp.lots.values() if l)
+    # скрыт = выключен; наличие 1, потому что FunPay не сохраняет лот с наличием 0
+    assert all(not l.get("active") and l["amount"] == "1" for l in fp.lots.values() if l)
     assert sup.db.scalar("SELECT COUNT(*) FROM alerts WHERE code LIKE 'fragment%'") >= 1
 
 
@@ -293,7 +294,8 @@ def test_fragment_keepalive_hides_lots_before_payment(tmp_path):
         return first
     first = asyncio.run(go())
     assert first == "ok" and e.fragment_status["session"] == "expired"
-    assert all(l["amount"] == "0" for l in fp.lots.values() if l)
+    # скрыт = выключен; наличие 1, потому что FunPay не сохраняет лот с наличием 0
+    assert all(not l.get("active") and l["amount"] == "1" for l in fp.lots.values() if l)
     e.cfg.fragment.keepalive_minutes = 0                 # выключено — ничего не делает
     e._fragment_state(session="ok", checked_at=0)
     asyncio.run(e.fragment_keepalive())
