@@ -42,7 +42,10 @@ SETTINGS = [  # (путь, подпись, тип)
     ("payments.gift.haircut_pct", "Оплата подарками: скидка оценки, %", "float"),
     ("payments.skins.trade_url", "Оплата скинами: ссылка на обмен магазина", "str"),
     ("payments.skins.haircut_pct", "Оплата скинами: скидка к Market.CSGO, %", "float"),
-    ("payments.card.enabled", "Карта (эквайринг) включена", "bool"),
+    ("payments.card.enabled", "Карта / СБП включена", "bool"),
+    ("payments.card.provider", "Карта / СБП: провайдер (yookassa | crystalpay | aaio)", "str"),
+    ("payments.crystalpay.sbp_method", "CrystalPAY: метод СБП (auto или ключ метода)", "str"),
+    ("payments.crystalpay.callback_url", "CrystalPAY: адрес уведомлений (…/api/pay/crystalpay, если панель в интернете)", "str"),
     ("miniapp.url", "Мини-приложение: постоянный адрес (https)", "str"),
     ("buyback.fee_pct", "Выкуп: комиссия, %", "float"), ("buyback.stars.usd_per_star", "Выкуп звёзд: $ за 1 ⭐", "float"),
     ("buyback.gifts.gift_account", "Аккаунт приёма подарков (@)", "str"),
@@ -57,6 +60,9 @@ SETTINGS = [  # (путь, подпись, тип)
 SECRET_FIELDS = [("telegram.bot_token", "Токен бота магазина"), ("payments.card.yookassa.shop_id", "ЮKassa shopId"),
                  ("payments.card.yookassa.secret_key", "ЮKassa секретный ключ"),
                  ("payments.crypto.cryptopay.token", "Crypto Pay токен"),
+                 ("payments.crystalpay.login", "CrystalPAY: логин кассы"),
+                 ("payments.crystalpay.secret", "CrystalPAY: секретный ключ"),
+                 ("payments.crystalpay.salt", "CrystalPAY: Salt"),
                  ("suppliers.stars.token", "Токен поставщика StarsBot"), ("suppliers.gifts.token", "Токен TG Gift"),
                  ("suppliers.premium.token", "Токен Premium (StarsBot)")]
 
@@ -110,7 +116,7 @@ def make_app(app_state) -> web.Application:
 
     @web.middleware
     async def auth(request, handler):
-        if request.path in ("/login", "/api/ping", "/app", "/app/"):   # /app — публичная витрина мини-приложения
+        if request.path in ("/login", "/api/ping", "/app", "/app/", "/api/pay/crystalpay"):   # /app — публичная витрина мини-приложения
             return await handler(request)
         role = role_for(request.cookies.get(COOKIE, "") or request.headers.get("X-Dashboard-Token", ""))
         if not role:
@@ -486,6 +492,31 @@ def make_app(app_state) -> web.Application:
         await st.shop.poll_payments()
         return web.Response(text="<h3>Демо-оплата прошла ✅</h3><p>Вернитесь в демо-чат.</p>", content_type="text/html")
 
+    async def crystalpay_callback(request):
+        """Уведомление CrystalPAY (только конечные статусы). 200 — принято или не наше; 403 — неверная подпись
+        (касса повторит до 10 раз, это безопасно). Статус берём из API, не из тела."""
+        try:
+            data = await request.json()
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise web.HTTPBadRequest(text="json expected")
+        if not await st.shop.on_gateway_callback("crystalpay", data):
+            st.db.audit("crystalpay", "callback_rejected", str(data.get("id") or "")[:64], request.remote or "")
+            raise web.HTTPForbidden(text="bad signature")
+        return web.json_response({"ok": True})
+
+    async def api_crystalpay(request):
+        need(request, "operator")
+        from shopbot.payments import PaymentError, crystalpay_from
+        cp = crystalpay_from(st.cfg, sbp=True)
+        if not cp.configured:
+            return web.json_response({"configured": False, "error": "логин и секретный ключ кассы не заданы"})
+        try:
+            return web.json_response({"configured": True, "salt": bool(cp.salt), **(await cp.summary())})
+        except PaymentError as e:
+            return web.json_response({"configured": True, "error": str(e)})
+
     app = web.Application(middlewares=[auth])
     app.add_routes([
         web.get("/login", login), web.post("/login", login), web.get("/api/ping", ping),
@@ -501,5 +532,6 @@ def make_app(app_state) -> web.Application:
         web.post("/channel", channel_action), web.get("/settings", settings), web.post("/settings", settings),
         web.post("/alerts/ack", alerts_ack), web.get("/demo", demo_page), web.get("/api/demo/chat", demo_chat),
         web.post("/api/demo/send", demo_send), web.get("/demo/pay/{pid}", demo_pay),
+        web.post("/api/pay/crystalpay", crystalpay_callback), web.get("/api/crystalpay", api_crystalpay),
     ])
     return app

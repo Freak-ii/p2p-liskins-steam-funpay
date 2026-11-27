@@ -223,7 +223,8 @@ class Shop:
         prov = self.providers[method]
         try:
             pay = await prov.create(oid, q.total_rub, f"{q.title} · заказ {oid}", asset=q.asset,
-                                    pay_amount=q.pay_amount, ttl=int(ttl))
+                                    pay_amount=q.pay_amount, ttl=int(ttl),
+                                    payer={"telegram_id": uid, "telegram_username": user["username"] or ""})
         except PaymentError as e:
             self.db.update_order(oid, status="cancelled", fail_reason=str(e))
             await self.notify("WARNING", f"pay_{method}_error", f"#{oid}: не создан платёж ({e})")
@@ -698,24 +699,46 @@ class Shop:
         now = time.time()
         for o in self.db.q("SELECT * FROM orders WHERE status IN ('awaiting_payment','awaiting_asset') "
                            "AND payment_id!=''"):
-            prov = self.providers.get(o["pay_method"] if o["kind"] == "buy" else "stars")
-            if prov is None:
-                continue
-            try:
-                st = await prov.check(o["payment_id"])
-            except PaymentError as e:
-                log.warning("проверка платежа %s: %s", o["id"], e)
-                continue
-            if st == PAID:
-                self.db.exec("UPDATE payments SET status='paid', updated_at=? WHERE id=?", (now, o["payment_id"]))
-                await self.on_paid(o["id"])
-            elif st == CANCELED or (o["expires_at"] and now > float(o["expires_at"])):
-                self.db.exec("UPDATE payments SET status='canceled', updated_at=? WHERE id=?", (now, o["payment_id"]))
-                self.db.update_order(o["id"], status="expired")
+            await self._check_payment(o, now)
+        # шлюз мог провести оплату на границе срока (processing → payed): истёкшие счета шлюза ещё час
+        # проверяем на поздний приход — иначе деньги на кассе, а заказ «истёк»
+        for o in self.db.q("SELECT o.* FROM orders o JOIN payments p ON p.id=o.payment_id WHERE o.status='expired' "
+                           "AND p.provider IN ('crystalpay','aaio') AND o.expires_at>?", (now - 3600,)):
+            await self._check_payment(o, now)
         # подарок без платежа (передача на аккаунт) тоже истекает
         for o in self.db.q("SELECT * FROM orders WHERE status='awaiting_asset' AND payment_id='' AND expires_at<?",
                            (now,)):
             self.db.update_order(o["id"], status="expired")
+
+    async def _check_payment(self, o, now: float) -> str:
+        prov = self.providers.get(o["pay_method"] if o["kind"] == "buy" else "stars")
+        if prov is None:
+            return ""
+        try:
+            st = await prov.check(o["payment_id"])
+        except PaymentError as e:
+            log.warning("проверка платежа %s: %s", o["id"], e)
+            return ""
+        if st == PAID:
+            self.db.exec("UPDATE payments SET status='paid', updated_at=? WHERE id=?", (now, o["payment_id"]))
+            await self.on_paid(o["id"])
+        elif o["status"] != "expired" and (st == CANCELED or (o["expires_at"] and now > float(o["expires_at"]))):
+            self.db.exec("UPDATE payments SET status='canceled', updated_at=? WHERE id=?", (now, o["payment_id"]))
+            self.db.update_order(o["id"], status="expired")
+        return st
+
+    async def on_gateway_callback(self, provider: str, data: dict) -> bool:
+        """Уведомление шлюза (CrystalPAY callback). Подпись проверяет провайдер; статус всё равно берём из API,
+        поэтому повтор и подделанное тело ничего не выдают. Повторы безопасны (on_paid идемпотентен по статусу)."""
+        prov = next((p for p in self.providers.values() if getattr(p, "name", "") == provider), None)
+        if prov is None or not hasattr(prov, "verify_callback") or not prov.verify_callback(data):
+            return False
+        o = self.db.one("SELECT * FROM orders WHERE payment_id=? AND status IN ('awaiting_payment','awaiting_asset',"
+                        "'expired')",
+                        (str(data.get("id")),))
+        if o is not None:
+            await self._check_payment(o, time.time())
+        return True
 
     async def poll_deliveries(self) -> None:
         await self.remind_expiring()

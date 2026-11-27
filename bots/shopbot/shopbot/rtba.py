@@ -28,7 +28,7 @@ POINTS: list[tuple[str, str, str]] = [
     ("sell.stars", "Выкуп звёзд за крипту", "Выкуп"), ("sell.gift", "Выкуп подарков", "Выкуп"),
     ("pay.wallet", "Крипта на общий кошелёк", "Оплата"), ("pay.gift", "Оплата подарками", "Оплата"),
     ("pay.skins", "Оплата скинами Steam", "Оплата"),
-    ("pay.card", "Оплата картой (эквайринг)", "Оплата"), ("pay.crypto", "Оплата криптой (@CryptoBot)", "Оплата"),
+    ("pay.card", "Оплата картой / СБП", "Оплата"), ("pay.crypto", "Оплата криптой (@CryptoBot)", "Оплата"),
     ("pay.stars", "Оплата звёздами", "Оплата"), ("pay.balance", "Оплата с баланса", "Оплата"),
     ("payout.crypto", "Выплаты криптой", "Выплаты"), ("payout.stars", "Выплаты звёздами", "Выплаты"),
     ("referral", "Реферальная программа", "Функции"), ("channel.autopost", "Автопост цен в канал", "Функции"),
@@ -226,6 +226,15 @@ class RTBA:
         if method == "crypto":
             r = self.shop.rates.snapshot()
             return Check(True, value=f"USDT {r['usdt_rub']} ₽ · TON {r['ton_rub']} ₽")
+        if method == "card" and getattr(prov, "name", "") == "crystalpay":
+            from shopbot.payments import PaymentError
+            try:
+                sbp = await prov.sbp_method()
+            except PaymentError as e:
+                return Check(False, f"касса CrystalPAY не отвечает: {e}", hard=True)
+            if not sbp:
+                return Check(False, "СБП в кассе CrystalPAY не включён (нужен статус «Профессиональный»)", hard=True)
+            return Check(True, value=f"CrystalPAY · СБП {sbp}")
         if method == "card":
             test = getattr(prov, "test", False)
             return Check(True, "тестовый режим ЮKassa" if test else "", value="тест" if test else "бой")
