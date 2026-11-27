@@ -8,7 +8,7 @@
 <div class="kpi"><span>Выкуп 24 ч</span><b>{{ s1.buyback_n }} · {{ s1.buyback_usdt }} $</b></div>
 <div class="kpi"><span>Требуют внимания</span><b class="{{ 'warn' if s1.attention }}">{{ s1.attention }}</b></div>
 <div class="kpi"><span>Клиентов / новых</span><b>{{ s1.users }} / {{ s1.new_users }}</b></div>
-<div class="kpi"><span>Баланс выплат</span><b>{{ treasury.usdt|round(2) if treasury.usdt is not none else '—' }} $</b></div>
+<div class="kpi"><span>Баланс выплат</span><b>{{ treasury.usdt|round(2) if treasury.usdt is number else '—' }} $</b></div>
 <div class="kpi"><span>Курс Bybit</span><b>{{ rates.usdt_rub }} ₽</b><span>TON {{ rates.ton_rub }} ₽ · {{ rates.source }}{% if not rates.fresh %} · <b class="warn">устарел</b>{% endif %}</span></div>
 </div>
 <div class="card" style="margin-top:14px"><h2>RTBA — пульт пунктов</h2><div class="scroll"><table>
