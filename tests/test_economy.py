@@ -107,7 +107,8 @@ def test_p2p_benchmark(tmp_path):
     con.execute("INSERT INTO kv VALUES ('ton_rub', ?)", ('{"v": 80.0, "ts": 1, "gram_usdt": 0.92, "usdt_rub": 88.0}',))
     con.commit()
     con.close()
-    r = Economy(tmp_path).report(usd_rub=80)
+    # заказы теста записаны 3 дня назад: граница «до 1.6» — после них, иначе тест зависит от сегодняшней даты
+    r = Economy(tmp_path, {"p2p_rates_since": time.time()}).report(usd_rub=80)
     t = r["totals"]
     assert r["rates"]["ton_market_rub"] == 88.0                      # 80 ₽ по биржевому $ × 88/80
     assert t["p2p_premium"] == round(4 * 1.1 * 8, 2)                  # наценка P2P: 8 ₽ на TON
