@@ -361,7 +361,7 @@ class ShopGiftService(GiftService):
         active = not off and (amount > 0 or not self.gcfg.get("deactivate_when_empty", True))
         try:
             await self.engine.fp.update_lot(int(lot["offer_id"]), self.node_of(lot),
-                                            amount=max(amount, 1 if active else 0), active=active)
+                                            amount=max(amount, 1), active=active)
             self.db.kv_set(key, amount)
             self.db.add_event("-", event, offer_id=lot["offer_id"], gift=lot_title(lot), amount=amount, active=active)
         except Exception as err:  # noqa: BLE001
@@ -370,7 +370,7 @@ class ShopGiftService(GiftService):
 
     async def stock_sync(self, balance: int | None) -> None:
         g = self.gcfg
-        if not g.get("stock_sync", True) or self.engine.paused:
+        if not g.get("stock_sync", True) or self.engine.paused or not self.engine.funpay_on:
             return
         free = self.capacity(balance)
         cap = int(g.get("max_display_amount") or 200)
@@ -397,7 +397,7 @@ class ShopGiftService(GiftService):
                 continue
             active = not off and (amount > 0 or not g.get("deactivate_when_empty", True))
             try:
-                await self.engine.fp.update_lot(int(lot["offer_id"]), node, amount=max(amount, 1 if active else 0),
+                await self.engine.fp.update_lot(int(lot["offer_id"]), node, amount=max(amount, 1),
                                                 active=active)
                 self.db.kv_set(key, amount)
                 self.db.add_event("-", "shop_lot_stock", offer_id=lot["offer_id"], gift=lot_title(lot), amount=amount,

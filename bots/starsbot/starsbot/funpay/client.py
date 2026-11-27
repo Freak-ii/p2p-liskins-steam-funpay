@@ -242,6 +242,11 @@ class FunPayClient:
                 fields["active"] = "on"
             else:
                 fields.pop("active", None)
+        try:   # FunPay отклоняет лот с наличием 0, даже выключенный — выключенному ставим 1
+            if "amount" in fields and not fields.get("active") and int(float(fields.get("amount") or 0)) < 1:
+                fields["amount"] = "1"
+        except ValueError:
+            pass
         await self.save_lot(fields)
         return fields
 

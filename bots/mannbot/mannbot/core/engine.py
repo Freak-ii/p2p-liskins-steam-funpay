@@ -63,6 +63,11 @@ class Engine:
 
     # ================================================================== helpers
     @property
+    def funpay_on(self) -> bool:
+        """false — режим «Только поставщик»: на FunPay бот не заходит (mannbot/funpay/off.py)."""
+        return bool((self.cfg.get("funpay") or {}).get("enabled", True))
+
+    @property
     def paused(self) -> bool:
         return bool(self.db.kv_get("paused", False))
 
@@ -575,7 +580,7 @@ class Engine:
         except SteamError:
             sent_active = []
         for off in sent_active:
-            if f"#{oid}" in str(off.get("message", "")):
+            if f"#{oid}" in str(off.get("message", "")) or self._is_lost_offer(off, o, link, need):
                 found = str(off["tradeofferid"])
                 assets = [str(i.get("assetid")) for i in off.get("items_to_give", [])]
                 self.db.record_offer(found, oid, int(off.get("trade_offer_state", T.ACTIVE)), assets)
@@ -591,7 +596,7 @@ class Engine:
             return
         assets = free[:need]
         self.db.reserve_assets(oid, assets)
-        message = self.cfg.steam.offer_message.format(order_id=oid, qty=need)
+        message = str(self.cfg.steam.get("offer_message") or "").format(order_id=oid, qty=need)
         try:
             share_id = None
             if not getattr(self.steam, "dry_run", False):
@@ -624,7 +629,7 @@ class Engine:
         await self.share.bind(share_id, sent.offer_id)
         self._set(oid, event="offer_created", offer_id=sent.offer_id)
         if sent.needs_confirmation:
-            ok = await self.steam.confirm_offer(sent.offer_id)
+            ok = await self.confirm_with_retry(oid, sent.offer_id)
             if not ok:
                 self._set(oid, S.MANUAL, "confirm_failed", fail_reason="confirm_failed")
                 await self.notifier.notify("CRITICAL", "confirm_failed",
@@ -637,6 +642,36 @@ class Engine:
         self.db.kv_set(f"send_fail:{oid}", 0)
         await self.say(o, "offer_sent", offer_id=sent.offer_id)
         await self._verify_offer(o, sent.offer_id)
+
+    CONFIRM_RETRY_DELAYS = (60, 120, 240)    # Steam 429 на подтверждении: повтор через 1, 2 и 4 минуты
+
+    async def confirm_with_retry(self, oid: str, offer_id: str) -> bool:
+        """Подтвердить трейд в Steam Guard. На 429 (Steam ограничил частоту — обычно после частых входов) не роняем
+        выдачу, а ждём и пробуем снова: трейд уже создан, второй отправлять нельзя."""
+        delays = list(self.CONFIRM_RETRY_DELAYS)
+        while True:
+            try:
+                return await self.steam.confirm_offer(offer_id)
+            except SteamError as e:
+                if e.code != "rate_limit" or not delays:
+                    log.warning("подтверждение трейда %s: %s", offer_id, e)
+                    return False
+                wait = delays.pop(0)
+                self.db.add_event(oid, "confirm_rate_limit", offer_id=offer_id, retry_in=wait)
+                log.warning("подтверждение трейда %s: Steam 429, повтор через %d с", offer_id, wait)
+                await asyncio.sleep(wait)
+
+    def _is_lost_offer(self, off: dict, o, link, need: int) -> bool:
+        """Наш трейд без комментария (steam.offer_message пуст), ответ на который потерялся: тот же получатель,
+        столько же ключей, отдаём только свои ключи, ничего не просим и трейд ещё не записан ни за одним заказом."""
+        if str(off.get("tradeofferid")) in self.db.known_offer_ids() or off.get("items_to_receive"):
+            return False
+        partner = str(int(off.get("accountid_other") or 0) + 76561197960265728)
+        give = [str(i.get("assetid")) for i in off.get("items_to_give") or []]
+        keys = set(self.stock_cache.get("ids") or []) | set(self.db.reserved_asset_ids())
+        created = float(off.get("time_created") or 0)
+        return partner == str(link.steam_id64) and len(give) == need and bool(give) and \
+            (not keys or set(give) <= keys) and (not created or created >= float(o["created_at"] or 0) - 60)
 
     async def _verify_offer(self, o, offer_id: str) -> None:
         """Сверяем созданный трейд: правильный получатель и мы ничего не запрашиваем."""
@@ -751,7 +786,12 @@ class Engine:
                                        "проверьте инвентарь и безопасность аккаунта! Повторная отправка.", order_id=oid)
             self.enqueue(oid)
         elif state == T.NEEDS_CONFIRMATION:
-            if not await self.steam.confirm_offer(o["offer_id"], attempts=2):
+            try:
+                confirmed = await self.steam.confirm_offer(o["offer_id"], attempts=2)
+            except SteamError as e:          # 429 и сбои сети: следующая проверка трейдов попробует снова
+                log.warning("подтверждение трейда %s: %s", o["offer_id"], e)
+                confirmed = False
+            if not confirmed:
                 await self.notifier.notify("WARNING", "needs_confirmation", f"#{oid}: трейд ждёт подтверждения",
                                            order_id=oid)
         elif state == T.CANCELED_BY_SECOND_FACTOR:
@@ -911,6 +951,8 @@ class Engine:
         self.orbit.ack(applied, self.orbit_tracker.seen_version)
 
     async def _sync_lots(self, avail: int) -> None:
+        if not self.funpay_on:
+            return
         held = bool(self.db.kv_get("lots_hold")) or self.orbit_closed("keys")
         for lot in self.cfg.funpay.lots:
             if not lot.get("offer_id"):
@@ -922,7 +964,8 @@ class Engine:
                 continue
             active = not held and (amount > 0 or not self.cfg.funpay.deactivate_when_empty)
             try:
-                await self.fp.update_lot(int(lot["offer_id"]), int(lot["node_id"]), amount=max(amount, 1 if active else 0),
+                # FunPay не сохраняет лот с наличием 0 даже выключенным — выключаем с наличием 1
+                await self.fp.update_lot(int(lot["offer_id"]), int(lot["node_id"]), amount=max(amount, 1),
                                          active=active)
                 self.db.kv_set(key, amount)
                 self.db.add_event("-", "lot_stock", offer_id=lot["offer_id"], amount=amount, active=active)
@@ -984,7 +1027,7 @@ class Engine:
                                        throttle_key="inventory_drop")
 
     async def raise_lots(self) -> None:
-        if not self.cfg.funpay.auto_raise or self.paused:
+        if not self.funpay_on or not self.cfg.funpay.auto_raise or self.paused:
             return
         last = float(self.db.kv_get("last_raise", 0))
         if time.time() - last < float(self.cfg.funpay.raise_interval_minutes) * 60:
@@ -1004,7 +1047,7 @@ class Engine:
 
     async def rtba_step(self) -> None:
         cfg = self.cfg.rtba
-        if not cfg.enabled or self.paused:
+        if not cfg.enabled or self.paused or not self.funpay_on:
             return
         own_ids = {str(l.get("offer_id")) for l in self.cfg.funpay.lots}
         for lot in self.cfg.funpay.lots:
@@ -1304,10 +1347,64 @@ class Engine:
                 msgs = self._first_read_slice(chat, msgs)
             await self.process_chat(chat, msgs)
 
+    async def park_funpay(self) -> str:
+        """Режим «Только поставщик»: один раз выключить свой лот FunPay, дальше на FunPay не заходить."""
+        ids = sorted({str(l["offer_id"]) for l in self.cfg.funpay.lots or [] if l.get("offer_id") and l.get("node_id")})
+        parked = self.db.kv_get("funpay_parked") or {}
+        if not ids:
+            return "лота FunPay нет"
+        if set(ids) <= set(parked.get("lots") or []):
+            return "лот FunPay уже выключен"
+        if self.cfg.general.dry_run:
+            return "тестовый режим: лот FunPay выключится при запуске в боевом режиме"
+        client = self.fp.park_client() if hasattr(self.fp, "park_client") else None
+        if client is None:
+            await self.notifier.notify("WARNING", "funpay_park", "Режим «Только поставщик»: golden_key не задан, "
+                                       f"поэтому лот FunPay ({', '.join(ids)}) бот выключить не может — выключите "
+                                       "его на FunPay вручную", throttle_key="funpay_park")
+            return "нет golden_key"
+        done, failed = [], []
+        try:
+            await client.login()
+            for lot in self.cfg.funpay.lots:
+                oid = str(lot.get("offer_id") or "")
+                if oid not in ids:
+                    continue
+                try:
+                    await client.update_lot(int(oid), int(lot["node_id"]), amount=1, active=False)
+                    self.db.kv_set(f"lot_amount:{oid}", 0)
+                    done.append(oid)
+                except FunPayError as e:
+                    failed.append(f"{oid}: {e}")
+        except FunPayError as e:
+            failed.append(str(e))
+        finally:
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self.db.kv_set("funpay_parked", {"ts": time.time(), "lots": sorted(set(done) | set(parked.get("lots") or []))})
+        self.db.add_event("-", "funpay_parked", lots=done, failed=failed)
+        if failed:
+            await self.notifier.notify("WARNING", "funpay_park", "Режим «Только поставщик»: лот FunPay не выключен — "
+                                       + "; ".join(failed) + ". Выключите его вручную", throttle_key="funpay_park")
+        else:
+            await self.notifier.notify("INFO", "funpay_park", "Режим «Только поставщик»: лот FunPay с ключами "
+                                       "выключен. Дальше бот на FunPay не заходит, ключи получает только магазин")
+        return f"выключено {len(done)}, ошибок {len(failed)}"
+
     async def start(self) -> None:
-        await self.fp.login()
+        fp_on = self.funpay_on
+        if fp_on:
+            await self.fp.login()
+            self.db.kv_set("funpay_parked", None)
         await self.steam.login()
-        if hasattr(self.fp, "get_lot_form") and not any(l.get("offer_id") for l in (self.cfg.funpay.lots or [])):
+        if not fp_on:
+            try:
+                log.info("режим «Только поставщик»: %s", await self.park_funpay())
+            except Exception as e:  # noqa: BLE001 — снабжение магазина важнее
+                log.warning("выключение лота FunPay: %s", e)
+        if fp_on and hasattr(self.fp, "get_lot_form") and not any(l.get("offer_id") for l in (self.cfg.funpay.lots or [])):
             from mannbot.funpay.lotmaker import ensure_key_lot
             try:
                 rep = await ensure_key_lot(self)
@@ -1317,20 +1414,21 @@ class Engine:
                                            "Выставьте лот в разделе TF2 → Предметы вручную и укажите его id в настройках.")
         for o in self.db.orders_by_status(S.READY_TO_SEND):
             self.enqueue(o["order_id"])
-        await self.notifier.notify("INFO", "started", f"🤖 Бот запущен. FunPay: {self.fp.username}, Steam: "
+        fp_text = f"FunPay: {self.fp.username}" if fp_on else "режим «Только поставщик» (FunPay выключен)"
+        await self.notifier.notify("INFO", "started", f"🤖 Бот запущен. {fp_text}, Steam: "
                                    f"{self.steam.persona_name}{' · DRY-RUN' if self.cfg.general.dry_run else ''}")
         self.notifier.command_handler = self.handle_command
-        loops = [
-            self._loop("funpay", float(self.cfg.funpay.poll_interval), self.funpay_poll),
+        loops = ([self._loop("funpay", float(self.cfg.funpay.poll_interval), self.funpay_poll)] if fp_on else []) + [
             self._loop("offers", 20, self.watch_offers),
             self._loop("security", 60, self.security_watch),
             self._loop("timers", 30, self.timers),
             self._loop("stock", 120, self.stock_sync),
             self._loop("orbit", 5, self.orbit_tick),
-            self._loop("raise", 300, self.raise_lots),
-            self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step),
             self.deliver_worker(),
         ]
+        if fp_on:
+            loops += [self._loop("raise", 300, self.raise_lots),
+                      self._loop("rtba", float(self.cfg.rtba.interval_seconds), self.rtba_step)]
         if not self.external_commands:      # в приложении команды Telegram слушает Supervisor, даже когда бот остановлен
             loops.append(self.notifier.poll_commands())
         if self.analytics:

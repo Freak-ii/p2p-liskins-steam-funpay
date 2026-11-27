@@ -69,7 +69,8 @@ PROFILE_DEFAULTS: dict = {
 
 def validate_giftshop(cfg) -> list[str]:
     problems: list[str] = []
-    if not cfg.funpay.golden_key:
+    from starsbot.config import funpay_enabled
+    if funpay_enabled(cfg) and not cfg.funpay.golden_key:
         problems.append("funpay.golden_key не задан (возьмётся у StarsBot, если он настроен в Центре)")
     g = cfg.get("gifts") or {}
     if not int(g.get("api_id") or 0) or not str(g.get("api_hash") or ""):

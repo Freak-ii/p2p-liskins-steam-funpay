@@ -26,6 +26,7 @@ from center.monitor import routes as monitor_routes
 from center.steamshare import routes as steamshare_routes
 from center.rollout import routes as rollout_routes
 from center.orbit import routes as orbit_routes
+from center.supplylinks import routes as supply_routes
 
 STATIC = Path(__file__).resolve().parent / "static"
 COOKIE = "center_token"
@@ -366,6 +367,7 @@ def make_app(center: Center) -> web.Application:
         web.post("/api/rtba/apply", rtba_apply), web.post("/api/rtba/undo", rtba_undo), web.post("/api/rtba/backtest", rtba_backtest),
     ])
     app.add_routes(monitor_routes(center))
+    app.add_routes(supply_routes(center))
     app.add_routes(coordinator_routes(center))
     app.add_routes(agents_routes(center))
     app.add_routes(economy_routes(center))

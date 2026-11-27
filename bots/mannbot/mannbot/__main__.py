@@ -40,6 +40,10 @@ def build(cfg):
         from mannbot.steam.client import SteamClient
         fp = FunPayClient(cfg.funpay.golden_key, cfg.funpay.user_agent, dry_run=cfg.general.dry_run)
         steam = SteamClient(cfg.steam, dry_run=cfg.general.dry_run)
+    if not (cfg.get("funpay") or {}).get("enabled", True):    # «Только поставщик»: FunPay только чтобы выключить лот
+        from mannbot.funpay.off import FunPayOff
+        real = fp
+        fp = FunPayOff((lambda: real) if (cfg.funpay.golden_key or cfg.general.demo) else None)
     engine = Engine(cfg, db, fp, steam, notifier)
     analytics = Analytics(cfg, db, notifier, engine)
     engine.analytics = analytics

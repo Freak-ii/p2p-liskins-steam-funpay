@@ -26,6 +26,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "messages": {"ru": {}, "en": {}},
     "funpay": {
+        # false — режим «Только поставщик»: бот снабжает магазин (ShopBot), GGSEL и другие площадки, а на FunPay
+        # не заходит (лоты выключаются один раз при запуске, дальше ни логина, ни чатов, ни цен)
+        "enabled": True,
         "golden_key": "", "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0 Safari/537.36",
         "poll_interval": 6,
@@ -467,6 +470,11 @@ def load_config(path: str | Path | None = None, overrides: dict | None = None) -
     return _wrap(merged)
 
 
+def funpay_enabled(cfg) -> bool:
+    """Продаёт ли бот на FunPay. false — режим «Только поставщик» (starsbot/funpay/off.py)."""
+    return bool((cfg.get("funpay") or {}).get("enabled", True))
+
+
 def validate_config(cfg: Section) -> list[str]:
     """Возвращает список проблем конфигурации (пустой — всё ок)."""
     problems: list[str] = []
@@ -475,8 +483,8 @@ def validate_config(cfg: Section) -> list[str]:
     if cfg.general.get("profile") == "giftshop":
         from starsbot.giftshop.profile import validate_giftshop
         return validate_giftshop(cfg)
-    if not cfg.funpay.golden_key:
-        problems.append("funpay.golden_key не задан")
+    if funpay_enabled(cfg) and not cfg.funpay.golden_key:
+        problems.append("funpay.golden_key не задан (или выключите FunPay: режим «Только поставщик»)")
     # лоты без offer_id — не ошибка: бот выставит их сам при запуске или по кнопке «Лоты → Выставить недостающие»
     for lot in cfg.funpay.lots or []:
         if lot.get("offer_id") and int(lot.get("stars") or 0) < 50:

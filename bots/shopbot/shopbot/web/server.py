@@ -18,6 +18,7 @@ from shopbot import VERSION
 from shopbot.engine import STATUS_TITLES
 from shopbot.pricing import METHOD_TITLES, PRODUCT_TITLES
 from shopbot.rtba import TITLES
+from shopbot.suppliers import NAMES as SUPPLIER_NAMES, supply_token
 
 COOKIE = "shop_token"
 LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
@@ -54,11 +55,24 @@ SETTINGS = [  # (путь, подпись, тип)
     ("referral.friend_discount_pct", "Рефералка: скидка другу, %", "float"),
     ("channel.enabled", "Канал: публикация разрешена", "bool"), ("channel.chat_id", "Канал: chat_id", "str"),
 ]
+SUPPLY_FIELD = "suppliers.token"
 SECRET_FIELDS = [("telegram.bot_token", "Токен бота магазина"), ("payments.card.yookassa.shop_id", "ЮKassa shopId"),
                  ("payments.card.yookassa.secret_key", "ЮKassa секретный ключ"),
                  ("payments.crypto.cryptopay.token", "Crypto Pay токен"),
-                 ("suppliers.stars.token", "Токен поставщика StarsBot"), ("suppliers.gifts.token", "Токен TG Gift"),
-                 ("suppliers.premium.token", "Токен Premium (StarsBot)")]
+                 # один ключ на всех поставщиков: сохраняется в suppliers.{stars,premium,gifts,steam_keys}.token
+                 (SUPPLY_FIELD, "Общий секрет поставщиков (StarsBot, TG Gift, MannBot)")]
+
+
+def supply_state(cfg) -> str:
+    """Подпись к полю «Общий секрет поставщиков»."""
+    toks = {supply_token(cfg, n) for n in SUPPLIER_NAMES}
+    if any(src == "center" for _t, src in toks):
+        return "задан Центром — вписывать не нужно"
+    own = {t for t, _src in toks if t}
+    if not own:
+        return ""
+    return "задан" if len(own) == 1 and len({str((cfg.get(f'suppliers.{n}') or {}).get('token') or '')
+                                             for n in SUPPLIER_NAMES}) == 1 else "задан, но у поставщиков разный"
 
 
 def nest(path: str, value) -> dict:
@@ -436,14 +450,20 @@ def make_app(app_state) -> web.Application:
                 changes = merge(changes, nest(path, val))
             for path, _ in SECRET_FIELDS:
                 v = str(f.get(path) or "").strip()
-                if v:
+                if v and path == SUPPLY_FIELD:
+                    if len(v) < 16:
+                        raise web.HTTPFound("/settings?msg=общий секрет поставщиков — не короче 16 символов")
+                    for name in SUPPLIER_NAMES:
+                        changes = merge(changes, nest(f"suppliers.{name}.token", v))
+                elif v:
                     changes = merge(changes, nest(path, v))
             st.cfg.save(changes)
             st.db.audit(request["role"], "settings", "", ",".join(sorted(changes)))
             await st.shop.rtba.tick()
             raise web.HTTPFound("/settings?msg=сохранено (токены бота и ключи оплаты — после перезапуска)")
         fields = [(p, t, typ, st.cfg.get(p)) for p, t, typ in SETTINGS]
-        secrets_ = [(p, t, bool(st.cfg.get(p))) for p, t in SECRET_FIELDS]
+        secrets_ = [(p, t, supply_state(st.cfg) if p == SUPPLY_FIELD else ("задан" if st.cfg.get(p) else ""))
+                    for p, t in SECRET_FIELDS]
         return render("settings.html", request, fields=fields, secrets=secrets_)
 
     async def alerts_ack(request):

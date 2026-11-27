@@ -27,6 +27,7 @@ general:
 #     delivered: "…"
 
 funpay:
+  enabled: true   # false — «Только поставщик»: снабжает ShopBot/GGSEL, на FunPay не заходит
   # golden_key (cookie FunPay) — Браузер → funpay.com → DevTools → Application → Cookies → golden_key
   golden_key: ${FUNPAY_GOLDEN_KEY}
   user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36

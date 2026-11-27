@@ -10,6 +10,8 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("log_level", "Подробность журнала", "choice:INFO|WARNING|DEBUG", ""),
     ]),
     ("funpay", [
+        ("enabled", "Продавать на FunPay", "bool", "Выключите — режим «Только поставщик»: MannBot отдаёт ключи только "
+         "Telegram-магазину (ShopBot), а на FunPay не заходит. Свой лот FunPay он один раз выключит при запуске"),
         ("golden_key", "golden_key (cookie FunPay)", "secret", "Браузер → funpay.com → DevTools → Application → Cookies → golden_key"),
         ("poll_interval", "Опрос FunPay, сек", "int", "Не ставьте меньше 4"),
         ("order_match_regex", "Какие заказы обрабатывать (regex по описанию)", "str", ""),
@@ -27,7 +29,7 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("steam_id", "SteamID64 бота", "str", ""),
         ("login_secure_cookie", "Cookie steamLoginSecure (вместо пароля)", "secret", "Необязательно"),
         ("api_key", "Steam Web API key", "secret", "Необязательно — если статусы трейдов не читаются"),
-        ("offer_message", "Комментарий к трейду", "str", "Переменные: {order_id}, {qty}"),
+        ("offer_message", "Комментарий к трейду", "str", "Пусто — трейд без комментария. Переменные: {order_id}, {qty}"),
         ("offer_ttl_hours", "Отменять непринятый трейд через, ч", "int", ""),
         ("min_seconds_between_offers", "Пауза между трейдами, сек", "int", ""),
         ("max_keys_per_offer", "Максимум ключей в одном трейде", "int", ""),
@@ -132,6 +134,27 @@ MESSAGE_TITLES = {
     "off_platform": "Отказ от общения вне FunPay", "unknown": "Непонятное сообщение", "refunded": "Возврат",
     "completed_thanks": "Спасибо за подтверждение", "review_thanks": "Спасибо за отзыв",
 }
+
+
+# Разделы, которые нужны только при продаже на FunPay: в режиме «Только поставщик» они свёрнуты в «Выключено»
+SECTION_GATE = {"funpay": "funpay", "rtba": "funpay", "ai": "funpay"}
+GATE_TITLES = {"funpay": "FunPay"}
+
+
+def gate_on(cfg, gate: str) -> bool:
+    if gate == "funpay":
+        return bool((cfg.get("funpay") or {}).get("enabled", True))
+    return bool((cfg.get(gate) or {}).get("enabled"))
+
+
+def split_sections(cfg, sections=None) -> tuple[list, list]:
+    """(нужные разделы, разделы выключенных площадок). Выключенные форма отправляет свёрнутыми — иначе флажки
+    в них сохранились бы как «выкл»."""
+    active, idle = [], []
+    for section, fields in (sections if sections is not None else SETTINGS):
+        gate = SECTION_GATE.get(section)
+        (idle if gate and not gate_on(cfg, gate) else active).append((section, fields))
+    return active, idle
 
 
 def get_value(cfg, section: str, key: str):

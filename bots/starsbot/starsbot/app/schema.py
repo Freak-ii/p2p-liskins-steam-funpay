@@ -11,6 +11,9 @@ SETTINGS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("log_level", "Подробность журнала", "choice:INFO|WARNING|DEBUG", ""),
     ]),
     ("funpay", [
+        ("enabled", "Продавать на FunPay", "bool", "Выключите — режим «Только поставщик»: бот снабжает Telegram-магазин "
+         "(ShopBot), GGSEL и другие включённые площадки, а на FunPay не заходит. Свои лоты FunPay он один раз "
+         "выключит при запуске"),
         ("golden_key", "golden_key (cookie FunPay)", "secret", "Браузер → funpay.com → DevTools → Application → Cookies → golden_key"),
         ("poll_interval", "Опрос FunPay, сек", "int", "Не ставьте меньше 4"),
         ("node_id", "Раздел FunPay (node_id)", "int", "Telegram → Звёзды = 2418"),
@@ -314,6 +317,37 @@ MESSAGE_TITLES = {
     "faq_gift_gift": "Подарки: FAQ «как получить звёзды»", "after_delivery_gift": "Подарки: вопрос после выдачи",
     "confirm_reminder": "Напоминание подтвердить заказ (автопилот, одно)",
 }
+
+
+# Раздел настроек нужен, только когда включена его площадка: остальные свёрнуты в «Выключено», чтобы не путаться.
+# Значение — какая площадка: "funpay" — продажи на FunPay, иначе раздел config.yaml с флагом enabled.
+SECTION_GATE = {
+    "funpay": "funpay", "autopilot": "funpay", "autopilot.withdraw": "funpay", "rtba": "funpay",
+    "rtba.card_limit": "funpay", "rtba.spread_buffer": "funpay", "rtba.night": "funpay",
+    "gifts": "gifts", "gifts.topup": "gifts",
+    "ozon": "ozon", "ozon.activation_bot": "ozon", "ozon.activation_web": "ozon", "ggsel": "ggsel",
+    "avito": "avito", "wb": "wb", "wb.activation_bot": "wb",
+}
+GATE_TITLES = {"funpay": "FunPay", "gifts": "выдача подарками", "ozon": "Ozon", "ggsel": "GGSEL", "avito": "Авито",
+               "wb": "Wildberries"}
+
+
+def gate_on(cfg, gate: str) -> bool:
+    if gate == "funpay":
+        return bool((cfg.get("funpay") or {}).get("enabled", True))
+    if gate == "gifts":     # подарки FunPay «Подарком» — часть продаж на FunPay
+        return bool((cfg.get("funpay") or {}).get("enabled", True)) and bool((cfg.get("gifts") or {}).get("enabled"))
+    return bool((cfg.get(gate) or {}).get("enabled"))
+
+
+def split_sections(cfg, sections=None) -> tuple[list, list]:
+    """(разделы включённых площадок, разделы выключенных). Выключенные форма всё равно отправляет (свёрнутыми),
+    иначе флажки в них сохранились бы как «выкл»."""
+    active, idle = [], []
+    for section, fields in (sections if sections is not None else SETTINGS):
+        gate = SECTION_GATE.get(section)
+        (idle if gate and not gate_on(cfg, gate) else active).append((section, fields))
+    return active, idle
 
 
 def get_value(cfg, section: str, key: str):

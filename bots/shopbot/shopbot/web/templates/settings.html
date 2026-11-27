@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block body %}<form method="post"><div class="card"><h2>Цены, комиссии, лимиты</h2><table>
 {% for p, t, typ, v in fields %}<tr><td>{{ t }}<br><span class="mute">{{ p }}</span></td><td>{% if typ == 'bool' %}<input type="checkbox" name="{{ p }}" {{ 'checked' if v }}>{% else %}<input name="{{ p }}" value="{{ v if v is not none }}">{% endif %}</td></tr>{% endfor %}</table></div>
 <div class="card"><h2>Ключи и токены</h2><p class="mute">Хранятся только в config.yaml на этом компьютере. Пустое поле — оставить как есть.</p><table>
-{% for p, t, set in secrets %}<tr><td>{{ t }}</td><td><input name="{{ p }}" type="password" placeholder="{{ 'задан' if set else 'не задан' }}"></td></tr>{% endfor %}</table></div>
+{% for p, t, set in secrets %}<tr><td>{{ t }}</td><td><input name="{{ p }}" type="password" placeholder="{{ set or 'не задан' }}"></td></tr>{% endfor %}</table></div>
 <button>Сохранить</button></form>{% endblock %}

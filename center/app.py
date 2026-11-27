@@ -23,6 +23,7 @@ from center.coordinator import Coordinator
 from center.agents import Agents
 from center.events import EventStore
 from center.orbit import Orbit
+from center.supplylinks import SupplyLinks
 from center.vault import SecretStore
 from center.rtba import Rtba
 from center.steamshare import SteamShare
@@ -60,8 +61,10 @@ class Center:
                                               restart=restart, executable=wg.get("python") or "", demo=demo,
                                               vault=self.vault)
         self.orbit = Orbit(self)                    # Пульт Орбиты: какие позиции сняты с продажи (shared/orbit.json)
-        for name, w in self.workers.items():        # адрес и токен реестра обменов (center/steamshare.py) + путь Орбиты
-            w.extra_env = (lambda n=name: {**self.steamshare.bot_env(), **self.orbit.bot_env(n)})
+        self.supply = SupplyLinks(self)             # общий секрет поставщиков и схема «кто кого снабжает»
+        for name, w in self.workers.items():        # реестр обменов (center/steamshare.py), путь Орбиты, секрет поставщиков
+            w.extra_env = (lambda n=name: {**self.steamshare.bot_env(), **self.orbit.bot_env(n),
+                                           **self.supply.bot_env(n)})
         if demo:                                    # история сделок LisBot за месяц; дальше он торгует на эмуляции LIS/Steam
             from center.demo import seed_lisbot
             seed_lisbot(self.workers["lisbot"].data_dir)

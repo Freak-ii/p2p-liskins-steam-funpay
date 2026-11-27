@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 from starsbot.analytics.analytics import Analytics
-from starsbot.config import DEFAULTS, Section, load_config, validate_config
+from starsbot.config import DEFAULTS, Section, funpay_enabled, load_config, validate_config
 from starsbot.core import messages as M
 from starsbot.core.engine import Engine
 from starsbot.crm.db import Database
@@ -273,6 +273,12 @@ class Supervisor:
                                       dry_run=cfg.general.dry_run, min_interval=cfg.fragment.min_interval)
             fragment.on_cookies = self.save_rotated_fragment_cookies
             rates = RateProvider(cfg.rates, self.db)
+        if not funpay_enabled(cfg):
+            # «Только поставщик»: на FunPay не заходим; настоящий клиент — только чтобы один раз выключить лоты
+            from starsbot.funpay.off import FunPayOff
+            real = fp
+            can_park = bool(cfg.funpay.golden_key) or bool(cfg.general.demo or self.demo)
+            fp = FunPayOff((lambda: real) if can_park else None)
         self.coord = coord
         if shop:
             from starsbot.giftshop.engine import GiftShopEngine

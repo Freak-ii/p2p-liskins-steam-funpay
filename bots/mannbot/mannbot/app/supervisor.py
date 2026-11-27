@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 from mannbot.analytics.analytics import Analytics
-from mannbot.config import DEFAULTS, Section, inherit_shared, load_config, validate_config
+from mannbot.config import DEFAULTS, Section, funpay_enabled, inherit_shared, load_config, validate_config
 from mannbot.coord import Coordinator
 from mannbot.core import messages as M
 from mannbot.core.engine import Engine
@@ -249,6 +249,12 @@ class Supervisor:
             fp = FunPayClient(cfg.funpay.golden_key, cfg.funpay.user_agent, dry_run=cfg.general.dry_run,
                               coordinator=coord)
             steam = SteamClient(cfg.steam, dry_run=cfg.general.dry_run)
+        if not funpay_enabled(cfg):
+            # «Только поставщик»: на FunPay не заходим; настоящий клиент — только чтобы один раз выключить лот
+            from mannbot.funpay.off import FunPayOff
+            real = fp
+            can_park = bool(cfg.funpay.golden_key) or bool(cfg.general.demo or self.demo)
+            fp = FunPayOff((lambda: real) if can_park else None)
         self.engine = Engine(cfg, self.db, fp, steam, self.notifier, coord=coord)
         self.engine.external_commands = True
         self.engine.save_config = self.save

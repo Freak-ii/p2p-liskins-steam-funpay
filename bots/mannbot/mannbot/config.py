@@ -17,6 +17,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "messages": {"ru": {}, "en": {}},
     "funpay": {
+        # false — режим «Только поставщик»: MannBot снабжает ключами Telegram-магазин (ShopBot), а на FunPay не
+        # заходит (свой лот выключается один раз при запуске; golden_key не нужен)
+        "enabled": True,
         "golden_key": "", "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0 Safari/537.36",
         "poll_interval": 6, "lots": [], "order_match_regex": r"(?i)(mann\s*co|ключ|key)",
@@ -37,16 +40,23 @@ DEFAULTS: dict[str, Any] = {
                         "Нужен мобильный Steam Guard не менее 7 дней, иначе Steam задержит обмен.\n"
                         "Мы никогда не просим ваши предметы, логин, коды или API-ключ. Обмен приходит "
                         "с комментарием «FunPay заказ #номер»."),
-        "lot_desc_en": ("Mann Co. Supply Crate Key (Team Fortress 2). Automatic delivery via Steam trade offer, "
-                        "usually 1–3 minutes, 24/7. After payment send your Steam trade URL to the chat. "
-                        "We never ask for your items, login, codes or API key."),
+        # FunPay не принимает короткое английское описание: текст должен быть таким же полным, как русский
+        "lot_desc_en": ("Mann Co. Supply Crate Key, Team Fortress 2.\n"
+                        "Delivery is automatic via a Steam trade offer, usually within 1–3 minutes, 24/7.\n\n"
+                        "How to receive: pay for the number of keys you need and send your Steam trade URL to the "
+                        "chat (Steam → Inventory → Trade Offers → \"Who can send me Trade Offers?\").\n"
+                        "Your account must have the Steam Guard Mobile Authenticator for at least 7 days, otherwise "
+                        "Steam will hold the trade.\n"
+                        "We never ask for your items, login, codes or API key. Accept only a trade offer in which "
+                        "you give nothing and receive the keys."),
         "lot_start_price": 0,            # цена нового лота, ₽ (0 — пол RTBA или 150)
     },
     "steam": {
         "username": "", "password": "", "shared_secret": "", "identity_secret": "", "steam_id": "",
         "login_secure_cookie": "", "api_key": "", "key_market_hash_name": "Mann Co. Supply Crate Key",
         "appid": 440, "contextid": "2",
-        "offer_message": "FunPay заказ #{order_id} · {qty} key(s) · спасибо за покупку!",
+        # комментарий к трейду; пусто — без комментария (свой трейд после сбоя бот найдёт по получателю и ключам)
+        "offer_message": "",
         "offer_ttl_hours": 12, "min_seconds_between_offers": 8, "max_keys_per_offer": 100,
         "confirm_poll_seconds": 5,
     },
@@ -175,14 +185,20 @@ def inherit_shared(cfg: Section, home: str | Path) -> list[str]:
     return taken
 
 
+def funpay_enabled(cfg) -> bool:
+    """Продаёт ли MannBot на FunPay. false — режим «Только поставщик» (mannbot/funpay/off.py)."""
+    return bool((cfg.get("funpay") or {}).get("enabled", True))
+
+
 def validate_config(cfg: Section) -> list[str]:
     """Возвращает список проблем конфигурации (пустой — всё ок)."""
     problems: list[str] = []
     if cfg.general.demo:
         return problems
-    if not cfg.funpay.golden_key:
-        problems.append("funpay.golden_key не задан")
-    if not cfg.funpay.get("auto_create_lot") and \
+    fp_on = funpay_enabled(cfg)
+    if fp_on and not cfg.funpay.golden_key:
+        problems.append("funpay.golden_key не задан (или выключите FunPay: режим «Только поставщик»)")
+    if fp_on and not cfg.funpay.get("auto_create_lot") and \
             (not cfg.funpay.lots or not any(l.get("offer_id") for l in cfg.funpay.lots)):
         problems.append("funpay.lots: укажите хотя бы один offer_id лота с ключами")
     st = cfg.steam

@@ -113,6 +113,7 @@ def make_app(sup, log_handler=None) -> web.Application:
     env.filters["money"] = lambda v: "—" if _fnum(v) is None else f"{_fnum(v):,.2f}".replace(",", " ").replace(".00", "")
     env.filters["ton"] = lambda v: "—" if _fnum(v) is None else f"{_fnum(v):.4f}".rstrip("0").rstrip(".")
     env.filters["md"] = lambda d: str(d)[5:]
+    env.filters["gate_title"] = lambda sec: schema.GATE_TITLES.get(schema.SECTION_GATE.get(sec, ""), sec)
     env.filters["hm"] = lambda v: dt.datetime.fromtimestamp(float(v)).strftime("%d.%m %H:%M")
     env.globals.update(colors=STATUS_COLORS, statuses=[s.value for s in S], charts=charts, state_text=STATE_TEXT,
                        role_titles=ROLE_TITLES, cashflow_kinds=CASHFLOW_KINDS,
@@ -173,6 +174,7 @@ def make_app(sup, log_handler=None) -> web.Application:
         ctx.setdefault("role", role)
         ctx.setdefault("can_op", bool(role) and ROLE_LEVEL[role] >= 1)
         ctx.setdefault("is_admin", role == "admin")
+        ctx.setdefault("funpay_on", schema.gate_on(sup.cfg, "funpay"))
         ctx.setdefault("ozon_on", "ozon" in sup.engine.channels)
         ctx.setdefault("gifts_moved", bool(getattr(sup.engine.gifts, "moved", False)))
         ctx.setdefault("ggsel_on", "ggsel" in sup.engine.channels)
@@ -1430,7 +1432,8 @@ def make_app(sup, log_handler=None) -> web.Application:
             audit(request, "settings.save")
             raise web.HTTPFound(URL("/settings").with_query(msg="Сохранено. Перезапустите бота, чтобы применить"
                                                             if sup.restart_required else "Сохранено"))
-        return render("settings.html", request, sections=schema.SETTINGS, titles=schema.SECTION_TITLES,
+        active, idle = schema.split_sections(sup.cfg)
+        return render("settings.html", request, sections=active, idle_sections=idle, titles=schema.SECTION_TITLES,
                       val=lambda s, k: schema.get_value(sup.cfg, s, k),
                       secret=lambda s, k: sup.secret_is_set(s, k), problems=sup.problems,
                       config_path=str(sup.config_path))
