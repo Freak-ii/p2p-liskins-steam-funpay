@@ -128,7 +128,8 @@ class ShopTelegram:
             lines.append(f"🎮 Скинами Steam: по ценам {c.get('payments.skins.market')} "
                          f"−{c.get('payments.skins.haircut_pct'):g}%")
         if rt.is_open("pay.card"):
-            lines.append(f"💳 Карта: <b>+{c.get('payments.card.fee_pct'):g}%</b> — эквайринг банка")
+            via = "комиссия кассы" if str(c.get("payments.card.provider")) in ("crystalpay", "aaio") else "эквайринг банка"
+            lines.append(f"💳 Карта / СБП: <b>+{c.get('payments.card.fee_pct'):g}%</b> — {via}")
         lines.append("👛 Баланс магазина: без комиссии\n")
         lines.append(f"💸 <b>Продажа нам</b>: комиссия <b>{c.get('buyback.fee_pct'):g}%</b>.")
         lines.append(f"🤝 Рефералка: <b>{c.get('referral.reward_pct'):g}%</b> от покупок друга на ваш бонусный баланс, "

@@ -11,7 +11,8 @@
             на уникальную сумму; приход видит опрос toncenter v3. Деньги сразу в круге, без посредника.
   gift    — оплата подарками Telegram на аккаунт приёма; skins — скинами Steam обменом на ссылку магазина.
             Оба подтверждает оператор (кнопка в Telegram/панели), позже — автоматический приём.
-Статусы проверяются опросом: белый IP и вебхуки не нужны, магазин работает с домашнего компьютера.
+Статусы проверяются опросом: белый IP и вебхуки не нужны, магазин работает с домашнего компьютера
+(у CrystalPAY уведомление можно включить дополнительно, см. CrystalPay).
 """
 from __future__ import annotations
 
@@ -342,50 +343,160 @@ class ManualAsset:
 
 
 class CrystalPay:
-    """CrystalPAY (P2P-шлюз для физлиц): СБП/карта РФ → баланс кассы → вывод в USDT на кошелёк/биржу.
-    API v3: POST /v3/invoice/create/ и /v3/invoice/info/ с auth_login + auth_secret (Secret 1 кассы).
-    Статусы счёта: notpayed / processing → ждём, payed → оплачен, cancelled/failed → отмена.
-    Вебхук не нужен: статус опрашивается, как у ЮKassa. Ключи — в кабинете кассы после KYC."""
+    """CrystalPAY (касса для физлиц): СБП/карта РФ → баланс кассы → вывод в TON/USDT на хаб.
+
+    API v3 (docs.crystalpay.io): все методы — POST JSON на https://api.crystalpay.io/v3/<метод>/ с auth_login
+    (логин кассы) + auth_secret (секретный ключ). Salt в запросах не передаётся: им подписываются уведомления
+    (callback: signature = sha1("{id}:{salt}")) и выводы payoff (их бот не делает: вывод с кассы — вручную в
+    @CrystalPAY_bot). Лимит API — 5 запросов/с, 50 за 10 с (429).
+
+    Состояния счёта (invoice/info → state): created, notpayed, processing, wrongamount (недоплата), failed
+    (ошибка, не конечный) — ждём; payed — оплачен (конечный); unavailable — метод недоступен (конечный) → отмена.
+    Срок счёта = lifetime; после него заказ истекает по expires_at в engine.poll_payments.
+
+    СБП открывается только кассе со статусом «Профессиональный» (проверка CrystalPAY по требованиям, проекту
+    нужна история). Метод СБП задаётся required_method; "auto" — ищем включённый метод по method/list
+    (ключ или название содержит SBP/СБП). Пока СБП в кассе нет, RTBA держит «Картой / СБП» закрытым.
+    Основной приём — опрос invoice/info (вебхук не обязателен: магазин живёт на домашнем ПК без белого IP);
+    callback_url можно указать, если панель доступна снаружи (сервер «Орбиты»): уведомление проверяется
+    подписью и только запускает внеочередную проверку статуса через API, телу уведомления не верим."""
 
     name = "crystalpay"
     API = "https://api.crystalpay.io/v3"
+    WAIT = ("created", "notpayed", "processing", "wrongamount", "failed")
+    MIN_GAP = 0.25                      # ≤ 4 запросов/с — ниже лимита API
 
-    def __init__(self, login: str, secret: str, *, redirect_url: str = "", fetch=None):
-        self.login, self.secret = str(login or ""), str(secret or "")
+    def __init__(self, login: str, secret: str, *, salt: str = "", redirect_url: str = "", callback_url: str = "",
+                 required_method: str = "", subtract_from: str = "balance", fetch=None):
+        self.login, self.secret, self.salt = str(login or ""), str(secret or ""), str(salt or "")
         self.redirect_url = redirect_url or "https://t.me"
+        self.callback_url = callback_url or ""
+        self.required_method = str(required_method or "").strip()
+        self.subtract_from = subtract_from if subtract_from in ("balance", "amount") else "balance"
         self._fetch = fetch
+        self._last = 0.0
+        self._lock = asyncio.Lock()
+        self._methods: tuple[float, dict] = (0.0, {})
 
     @property
     def configured(self) -> bool:
         return bool(self.login and self.secret)
 
+    # ------------------------------------------------------------------ транспорт
     async def _call(self, method: str, body: dict) -> dict:
         if not self.configured:
-            raise PaymentError("CrystalPAY не настроен: логин кассы и Secret 1 (кабинет CrystalPAY → Кассы)")
+            raise PaymentError("CrystalPAY не настроен: логин кассы и секретный ключ (@CrystalPAY_bot → Кассы)")
         body = {"auth_login": self.login, "auth_secret": self.secret, **body}
-        if self._fetch is not None:
-            d = await self._fetch(method, body)
-        else:
-            try:
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
-                    async with s.post(f"{self.API}/{method}/", json=body) as r:
-                        d = await r.json(content_type=None)
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                raise PaymentError(f"CrystalPAY недоступен: {e}") from e
+        async with self._lock:
+            gap = self.MIN_GAP - (time.monotonic() - self._last)
+            if gap > 0 and self._fetch is None:
+                await asyncio.sleep(gap)
+            self._last = time.monotonic()
+            if self._fetch is not None:
+                d = await self._fetch(method, body)
+            else:
+                try:
+                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+                        async with s.post(f"{self.API}/{method}/", json=body) as r:
+                            if r.status == 429:
+                                raise PaymentError("CrystalPAY: лимит запросов (429), повторим позже")
+                            d = await r.json(content_type=None)
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+                    raise PaymentError(f"CrystalPAY недоступен: {e}") from e
+        if not isinstance(d, dict):
+            raise PaymentError(f"CrystalPAY {method}: неожиданный ответ")
         if d.get("error"):
-            raise PaymentError(f"CrystalPAY {method}: {'; '.join(map(str, d.get('errors') or [])) or d}")
+            raise PaymentError(f"CrystalPAY {method}: {'; '.join(map(str, d.get('errors') or [])) or 'ошибка'}")
         return d
 
-    async def create(self, order_id: str, amount_rub: float, description: str, *, ttl: int = 1800, **_) -> dict:
-        d = await self._call("invoice/create", {"amount": round(float(amount_rub), 2), "type": "purchase",
-                                                "currency": "RUB", "lifetime": max(5, int(ttl // 60)),
-                                                "description": description[:256], "extra": order_id,
-                                                "redirect_url": self.redirect_url})
+    # ------------------------------------------------------------------ подписи
+    def sign(self, *parts) -> str:
+        import hashlib
+        return hashlib.sha1(":".join(str(p) for p in (*parts, self.salt)).encode()).hexdigest()
+
+    def verify_callback(self, data: dict) -> bool:
+        """Подпись уведомления: sha1("{id}:{salt}"), сравнение за постоянное время."""
+        import hmac
+        if not self.salt or not isinstance(data, dict) or not data.get("id"):
+            return False
+        return hmac.compare_digest(self.sign(data["id"]), str(data.get("signature") or ""))
+
+    # ------------------------------------------------------------------ методы кассы
+    async def methods(self, *, max_age: float = 600) -> dict:
+        ts, items = self._methods
+        if items and time.time() - ts < max_age:
+            return items
+        items = (await self._call("method/list", {})).get("items") or {}
+        self._methods = (time.time(), items)
+        return items
+
+    @staticmethod
+    def is_sbp(key: str, item: dict) -> bool:
+        text = f"{key} {item.get('name') or ''}".upper()
+        return "SBP" in text or "СБП" in text
+
+    async def sbp_method(self) -> str:
+        """Ключ метода СБП для required_method ('' — СБП в кассе не включён)."""
+        items = await self.methods()
+        if self.required_method and self.required_method.lower() != "auto":
+            it = items.get(self.required_method) or {}
+            return self.required_method if (it.get("in") or {}).get("enabled") else ""
+        for key, it in items.items():
+            if self.is_sbp(key, it) and (it.get("in") or {}).get("enabled"):
+                return key
+        return ""
+
+    async def summary(self) -> dict:
+        """Для панели: включённые методы приёма с комиссиями и лимитами, найденный СБП, балансы."""
+        items = await self.methods(max_age=0)
+        rows = []
+        for key, it in items.items():
+            i = it.get("in") or {}
+            rows.append({"key": key, "name": it.get("name") or key, "currency": it.get("currency"),
+                         "enabled": bool(i.get("enabled")), "sbp": self.is_sbp(key, it),
+                         "commission_pct": (i.get("commissions") or {}).get("percent"),
+                         "commission_fix": (i.get("commissions") or {}).get("amount"),
+                         "extra_pct": (i.get("extra_commissions") or {}).get("percent"),
+                         "min": (i.get("limits") or {}).get("min"), "max": (i.get("limits") or {}).get("max"),
+                         "status_level": it.get("minimal_status_level")})
+        try:
+            bal = (await self._call("balance/list", {})).get("items") or {}
+        except PaymentError as e:
+            bal = {"error": str(e)}
+        return {"methods": rows, "sbp": await self.sbp_method(), "balances": bal}
+
+    # ------------------------------------------------------------------ счёт
+    async def create(self, order_id: str, amount_rub: float, description: str, *, ttl: int = 1800,
+                     payer: dict | None = None, **_) -> dict:
+        body = {"amount": round(float(amount_rub), 2), "type": "purchase", "currency": "RUB",
+                "lifetime": max(5, int(ttl // 60)), "subtract_from": self.subtract_from,
+                "description": description[:256], "extra": order_id, "redirect_url": self.redirect_url}
+        method = await self.sbp_method() if self.required_method else ""
+        if self.required_method and not method:
+            raise PaymentError("CrystalPAY: СБП в кассе не включён (нужен статус кассы «Профессиональный»)")
+        if method:
+            body["required_method"] = method
+        if self.callback_url:
+            body["callback_url"] = self.callback_url
+        if payer:
+            body["payer_details"] = {k: v for k, v in payer.items() if v}
+        d = await self._call("invoice/create", body)
         return {"id": str(d["id"]), "url": d.get("url", ""), "status": PENDING}
 
+    async def info(self, payment_id: str) -> dict:
+        return await self._call("invoice/info", {"id": payment_id})
+
     async def check(self, payment_id: str) -> str:
-        st = str((await self._call("invoice/info", {"id": payment_id})).get("state") or "")
-        return PAID if st == "payed" else CANCELED if st in ("cancelled", "canceled", "failed", "expired") else PENDING
+        d = await self.info(payment_id)
+        st = str(d.get("state") or "")
+        if st == "payed":
+            cur = str(d.get("currency") or "RUB").upper()
+            if d.get("type", "purchase") != "purchase" or cur != "RUB":
+                log.warning("CrystalPAY %s: оплачен, но type=%s currency=%s — не засчитываем", payment_id,
+                            d.get("type"), cur)
+                return PENDING
+            return PAID
+        return CANCELED if st in ("unavailable", "cancelled", "canceled") else PENDING
 
 
 class Aaio:
@@ -440,12 +551,21 @@ class Aaio:
 GATEWAYS = ("crystalpay", "aaio")
 
 
+def crystalpay_from(cfg, *, sbp: bool) -> CrystalPay:
+    """Касса CrystalPAY: общие ключи payments.crystalpay (старое место — payments.card.crystalpay)."""
+    c = {**(cfg.get("payments.card.crystalpay") or {}), **{k: v for k, v in (cfg.get("payments.crystalpay") or {}).items()
+                                                           if v not in ("", None)}}
+    return CrystalPay(c.get("login"), c.get("secret"), salt=c.get("salt") or "",
+                      redirect_url=c.get("redirect_url") or "", callback_url=c.get("callback_url") or "",
+                      required_method=(c.get("sbp_method") or "auto") if sbp else "",
+                      subtract_from=c.get("subtract_from") or "balance")
+
+
 def card_provider(cfg):
     """Провайдер способа «Картой / СБП»: ЮKassa (нужен ИП/самозанятость) или P2P-шлюз для физлиц."""
     name = str(cfg.get("payments.card.provider") or "yookassa").lower()
     if name == "crystalpay":
-        c = cfg.get("payments.card.crystalpay") or {}
-        return CrystalPay(c.get("login"), c.get("secret"), redirect_url=c.get("redirect_url") or "")
+        return crystalpay_from(cfg, sbp=True)
     if name == "aaio":
         a = cfg.get("payments.card.aaio") or {}
         return Aaio(a.get("merchant_id"), a.get("secret1"), a.get("api_key"))

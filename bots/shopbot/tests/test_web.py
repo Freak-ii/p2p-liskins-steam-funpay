@@ -77,3 +77,27 @@ def test_services_page_stock_and_delivery(tmp_path):
             await c.close()
             await app.shop.stop()
     asyncio.run(go())
+
+
+def test_dashboard_without_treasury_usdt(tmp_path):
+    """Главная не падает 500, когда в kv treasury нет usdt (Undefined проходил проверку «is not none»)."""
+    app = App(tmp_path, demo=True)
+    app.cfg.save({"dashboard": {"token": "admin-token-12345"}})
+
+    async def go():
+        await app.start()
+
+        async def no_balance():                  # кошелёк выплат не ответил — в kv нет usdt
+            return None
+        app.shop.rtba.treasury = no_balance
+        app.db.kv_set("treasury", {"ts": 1.0})
+        c = TestClient(TestServer(make_app(app)))
+        await c.start_server()
+        try:
+            await c.get("/login?token=admin-token-12345")
+            r = await c.get("/")
+            assert r.status == 200 and "Баланс выплат" in await r.text()
+        finally:
+            await c.close()
+            await app.shop.stop()
+    asyncio.run(go())

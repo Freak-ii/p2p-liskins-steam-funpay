@@ -97,10 +97,17 @@ DEFAULTS: dict[str, Any] = {
         # provider: yookassa (ИП/самозанятость) | crystalpay | aaio (P2P-шлюзы для физлиц: KYC по паспорту,
         # комиссия 5–12 % — fee_pct ставьте по тарифу из кабинета шлюза + ~1 % на вывод USDT; см. README).
         "card": {"enabled": False, "provider": "yookassa", "fee_pct": 3.5,
-                 "crystalpay": {"login": "", "secret": "", "redirect_url": ""},
+                 "crystalpay": {"login": "", "secret": "", "redirect_url": ""},   # старое место ключей кассы
                  "aaio": {"merchant_id": "", "secret1": "", "api_key": ""},
                  "yookassa": {"shop_id": "", "secret_key": "", "test": True, "return_url": "",
                               "send_receipt": False, "vat_code": 1, "tax_system_code": 0}},
+        # Касса CrystalPAY (provider: crystalpay у карты): СБП по счёту кассы. СБП касса получает только
+        # со статусом «Профессиональный»; пока его нет, RTBA держит «Картой / СБП» закрытым сам.
+        # sbp_method: auto — найти включённый метод СБП по method/list, или точный ключ метода из кассы.
+        # subtract_from: balance — комиссию кассы платим мы (она в payments.card.fee_pct), amount — покупатель.
+        # callback_url — только если панель доступна из интернета (…/api/pay/crystalpay); иначе опрос статуса.
+        "crystalpay": {"login": "", "secret": "", "salt": "", "sbp_method": "auto", "subtract_from": "balance",
+                       "redirect_url": "", "callback_url": ""},
         "crypto": {"enabled": True, "provider": "cryptopay", "fee_pct": 2, "min_fee_pct": 2,
                    "assets": ["USDT", "TON"],
                    "cryptopay": {"token": "", "testnet": True}},
@@ -214,7 +221,7 @@ DEFAULTS: dict[str, Any] = {
 
 SECRETS = [("telegram", "bot_token"), ("payments.card.yookassa", "secret_key"),
            ("payments.crypto.cryptopay", "token"),
-           ("payments.card.crystalpay", "secret"), ("payments.card.aaio", "secret1"), ("payments.card.aaio", "api_key"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
+           ("payments.card.crystalpay", "secret"), ("payments.crystalpay", "secret"), ("payments.crystalpay", "salt"), ("payments.card.aaio", "secret1"), ("payments.card.aaio", "api_key"), ("suppliers.stars", "token"), ("suppliers.premium", "token"),
            ("suppliers.gifts", "token"), ("suppliers.steam_keys", "token"),
            ("services", "secret_key"), ("services.panel", "password"),
            ("dashboard", "token"), ("dashboard", "operator_token"), ("dashboard", "viewer_token")]
