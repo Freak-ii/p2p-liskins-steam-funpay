@@ -41,7 +41,7 @@ def test_cost_follows_dollar_price_when_gram_falls(tmp_path):
     """GRAM упал: рублей за GRAM меньше, GRAM за звезду больше — звезда в рублях стоит столько же."""
     a = make(tmp_path, p2p(1.016, 86.85))[1].cost_per_star_rub()
     b = make(tmp_path, p2p(0.952, 86.85))[1].cost_per_star_rub()
-    assert abs(a - 0.015 * 86.85) < 0.001 and abs(a - b) < 0.001
+    assert abs(a - 0.015 * 86.85 * 1.001) < 0.001 and abs(a - b) < 0.001   # + 0.1% спот
     # по старой цене звезды в GRAM себестоимость была бы занижена больше чем на 6%
     assert 0.01476 * 0.952 * 86.85 < b * 0.94
 
@@ -49,7 +49,7 @@ def test_cost_follows_dollar_price_when_gram_falls(tmp_path):
 def test_live_rate_beats_old_topups_but_not_manual_rate(tmp_path):
     cfg, ec = make(tmp_path, p2p(0.952, 86.85))
     ec.add_cashflow("topup", 17900, 199.5)
-    assert ec.effective_rate() == (82.68, "P2P USDT × биржа")
+    assert ec.effective_rate() == (82.76, "P2P USDT × биржа")   # + 0.1% спот Bybit
     cfg.economics["cost_basis"] = "topups"
     assert ec.effective_rate() == (89.72, "ваши пополнения")
     cfg.economics["cost_basis"] = "live"
@@ -65,8 +65,23 @@ def test_stale_p2p_falls_back(tmp_path):
     r = p2p(0.952, 86.85)
     r.updated_at = time.time() - 4 * 3600
     _, ec = make(tmp_path, r)
-    assert not ec.live() and ec.star_ton_live() is None
-    assert ec.ton_per_star() == 0.01476
+    # рублёвый курс устарел, но цена GRAM в долларах за 4 часа ещё годится для цены звезды
+    assert not ec.live() and abs(ec.star_ton_live() - 0.015 / 0.952) < 1e-9
+    r.updated_at = time.time() - 30 * 3600
+    assert ec.star_ton_live() is None and ec.ton_per_star() == 0.01476
+
+
+def test_forex_fallback_is_marked_up(tmp_path):
+    """CoinGecko — форекс-курс: без спреда бот считал бы звезду на 5–9% дешевле настоящей закупки."""
+    r = StaticRate(83.4)
+    r.source = "coingecko"
+    cfg, ec = make(tmp_path, r)
+    assert ec.effective_rate() == (round(83.4 * 1.06, 2), "биржевой курс + спред")
+    assert ec.spread_warning() == ""
+    cfg.economics["exchange_spread_pct"] = 0
+    assert "занижена" in ec.spread_warning() and "занижена" in ec.rate_warning()
+    ec.add_cashflow("topup", 17900, 199.5)
+    assert ec.spread_warning() == ""
 
 
 def test_floor_pays_withdrawal_and_three_percent(tmp_path):
