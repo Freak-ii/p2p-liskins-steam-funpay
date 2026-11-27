@@ -70,7 +70,8 @@ class Economics:
         биржа + спред. Цены лотов считаем по цене СЛЕДУЮЩЕЙ закупки: средняя за 60 дней врёт, когда GRAM движется."""
         if not self._fixed_rate() and self.live():
             overhead = float(self.e.deposit_fee_ton or 0) / max(1e-9, float(self.e.typical_topup_ton or 0) or 1e9)
-            return round(self.rates.value * (1 + overhead), 2), "P2P USDT × биржа"
+            trade = float(self.e.get("trade_fee_pct") or 0) / 100 if hasattr(self.e, "get") else 0.0
+            return round(self.rates.value * (1 + trade) * (1 + overhead), 2), "P2P USDT × биржа"
         mine = self.topup_rate()
         if mine:
             return round(mine, 2), "ваши пополнения"
@@ -94,13 +95,21 @@ class Economics:
         Цена из прошлых покупок устаревает: после падения GRAM на 7% бот недосчитал бы 7% себестоимости."""
         usd = float(self.e.get("star_usd") or 0) if hasattr(self.e, "get") else 0.0
         gram = getattr(self.rates, "gram_usdt", None) if self.rates else None
-        if usd > 0 and gram and getattr(self.rates, "is_p2p", False):
+        if usd > 0 and gram and self._gram_fresh():
             return usd / float(gram)
         return None
 
+    def _gram_fresh(self, max_age_hours: float = 24) -> bool:
+        """Цена GRAM в долларах годится для цены звезды дольше, чем курс для рублей: GRAM за сутки редко уходит
+        больше чем на пару процентов, а прошлые покупки (запасной вариант) бывают недельной давности."""
+        if getattr(self.rates, "is_p2p", False):
+            return True
+        ts = float(getattr(self.rates, "updated_at", 0) or 0)
+        return bool(ts) and getattr(self.rates, "source", "") in ("p2p", "cache") and time.time() - ts < max_age_hours * 3600
+
     def rate_warning(self, threshold_pct: float = 4.0) -> str:
         """Ручной курс разошёлся с реальной ценой закупки или не учтён вывод с FunPay — полы цен неверны."""
-        out = [w for w in (self._fx_warning(threshold_pct), self.fee_warning()) if w]
+        out = [w for w in (self._fx_warning(threshold_pct), self.fee_warning(), self.spread_warning()) if w]
         return ". ".join(out)
 
     def fee_warning(self) -> str:
@@ -109,6 +118,16 @@ class Economics:
             return ""
         return ("Комиссия вывода с FunPay стоит 0%, а деньги на закупку TON выводятся на карту (3%) или в USDT (6%): "
                 "пол цены занижен на 3–6%. Укажите комиссию вывода в «Деньги»")
+
+    def spread_warning(self, min_pct: float = 5.0) -> str:
+        """Запасной курс (CoinGecko, tonapi) — форекс: без спреда себестоимость занижена на 5–9%."""
+        if self._fixed_rate() or self.live() or self.topup_rate():
+            return ""
+        if float(self.e.exchange_spread_pct or 0) >= min_pct:
+            return ""
+        return (f"Курс закупки сейчас биржевой (без P2P), а спред к нему {float(self.e.exchange_spread_pct or 0):g}%: "
+                f"реальная закупка через P2P/обменник дороже на 5–9%, себестоимость занижена. Поставьте спред ≥ {min_pct:g}% "
+                "или укажите, почём покупаете USDT")
 
     def _fx_warning(self, threshold_pct: float) -> str:
         fixed = self._fixed_rate()
